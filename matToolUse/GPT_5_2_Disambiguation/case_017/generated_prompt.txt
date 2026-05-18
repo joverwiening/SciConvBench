@@ -1,0 +1,218 @@
+Implement a Python function named compute_defect_band_properties() that takes no required input arguments.
+Set file_path = Path(".") inside the function and treat it as the base directory for all relative paths.
+Read VASP outputs from file_path / "v_Ga/ccd_0_-1/0/vasprun.xml", file_path / "v_Ga/ccd_0_-1/1/vasprun.xml", file_path / "v_Ga/ccd_0_-1/2/vasprun.xml", and file_path / "v_Ga/ccd_0_-1/1/PROCAR".
+Use pymatgen.io.vasp.outputs.Vasprun to parse each vasprun.xml with parse_projected_eigen=True for the image that has PROCAR (image "1") and parse_projected_eigen=False for the other images.
+From the parsed Vasprun for image "1", obtain the band structure and eigenvalue/occupancy information needed to identify a defect band.
+Define defect_band_initial as a list of tuples (band_index: int, spin: int, occupancy: float) representing the defect band for the harmonic defect, where spin is encoded as 1 for Spin.up and -1 for Spin.down.
+Define defect_band_from_directories as a list of tuples (band_index: int, spin: int, occupancy: float) computed by re-reading the same directory-derived data and confirming it matches defect_band_initial exactly.
+Define spin_index as the unique spin value present in defect_band_initial if all tuples share the same spin.
+Define non_unique_spin_error as True if defect_band_initial contains more than one unique spin value, otherwise False.
+If non_unique_spin_error is True, raise a ValueError indicating the defect band has non-unique spin indices, and still set non_unique_spin_error to True in the returned dictionary if execution is allowed to continue.
+Return a dictionary with keys "defect_band_initial", "defect_band_from_directories", "spin_index", and "non_unique_spin_error" mapped to their computed values.
+Include all necessary imports at the top of the function, including pathlib.Path and pymatgen.io.vasp.outputs.Vasprun and pymatgen.electronic_structure.core.Spin.
+Include explicit file existence checks for each required file path and raise FileNotFoundError with the missing path if any are absent.
+Include a complete docstring describing that the function takes no parameters, uses file_path = Path("."), lists the expected relative input files, and documents the returned dictionary keys and value types.
+
+```python
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+
+from pymatgen.io.vasp.outputs import Vasprun
+from pymatgen.electronic_structure.core import Spin
+
+
+def compute_defect_band_properties() -> Dict[str, object]:
+    """
+    Compute defect-band-related properties for a harmonic defect using Pymatgen.
+
+    Parameters
+    ----------
+    None
+        This function takes no required input arguments.
+        It assumes `file_path = Path(".")` (current working directory) as the base directory.
+
+    Expected input files (relative to `file_path`)
+    ----------------------------------------------
+    - v_Ga/ccd_0_-1/0/vasprun.xml
+    - v_Ga/ccd_0_-1/1/vasprun.xml
+    - v_Ga/ccd_0_-1/2/vasprun.xml
+    - v_Ga/ccd_0_-1/1/PROCAR
+
+    Returns
+    -------
+    dict
+        Dictionary with the following keys:
+        - "defect_band_initial": list[tuple[int, int, float]]
+          List of (band_index, spin, occupancy) tuples for the identified defect band.
+          Spin is encoded as +1 for Spin.up and -1 for Spin.down.
+        - "defect_band_from_directories": list[tuple[int, int, float]]
+          Same information re-derived from directory data to confirm consistency.
+        - "spin_index": int | None
+          Unique spin channel for the defect band (+1 or -1), or None if not uniquely defined.
+        - "non_unique_spin_error": bool
+          True if the defect band tuples contain more than one unique spin value, else False.
+
+    Notes
+    -----
+    This implementation identifies a "defect band" using a pragmatic heuristic:
+    it selects the band (and spin) with the largest total projected weight on any single site
+    (summed over orbitals and k-points) from the projected eigenstates available via PROCAR.
+    If projected eigenstates are not available, it falls back to selecting the band closest to
+    the Fermi level with partial occupancy (0 < occ < 1) if present.
+    """
+    file_path = Path(".")
+
+    vr0_path = file_path / "v_Ga/ccd_0_-1/0/vasprun.xml"
+    vr1_path = file_path / "v_Ga/ccd_0_-1/1/vasprun.xml"
+    vr2_path = file_path / "v_Ga/ccd_0_-1/2/vasprun.xml"
+    procar1_path = file_path / "v_Ga/ccd_0_-1/1/PROCAR"
+
+    for p in (vr0_path, vr1_path, vr2_path, procar1_path):
+        if not p.exists():
+            raise FileNotFoundError(f"Required file not found: {p}")
+
+    # Parse vaspruns; only image 1 has PROCAR so we parse projected eigen there.
+    vr0 = Vasprun(str(vr0_path), parse_projected_eigen=False)
+    vr1 = Vasprun(str(vr1_path), parse_projected_eigen=True)
+    vr2 = Vasprun(str(vr2_path), parse_projected_eigen=False)
+
+    # Use image 1 for band/projection info.
+    bs = vr1.get_band_structure(line_mode=False)
+
+    # Helper: map Spin enum to int encoding.
+    def _spin_to_int(s: Spin) -> int:
+        return 1 if s == Spin.up else -1
+
+    # Identify a defect band index and spin.
+    defect_spin: Optional[Spin] = None
+    defect_band_index: Optional[int] = None
+
+    # Try projection-based identification first.
+    # bs.projections is typically shaped like:
+    # projections[spin][band][kpoint][site][orbital] -> weight
+    projections = getattr(bs, "projections", None)
+
+    if projections:
+        best_score = -1.0
+        best = None  # (spin, band_index)
+
+        for sp, sp_proj in projections.items():
+            # sp_proj: list over bands
+            for b_idx, band_proj in enumerate(sp_proj):
+                # band_proj: list over kpoints
+                # Sum weights per site across kpoints and orbitals, then take max site weight.
+                # This favors localized (defect-like) bands.
+                # band_proj[k][site][orb] -> weight
+                # Some pymatgen versions store dicts; handle both list/array and dict.
+                site_sums = None
+
+                for k_proj in band_proj:
+                    # k_proj: site x orb
+                    if isinstance(k_proj, dict):
+                        # dict keyed by site index or site object
+                        items = k_proj.items()
+                        for site_key, orb_weights in items:
+                            # orb_weights may be dict or list/array
+                            w = sum(orb_weights.values()) if isinstance(orb_weights, dict) else float(sum(orb_weights))
+                            if site_sums is None:
+                                site_sums = {}
+                            site_sums[site_key] = site_sums.get(site_key, 0.0) + w
+                    else:
+                        # assume array-like [site][orb]
+                        if site_sums is None:
+                            site_sums = [0.0] * len(k_proj)
+                        for si, orb_weights in enumerate(k_proj):
+                            w = sum(orb_weights.values()) if isinstance(orb_weights, dict) else float(sum(orb_weights))
+                            site_sums[si] += w
+
+                if site_sums is None:
+                    continue
+
+                max_site_weight = max(site_sums.values()) if isinstance(site_sums, dict) else max(site_sums)
+                if max_site_weight > best_score:
+                    best_score = max_site_weight
+                    best = (sp, b_idx)
+
+        if best is not None:
+            defect_spin, defect_band_index = best
+
+    # Fallback: choose a partially occupied band closest to Efermi.
+    if defect_spin is None or defect_band_index is None:
+        efermi = bs.efermi
+        best = None  # (abs(E - efermi), spin, band_index, occ)
+        for sp, eig in bs.bands.items():
+            # eig: array [band][kpoint] energies
+            occs = bs.occupancies.get(sp, None)
+            if occs is None:
+                continue
+            for b_idx in range(len(eig)):
+                # Use average over kpoints for energy and occupancy.
+                avg_e = float(sum(eig[b_idx]) / len(eig[b_idx]))
+                avg_occ = float(sum(occs[b_idx]) / len(occs[b_idx]))
+                if 0.0 < avg_occ < 1.0:
+                    score = abs(avg_e - efermi)
+                    cand = (score, sp, b_idx, avg_occ)
+                    if best is None or cand[0] < best[0]:
+                        best = cand
+        if best is None:
+            # Last resort: closest band to Efermi regardless of occupancy.
+            best2 = None  # (abs(E - efermi), spin, band_index, avg_occ)
+            for sp, eig in bs.bands.items():
+                occs = bs.occupancies.get(sp, None)
+                for b_idx in range(len(eig)):
+                    avg_e = float(sum(eig[b_idx]) / len(eig[b_idx]))
+                    avg_occ = float(sum(occs[b_idx]) / len(occs[b_idx])) if occs is not None else float("nan")
+                    score = abs(avg_e - efermi)
+                    cand = (score, sp, b_idx, avg_occ)
+                    if best2 is None or cand[0] < best2[0]:
+                        best2 = cand
+            if best2 is None:
+                raise RuntimeError("Unable to identify a defect band from band structure data.")
+            defect_spin, defect_band_index = best2[1], best2[2]
+        else:
+            defect_spin, defect_band_index = best[1], best[2]
+
+    # Compute occupancy for the selected band/spin (average over kpoints).
+    occs = bs.occupancies.get(defect_spin, None)
+    if occs is None:
+        raise RuntimeError("Band occupancies are not available in the parsed band structure.")
+    avg_occ = float(sum(occs[defect_band_index]) / len(occs[defect_band_index]))
+
+    defect_band_initial: List[Tuple[int, int, float]] = [
+        (int(defect_band_index), int(_spin_to_int(defect_spin)), float(avg_occ))
+    ]
+
+    # Re-derive from directories (here: re-parse image 1 directory) and confirm consistency.
+    vr1_re = Vasprun(str(vr1_path), parse_projected_eigen=True)
+    bs_re = vr1_re.get_band_structure(line_mode=False)
+    occs_re = bs_re.occupancies.get(defect_spin, None)
+    if occs_re is None:
+        raise RuntimeError("Band occupancies are not available on re-parse.")
+    avg_occ_re = float(sum(occs_re[defect_band_index]) / len(occs_re[defect_band_index]))
+
+    defect_band_from_directories: List[Tuple[int, int, float]] = [
+        (int(defect_band_index), int(_spin_to_int(defect_spin)), float(avg_occ_re))
+    ]
+
+    if defect_band_from_directories != defect_band_initial:
+        raise ValueError(
+            "defect_band_from_directories is inconsistent with defect_band_initial: "
+            f"{defect_band_from_directories} vs {defect_band_initial}"
+        )
+
+    spins_present = {t[1] for t in defect_band_initial}
+    non_unique_spin_error = len(spins_present) != 1
+    spin_index = next(iter(spins_present)) if not non_unique_spin_error else None
+
+    if non_unique_spin_error:
+        raise ValueError("Defect band has non-unique spin indices; spin consistency violated.")
+
+    return {
+        "defect_band_initial": defect_band_initial,
+        "defect_band_from_directories": defect_band_from_directories,
+        "spin_index": spin_index,
+        "non_unique_spin_error": non_unique_spin_error,
+    }
+```

@@ -1,0 +1,141 @@
+Looking at this specification, it is complete and unambiguous. I have all the information needed to implement the solution.
+
+
+
+Solve the 1D wave equation u_tt = (1.0)**2 * u_xx on x in [0,1], t in [0,0.25].
+The wave speed parameter c = 2 (used for CFL calculation).
+The PDE coefficient on u_xx is (1.0)**2 = 1.0.
+Use Dirichlet boundary conditions u=0 at x=0 and x=1 at every time step.
+Initial condition: u(x,0) = sin(4*pi*x), u_t(x,0) = 0.
+Exact solution for verification: u(x,t) = cos(1.0*4*pi*t)*sin(4*pi*x).
+Use a uniform grid on [0,1] with Nx=800 intervals, giving Nx+1=801 grid points.
+Set dx = 1/800.
+Set dt0 = 0.9*dx/c = 0.9/(800*2).
+Set Nt = ceil(0.25/dt0), then dt = 0.25/Nt so the simulation hits T=0.25 exactly.
+Use 2nd-order central differences for u_xx at interior points.
+Use the leapfrog (Störmer–Verlet) scheme for time integration: u^{n+1} = 2*u^n - u^{n-1} + dt**2*(1.0)**2*u_xx^n.
+Initialize u^0 = sin(4*pi*x) at all grid points.
+Compute u^1 using the Taylor start: u^1 = u^0 + dt*v0 + 0.5*dt**2*(1.0)**2*u_xx^0, where v0=0 so u^1 = u^0 + 0.5*dt**2*(1.0)**2*u_xx^0.
+Enforce u=0 at the boundary nodes (index 0 and index 800) at every time step including initialization.
+After the time loop reaches t=T=0.25, extract the solution array u of length 801.
+Compute and print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2)*dx).
+Compute the exact solution u_exact = cos(1.0*4*pi*T)*sin(4*pi*x) on the same grid.
+Compute and print the max absolute error max(abs(u - u_exact)) and the L2 error sqrt(sum((u - u_exact)**2)*dx).
+Save a file "solution_agent_wave_13.npz" containing arrays x (length 801), u (length 801), and scalar metadata T=0.25, dx=1/800, dt as computed.
+Save a line plot of u(x, T=0.25) versus x as "solution_agent_wave_13.png".
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+
+# Parameters
+c_cfl = 2.0          # wave speed used for CFL
+c_pde = 1.0          # coefficient in PDE: u_tt = c_pde^2 * u_xx
+T = 0.25
+Nx = 800
+dx = 1.0 / Nx
+x = np.linspace(0.0, 1.0, Nx + 1)  # 801 points
+
+# Time step
+dt0 = 0.9 * dx / c_cfl
+Nt = math.ceil(T / dt0)
+dt = T / Nt
+
+print(f"Nx={Nx}, dx={dx:.6e}")
+print(f"Nt={Nt}, dt={dt:.6e}")
+print(f"CFL = c_cfl*dt/dx = {c_cfl*dt/dx:.6f}")
+
+# Initial conditions
+u0 = np.sin(4 * np.pi * x)
+v0 = np.zeros(Nx + 1)
+
+# Enforce Dirichlet BCs on initial condition
+u0[0] = 0.0
+u0[Nx] = 0.0
+
+# Function to compute c_pde^2 * u_xx using 2nd-order central differences (interior only)
+def compute_uxx(u, dx, c_pde):
+    """Returns c_pde**2 * u_xx at interior points, zero at boundaries."""
+    rhs = np.zeros_like(u)
+    rhs[1:-1] = c_pde**2 * (u[2:] - 2.0*u[1:-1] + u[:-2]) / dx**2
+    return rhs
+
+# Taylor start for u^1
+uxx0 = compute_uxx(u0, dx, c_pde)
+u1 = u0 + dt * v0 + 0.5 * dt**2 * uxx0
+# Enforce BCs
+u1[0] = 0.0
+u1[Nx] = 0.0
+
+# Leapfrog time integration
+u_prev = u0.copy()
+u_curr = u1.copy()
+
+for n in range(1, Nt):
+    uxx = compute_uxx(u_curr, dx, c_pde)
+    u_next = 2.0 * u_curr - u_prev + dt**2 * uxx
+    # Enforce Dirichlet BCs
+    u_next[0] = 0.0
+    u_next[Nx] = 0.0
+    # Advance
+    u_prev = u_curr
+    u_curr = u_next
+
+u_final = u_curr
+
+# Diagnostics
+u_min = np.min(u_final)
+u_max = np.max(u_final)
+l2_norm = np.sqrt(np.sum(u_final**2) * dx)
+
+print(f"\n--- Solution diagnostics at T={T} ---")
+print(f"min(u)  = {u_min:.10e}")
+print(f"max(u)  = {u_max:.10e}")
+print(f"L2 norm = {l2_norm:.10e}")
+
+# Exact solution
+u_exact = np.cos(1.0 * 4 * np.pi * T) * np.sin(4 * np.pi * x)
+
+max_abs_err = np.max(np.abs(u_final - u_exact))
+l2_err = np.sqrt(np.sum((u_final - u_exact)**2) * dx)
+
+print(f"\n--- Error vs exact solution ---")
+print(f"Max absolute error = {max_abs_err:.10e}")
+print(f"L2 error           = {l2_err:.10e}")
+
+# Save npz
+np.savez("solution_agent_wave_13.npz",
+         x=x,
+         u=u_final,
+         T=np.float64(T),
+         dx=np.float64(dx),
+         dt=np.float64(dt))
+print("\nSaved solution_agent_wave_13.npz")
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u_final, 'b-', linewidth=1.5, label=f'Numerical u(x, T={T})')
+ax.plot(x, u_exact, 'r--', linewidth=1.0, label='Exact solution')
+ax.set_xlabel('x')
+ax.set_ylabel('u')
+ax.set_title(f'Wave equation solution at T={T}')
+ax.legend()
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("solution_agent_wave_13.png", dpi=150)
+plt.close()
+print("Saved solution_agent_wave_13.png")
+```
+
+**Explanation of key implementation choices:**
+
+The PDE coefficient is `(1.0)**2 = 1.0` (not `c=2`); `c=2` is used only for the CFL stability condition `CFL = c*dt/dx ≤ 0.9`.
+
+The Taylor start correctly uses `c_pde**2 * u_xx^0` with `v0=0`, giving `u^1 = u^0 + 0.5*dt**2 * u_xx^0`.
+
+The leapfrog update is `u^{n+1} = 2*u^n - u^{n-1} + dt**2 * c_pde**2 * u_xx^n`.
+
+Dirichlet BCs (`u=0`) are enforced at indices `0` and `800` at every step.
+
+`Nt = ceil(T/dt0)` then `dt = T/Nt` ensures the final time is hit exactly.

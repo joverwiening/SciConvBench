@@ -1,0 +1,99 @@
+Solve the 1D Klein-Gordon-type PDE u_tt + (q2**2)*(q1**4)*u = (q1**2)*u_xx numerically.
+The spatial domain is x in [0, 1) with periodic boundary conditions.
+The time domain is t in [0, 1.0].
+Use parameters q1 = 1.0 and q2 = 0.5.
+Interpret Nx as the number of grid points on the half-open periodic domain [0,1), so dx = 1.0/Nx and x_i = i*dx for i = 0..Nx-1.
+Choose Nx = 256 (a power of two suitable for periodic spectral or finite-difference methods).
+Apply periodic boundary conditions: u(0,t) = u(1,t) and u_x(0,t) = u_x(1,t) for all t.
+Set initial condition u(x,0) = sin(2*pi*x).
+Set initial time derivative u_t(x,0) = 0.
+Discretize the spatial second derivative u_xx using the standard second-order centered finite difference with periodic wrap-around: u_xx[i] = (u[i+1] - 2*u[i] + u[i-1]) / dx**2, with indices taken modulo Nx.
+Advance in time using the Stormer-Verlet (leapfrog) second-order symplectic integrator: v_half = v_0 + (dt/2)*F(u_0); u_1 = u_0 + dt*v_half; v_1 = v_half + (dt/2)*F(u_1), where F(u)[i] = q1**2 * u_xx[i] - (q2**2)*(q1**4)*u[i].
+Choose dt such that the CFL condition is satisfied; use dt = 0.4 * dx / q1 (CFL factor 0.4).
+Run the time integration from t = 0 to T = 1.0, taking ceil(T/dt) uniform steps of size dt = T/Nsteps so the final step lands exactly at T = 1.0.
+After integration, compute u(x, T=1.0) on the Nx-point periodic grid.
+Compute and print min(u), max(u), mean(u), and the discrete L2 norm sqrt(sum(u**2)*dx) at T = 1.0.
+Save a file named "solution_molk_014.npz" containing: array x of length Nx, array u of length Nx, scalar T = 1.0, scalar dx, integer Nx, scalar q1 = 1.0, scalar q2 = 0.5.
+Save a line plot of u versus x at T = 1.0 as "solution_molk_014.png" with axis labels x and u(x,T), and a title indicating T = 1.0.
+The exact solution for verification is u(x,t) = cos(omega*t)*sin(2*pi*x) with omega = sqrt(q2**2*q1**4 + q1**2*(2*pi)**2) = 6.303048278758258; optionally overlay this on the plot or print the max absolute error.
+
+```python
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+# Parameters
+q1 = 1.0
+q2 = 0.5
+T  = 1.0
+
+# Grid (half-open periodic domain [0,1))
+Nx = 256
+dx = 1.0 / Nx
+x  = np.arange(Nx) * dx          # x_i = i*dx, i = 0..Nx-1
+
+# Time step (CFL-based, adjusted to land exactly on T)
+dt_cfl = 0.4 * dx / q1
+Nsteps = int(np.ceil(T / dt_cfl))
+dt     = T / Nsteps               # exact step so t_final = T exactly
+
+# Right-hand side: F(u) = q1^2 * u_xx - q2^2 * q1^4 * u
+def rhs(u):
+    # Periodic second-order centered finite difference for u_xx
+    u_xx = (np.roll(u, -1) - 2.0*u + np.roll(u, 1)) / dx**2
+    return q1**2 * u_xx - (q2**2) * (q1**4) * u
+
+# Initial conditions
+u = np.sin(2.0 * np.pi * x).copy()
+v = np.zeros(Nx)                  # u_t(x,0) = 0
+
+# Stormer-Verlet (leapfrog) time integration
+for _ in range(Nsteps):
+    F0    = rhs(u)
+    v_half = v + 0.5 * dt * F0
+    u      = u + dt * v_half
+    F1    = rhs(u)
+    v      = v_half + 0.5 * dt * F1
+
+# Diagnostics
+u_min  = np.min(u)
+u_max  = np.max(u)
+u_mean = np.mean(u)
+l2     = np.sqrt(np.sum(u**2) * dx)
+
+print(f"min(u)  = {u_min:.10f}")
+print(f"max(u)  = {u_max:.10f}")
+print(f"mean(u) = {u_mean:.10e}")
+print(f"L2 norm = {l2:.10f}")
+
+# Exact solution for comparison
+omega = np.sqrt(q2**2 * q1**4 + q1**2 * (2.0*np.pi)**2)
+print(f"omega   = {omega:.15f}")
+u_exact = np.cos(omega * T) * np.sin(2.0 * np.pi * x)
+max_err = np.max(np.abs(u - u_exact))
+print(f"max |error| vs exact = {max_err:.6e}")
+
+# Save npz
+np.savez("solution_molk_014.npz",
+         x=x, u=u,
+         T=np.float64(T),
+         dx=np.float64(dx),
+         Nx=np.int64(Nx),
+         q1=np.float64(q1),
+         q2=np.float64(q2))
+print("Saved solution_molk_014.npz")
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u,       label='Numerical', linewidth=2)
+ax.plot(x, u_exact, label='Exact',     linewidth=1, linestyle='--', color='red')
+ax.set_xlabel('x')
+ax.set_ylabel('u(x, T)')
+ax.set_title(f'Solution of Klein-Gordon PDE at T = {T}  (molk_014)')
+ax.legend()
+fig.tight_layout()
+fig.savefig("solution_molk_014.png", dpi=150)
+plt.close(fig)
+print("Saved solution_molk_014.png")
+```

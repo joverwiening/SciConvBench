@@ -1,0 +1,2127 @@
+=== 2026-04-18 05:43:02 ===
+Q: Below is a short “check‑list” of the things that cause the two error messages you are seeing and a minimal set of changes that will make the model run.  
+All of the changes are **syntactic** – the physics of the problem (geometry, material, loads, etc.) can stay exactly as you have written them.
+
+---
+
+## 1. Why the error appears
+
+| Message | What Abaqus is really telling you |
+|---------|-----------------------------------|
+| **“The specified surface behavior is not compatible with the contact algorithm”** | You have defined a **node‑to‑surface** contact pair (`*CONTACT PAIR … TYPE=NODE TO SURFACE`).  The surface‑behavior keyword `*SURFACE BEHAVIOR, PRESSURE‑OVERCLOSURE=LINEAR` (and the associated pressure‑overclosure data) can **only be used with surface‑to‑surface contact**.  Node‑to‑surface contact does not have a “master surface” that can be “over‑closed”. |
+| **“The contact pair is not defined correctly”** | Because the contact pair is node‑to‑surface, the first entry of the pair must be a **node set** (the slave nodes) and the second entry a **surface** (the master).  In your input you wrote `Sslav,Smast` – both are surfaces, not a node set.  Consequently Abaqus cannot build the pair. |
+
+In short: **you need surface‑to‑surface contact** (or you must delete the pressure‑overclosure definition).  
+
+---
+
+## 2. Minimal set of changes
+
+Below is a **diff‑style** excerpt that you can copy‑paste into your existing input file.  
+Only the lines that have to be changed/added are shown; everything else can stay unchanged.
+
+```abaqus
+*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+Sslav, Smast               ! <‑‑ master/slave surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+1.e7, 3.                    ! <‑‑ keep your pressure‑overclosure data
+
+*FRICTION
+0.2, 47000                 ! <‑‑ friction coefficient and penalty (keep as you had)
+
+*STEP, NLGEOM=YES
+```
+
+### What changed?
+
+| Original line | New line | Reason |
+|---------------|----------|--------|
+| `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Allows the use of `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` | `Sslav, Smast` (same line, but now both are **surfaces**) | The first entry of a surface‑to‑surface pair must be a surface, not a node set. |
+| No other changes needed for the pressure‑overclosure definition. | – | – |
+
+---
+
+## 3. Other “gotchas” that will stop the job (not the source of the two messages)
+
+| Issue | What you have | Fix |
+|-------|----------------|-----|
+| **`*CONTACT PRINT,NSET=Nall`** – the set `Nall` does not exist. | `*CONTACT PRINT,NSET=Nall` | Either create a node set called `Nall` (e.g. `*NSET, NSET=Nall` and list all nodes) **or** replace `Nall` with an existing set such as `Nfix` or `Nload`. |
+| **Pressure load syntax** – you used `P5` as the load type. | `*DLOAD … 80, P5, 100.000000` | For a pressure on a surface the correct load type is `P`.  Change every line to `80, P, 100.` (or any other magnitude you need). |
+| **Amplitude definition** – you defined `A1` but never referenced it in the step. | `*AMPLITUDE,NAME=A1 …` | Either delete the amplitude block (the default amplitude is 1) **or** reference it in the step with `*STEP, NLGEOM, AMPLITUDE=A1`.  The simplest is to delete the block. |
+| **Missing `*END STEP`** – you have it, but make sure it is the very last line of the file. | `*END STEP` | No change needed, just keep it as the last line. |
+| **`*CONTACT PRINT,NSET=Nall`** – you probably wanted to see the contact stresses on *all* nodes.  If you do not need this output you can comment it out. | `*CONTACT PRINT,NSET=Nall` | Either comment it (`** *CONTACT PRINT …`) or replace `Nall` with a defined set. |
+
+---
+
+## 4. Full corrected snippet (only the part that changed)
+
+```abaqus
+*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+Sslav, Smast
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+1.e7, 3.
+
+*FRICTION
+0.2, 47000
+
+*AMPLITUDE,NAME=A1
+0.,1.,1.,1.
+
+*STEP, NLGEOM=YES
+1.,1.
+*DLOAD, AMPLITUDE=A1
+80,  P, 100.0
+84,  P, 100.0
+88,  P, 100.0
+92,  P, 100.0
+96,  P, 100.0
+100, P, 100.0
+104, P, 100.0
+108, P, 100.0
+112, P, 100.0
+116, P, 100.0
+120, P, 100.0
+124, P, 100.0
+128, P, 100.0
+*CONTACT PRINT,NSET=Nfix
+CDISP, CSTRESS
+*END STEP
+```
+
+All other sections of the input file (nodes, elements, material, surfaces, etc.) can remain exactly as you posted.
+
+---
+
+## 5. Quick sanity‑check after the edit
+
+1. **Run a short static analysis** (`*STEP, NLGEOM=NO`) first – this will verify that the contact definition is syntactically correct without the added difficulty of large deformations.  
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`) to make sure the slave surface is indeed coming into contact with the master.  
+3. **If you need the pressure‑overclosure** (e.g. to model a small initial gap that closes under load) keep the `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE=LINEAR` line.  If you do **not** need it, you can simply delete the whole `*SURFACE BEHAVIOR` block – the contact will then behave as a standard hard‑contact with friction.
+
+---
+
+### TL;DR
+
+* **Use surface‑to‑surface contact** (`TYPE=SURFACE TO SURFACE`).  
+* **Keep the pressure‑overclosure definition** (it is only allowed with surface‑to‑surface).  
+* **Fix the load type** (`P` instead of `P5`) and the undefined node set in the `*CONTACT PRINT` command.  
+
+After making those three changes the model will run without the two error messages you reported. If you run into any new warnings (e.g. “no contact detected”), they are usually just a matter of geometry (make sure the slave nodes are actually close enough to the master surface) and can be resolved by adjusting the initial gap or the over‑closure pressure.  
+
+Good luck with your contact analysis! If you hit a different error after these edits, feel free to post the new message and we can troubleshoot further.
+A: **What is wrong?**  
+
+| Abaqus message | Why it happens |
+|----------------|----------------|
+| **“The specified surface behavior is not compatible with the contact algorithm”** | You created a **node‑to‑surface** pair (`TYPE=NODE TO SURFACE`). The keyword `*SURFACE BEHAVIOR, PRESSURE‑OVERCLOSURE=…` can **only** be used with **surface‑to‑surface** contact. |
+| **“The contact pair is not defined correctly”** | For a node‑to‑surface pair the first entry must be a **node set** (the slave nodes) and the second a **surface** (the master). Your line `Sslav,Smast` lists two surfaces, so Abaqus cannot build the pair. |
+
+**Bottom‑line:** you must change the pair to **surface‑to‑surface** (or delete the pressure‑overclosure block).  
+
+---
+
+## 1. Minimal syntactic changes that make the model run  
+
+Copy‑paste the following **diff‑style** block into your existing input file.  
+Only the highlighted lines are changed; everything else can stay exactly as you wrote it.
+
+```abaqus
+*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+Sslav, Smast               ! <-- both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+1.e7, 3.                    ! <-- keep your pressure‑overclosure data
+
+*FRICTION
+0.2, 47000                 ! <-- friction coefficient & penalty (unchanged)
+
+*AMPLITUDE,NAME=A1
+0.,1.,1.,1.                ! <-- you can keep this or delete it (see note below)
+
+*STEP, NLGEOM=YES
+1.,1.
+*DLOAD, AMPLITUDE=A1
+80,  P, 100.               ! <-- use “P” (pressure) instead of “P5”
+84,  P, 100.
+88,  P, 100.
+92,  P, 100.
+96,  P, 100.
+100, P, 100.
+104, P, 100.
+108, P, 100.
+112, P, 100.
+116, P, 100.
+120, P, 100.
+124, P, 100.
+128, P, 100.
+*CONTACT PRINT,NSET=Nfix   ! <-- replace the undefined set Nall with a set that exists
+CDISP, CSTRESS
+*END STEP
+```
+
+### What changed and why  
+
+| Original line | New line | Reason |
+|---------------|----------|--------|
+| `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Allows the use of `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` | `Sslav, Smast` (both are surfaces) | A surface‑to‑surface pair must contain two surfaces, not a node set. |
+| `80,  P5, 100.000000` (and the other load lines) | `80,  P, 100.` (etc.) | `P5` is not a valid load type; a pressure load is `P`. |
+| `*CONTACT PRINT,NSET=Nall` | `*CONTACT PRINT,NSET=Nfix` (or any defined node set) | `Nall` does not exist; using a defined set prevents a “node set not found” error. |
+| (optional) `*AMPLITUDE,NAME=A1 …` | keep or delete | The amplitude block is harmless if you keep it, but you can delete it because the default amplitude is 1. |
+
+---
+
+## 2. Other “gotchas” that can still stop the job  
+
+| Issue | What you have | Fix |
+|-------|----------------|-----|
+| **Undefined node set in `*CONTACT PRINT`** | `Nall` does not exist | Replace with an existing set (`Nfix`, `Nload`, etc.) **or** create a set called `Nall`. |
+| **Amplitude not referenced** | You defined `A1` but never used it (except in the `*DLOAD` line you already have) | No action needed if you keep the `*DLOAD, AMPLITUDE=A1` line. If you delete the amplitude block, also delete `AMPLITUDE=A1` from the `*DLOAD` line. |
+| **Unnecessary amplitude block** | You may not need a time‑varying load | Delete the whole `*AMPLITUDE,NAME=A1 …` block and remove `AMPLITUDE=A1` from the `*DLOAD` line. |
+| **Missing `*END STEP`** | You already have it | Just be sure it is the very last line of the file. |
+| **Contact output you don’t need** | `*CONTACT PRINT,NSET=Nall` | Comment it out (`** *CONTACT PRINT …`) if you don’t need the output. |
+
+---
+
+## 3. Quick sanity‑check after editing  
+
+1. **Run a short static step first** (`*STEP, NLGEOM=NO`).  
+   - This verifies that the contact definition is syntactically correct without the extra difficulty of large deformations.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Make sure the slave surface (`Sslav`) actually comes into contact with the master (`Smast`).  
+
+3. **If you need the pressure‑overclosure** (e.g., to model a small initial gap that closes under load) keep the `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE=LINEAR` line.  
+   - If you do **not** need it, you can delete the whole `*SURFACE BEHAVIOR` block; the contact will then behave as a standard hard‑contact with friction.  
+
+---
+
+## 4. TL;DR – What you must do  
+
+1. **Change the contact type** to `SURFACE TO SURFACE`.  
+2. **Make the pair definition use two surfaces** (`Sslav, Smast`).  
+3. **Keep the pressure‑overclosure block** (it is now allowed).  
+4. **Replace the invalid load type** `P5` with `P`.  
+5. **Fix the undefined node set** in `*CONTACT PRINT` (use a set that exists or comment the line out).  
+
+After those three core changes (plus the two minor fixes above) the model will run without the two error messages you reported. If a new warning appears, it will most likely be a geometry‑related issue (e.g., the slave surface is too far from the master), which can be solved by adjusting the initial gap or the over‑closure pressure.
+
+Good luck with your analysis! If you encounter a different error after applying these edits, paste the new message here and we can troubleshoot further.
+
+=== 2026-04-18 05:43:46 ===
+Q: **Why Abaqus stops**
+
+| Abaqus message | What is really happening |
+|----------------|--------------------------|
+| **“The specified surface behavior is not compatible with the contact algorithm”** | You created a **node‑to‑surface** contact pair (`TYPE=NODE TO SURFACE`). The keyword `*SURFACE BEHAVIOR, PRESSURE‑OVERCLOSURE=…` can **only** be used with **surface‑to‑surface** contact. |
+| **“The contact pair is not defined correctly”** | For a node‑to‑surface pair the first entry must be a **node set** (the slave nodes) and the second a **surface** (the master). Your line `Sslav,Smast` lists two surfaces, so Abaqus cannot build the pair. |
+
+**Bottom line:** the contact must be **surface‑to‑surface** (or you must delete the pressure‑overclosure block).  
+
+---
+
+## 1. Minimal syntactic changes that make the model run  
+
+Copy‑paste the **diff‑style** block below into your existing input file.  
+Only the highlighted lines are changed; everything else can stay exactly as you wrote it.
+
+```abaqus
+*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+Sslav, Smast               ! <-- both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+1.e7, 3.                    ! <-- keep your pressure‑overclosure data
+
+*FRICTION
+0.2, 47000                 ! <-- friction coefficient & penalty (unchanged)
+
+*AMPLITUDE,NAME=A1
+0.,1.,1.,1.                ! <-- you can keep this block or delete it (see note below)
+
+*STEP, NLGEOM=YES
+1.,1.
+*DLOAD, AMPLITUDE=A1
+80,  P, 100.               ! <-- use “P” (pressure) instead of “P5”
+84,  P, 100.
+88,  P, 100.
+92,  P, 100.
+96,  P, 100.
+100, P, 100.
+104, P, 100.
+108, P, 100.
+112, P, 100.
+116, P, 100.
+120, P, 100.
+124, P, 100.
+128, P, 100.
+*CONTACT PRINT,NSET=Nfix   ! <-- replace the undefined set Nall with a set that exists
+CDISP, CSTRESS
+*END STEP
+```
+
+### What changed and why  
+
+| Original line | New line | Reason |
+|---------------|----------|--------|
+| `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Allows the use of `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` | `Sslav, Smast` (both are surfaces) | A surface‑to‑surface pair must contain two surfaces, not a node set. |
+| `80,  P5, 100.000000` (and the other load lines) | `80,  P, 100.` (etc.) | `P5` is not a valid load type; a pressure load is `P`. |
+| `*CONTACT PRINT,NSET=Nall` | `*CONTACT PRINT,NSET=Nfix` (or any defined node set) | `Nall` does not exist; using a defined set prevents a “node set not found” error. |
+| (optional) `*AMPLITUDE,NAME=A1 …` | keep or delete | The amplitude block is harmless if you keep it, but you can delete it because the default amplitude is 1. |
+
+---
+
+## 2. Other “gotchas” that can still stop the job  
+
+| Issue | What you have | Fix |
+|-------|----------------|-----|
+| **Undefined node set in `*CONTACT PRINT`** | `Nall` does not exist | Replace with an existing set (`Nfix`, `Nload`, etc.) **or** create a set called `Nall`. |
+| **Amplitude not referenced** | You defined `A1` but never used it (except in the `*DLOAD` line you already have) | No action needed if you keep the `*DLOAD, AMPLITUDE=A1` line. If you delete the amplitude block, also delete `AMPLITUDE=A1` from the `*DLOAD` line. |
+| **Unnecessary amplitude block** | You may not need a time‑varying load | Delete the whole `*AMPLITUDE,NAME=A1 …` block and remove `AMPLITUDE=A1` from the `*DLOAD` line. |
+| **Contact output you don’t need** | `*CONTACT PRINT,NSET=Nall` | Comment it out (`** *CONTACT PRINT …`) if you don’t need the output. |
+| **Missing `*END STEP`** | You already have it | Just be sure it is the very last line of the file. |
+
+---
+
+## 3. Quick sanity‑check after editing  
+
+1. **Run a short static step first** (`*STEP, NLGEOM=NO`).  
+   - This verifies that the contact definition is syntactically correct without the extra difficulty of large deformations.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Make sure the slave surface (`Sslav`) actually comes into contact with the master (`Smast`).  
+
+3. **If you need the pressure‑overclosure** (e.g., to model a small initial gap that closes under load) keep the `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE=LINEAR` line.  
+   - If you do **not** need it, you can delete the whole `*SURFACE BEHAVIOR` block; the contact will then behave as a standard hard‑contact with friction.  
+
+---
+
+## 4. TL;DR – What you must do  
+
+1. **Change the contact type** to `SURFACE TO SURFACE`.  
+2. **Make the pair definition use two surfaces** (`Sslav, Smast`).  
+3. **Keep the pressure‑overclosure block** (it is now allowed).  
+4. **Replace the invalid load type** `P5` with `P`.  
+5. **Fix the undefined node set** in `*CONTACT PRINT` (use a set that exists or comment the line out).  
+
+After those three core changes (plus the two minor fixes above) the model will run without the two error messages you reported. If a new warning appears, it will most likely be a geometry‑related issue (e.g., the slave surface is too far from the master), which can be solved by adjusting the initial gap or the over‑closure pressure.
+
+Good luck with your analysis! If you encounter a different error after applying these edits, paste the new message here and we can troubleshoot further.
+A: ## Why Abaqus aborts  
+
+| Abaqus message | What is really happening |
+|----------------|--------------------------|
+| **“The specified surface behavior is not compatible with the contact algorithm”** | You told Abaqus to create a **node‑to‑surface** pair (`TYPE=NODE TO SURFACE`). The keyword `*SURFACE BEHAVIOR, PRESSURE‑OVERCLOSURE=…` can **only** be used with **surface‑to‑surface** contact. |
+| **“The contact pair is not defined correctly”** | For a node‑to‑surface pair the first entry must be a **node set** (the slave nodes) and the second a **surface** (the master). Your line `Sslav,Smast` lists two surfaces, so Abaqus cannot build the pair. |
+
+**Bottom line:** either change the pair to **surface‑to‑surface** (the usual way when you want a pressure‑overclosure definition) **or** delete the `*SURFACE BEHAVIOR` block. The easiest fix is to keep the over‑closure behaviour and make the contact surface‑to‑surface.
+
+---
+
+## 1. Minimal syntactic changes that make the model run  
+
+Copy‑paste the **diff‑style** block below into your existing `.inp` file.  
+Only the highlighted lines are changed; everything else can stay exactly as you wrote it.
+
+```diff
+*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE
++*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+- Sslav,Smast
++ Sslav, Smast               ! both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.                    ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000                 ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE,NAME=A1
+ 0.,1.,1.,1.                ! you can keep this block or delete it (see note below)
+
+*STEP, NLGEOM=YES
+ 1.,1.
+*DLOAD, AMPLITUDE=A1
+-80,  P5, 100.000000
++80,  P, 100.
+-84,  P5, 100.000000
++84,  P, 100.
+-88,  P5, 100.000000
++88,  P, 100.
+-92,  P5, 100.000000
++92,  P, 100.
+-96,  P5, 100.000000
++96,  P, 100.
+-100, P5, 100.000000
++100, P, 100.
+-104, P5, 100.000000
++104, P, 100.
+-108, P5, 100.000000
++108, P, 100.
+-112, P5, 100.000000
++112, P, 100.
+-116, P5, 100.000000
++116, P, 100.
+-120, P5, 100.000000
++120, P, 100.
+-124, P5, 100.000000
++124, P, 100.
+-128, P5, 100.000000
++128, P, 100.
+
+*CONTACT PRINT,NSET=Nall
++*CONTACT PRINT,NSET=Nfix   ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+### What changed and why  
+
+| Original line | New line | Reason |
+|---------------|----------|--------|
+| `*CONTACT PAIR,…,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,…,TYPE=SURFACE TO SURFACE` | Allows the use of `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` | `Sslav, Smast` (both are surfaces) | A surface‑to‑surface pair must contain **two surfaces**, not a node set. |
+| `80,  P5, 100.` (and the other load lines) | `80,  P, 100.` (etc.) | `P5` is not a valid load type; a pressure load is `P`. |
+| `*CONTACT PRINT,NSET=Nall` | `*CONTACT PRINT,NSET=Nfix` (or any defined node set) | `Nall` does not exist; using a defined set prevents a “node set not found” error. |
+| (optional) `*AMPLITUDE,NAME=A1 …` | keep or delete | The amplitude block is harmless if you keep it, but you can delete it because the default amplitude is 1. |
+
+---
+
+## 2. Other “gotchas” that can still stop the job  
+
+| Issue | What you have | Fix |
+|-------|----------------|-----|
+| **Undefined node set in `*CONTACT PRINT`** | `Nall` does not exist | Replace with an existing set (`Nfix`, `Nload`, etc.) **or** create a set called `Nall`. |
+| **Amplitude block not used** | You defined `A1` but never referenced it (except in the `*DLOAD` line) | No action needed if you keep `*DLOAD, AMPLITUDE=A1`. If you delete the amplitude block, also delete `AMPLITUDE=A1` from the `*DLOAD` line. |
+| **Unnecessary amplitude block** | You may not need a time‑varying load | Delete the whole `*AMPLITUDE,NAME=A1 …` block and remove `AMPLITUDE=A1` from the `*DLOAD` line. |
+| **Contact output you don’t need** | `*CONTACT PRINT,NSET=Nall` | Comment it out (`** *CONTACT PRINT …`) if you don’t need the output. |
+| **Missing `*END STEP`** | You already have it | Just be sure it is the very last line of the file. |
+
+---
+
+## 3. Quick sanity‑check after editing  
+
+1. **Run a short static step first** (`*STEP, NLGEOM=NO`).  
+   - This verifies that the contact definition is syntactically correct without the extra difficulty of large deformations.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Make sure the slave surface (`Sslav`) actually comes into contact with the master (`Smast`).  
+
+3. **If you need the pressure‑overclosure** (e.g., to model a small initial gap that closes under load) keep the `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE=LINEAR` line.  
+   - If you do **not** need it, you can delete the whole `*SURFACE BEHAVIOR` block; the contact will then behave as a standard hard‑contact with friction.  
+
+---
+
+## 4. TL;DR – What you must do  
+
+1. **Change the contact type** to `SURFACE TO SURFACE`.  
+2. **Make the pair definition use two surfaces** (`Sslav, Smast`).  
+3. **Keep the pressure‑overclosure block** (it is now allowed).  
+4. **Replace the invalid load type** `P5` with `P`.  
+5. **Fix the undefined node set** in `*CONTACT PRINT` (use a set that exists or comment the line out).  
+
+After those three core changes (plus the two minor fixes above) the model will run without the two error messages you reported. If a new warning appears, it will most likely be a geometry‑related issue (e.g., the slave surface is too far from the master), which can be solved by adjusting the initial gap or the over‑closure pressure.
+
+Good luck with your analysis! If you encounter a different error after applying these edits, paste the new message here and we can troubleshoot further.
+
+=== 2026-04-18 05:44:34 ===
+Q: ## Why Abaqus aborts  
+
+| Abaqus message | What is really happening |
+|----------------|--------------------------|
+| **“The specified surface behavior is not compatible with the contact algorithm”** | You asked Abaqus to create a **node‑to‑surface** contact pair (`TYPE=NODE TO SURFACE`). The keyword `*SURFACE BEHAVIOR, PRESSURE‑OVERCLOSURE=…` can **only** be used with **surface‑to‑surface** contact. |
+| **“The contact pair is not defined correctly”** | For a node‑to‑surface pair the first entry must be a **node set** (the slave nodes) and the second a **surface** (the master). Your line `Sslav,Smast` lists two surfaces, so Abaqus cannot build the pair. |
+
+**Bottom line:** either change the pair to **surface‑to‑surface** (the usual way when you want a pressure‑overclosure definition) **or** delete the `*SURFACE BEHAVIOR` block. The easiest fix is to keep the over‑closure behaviour and make the contact surface‑to‑surface.
+
+---
+
+## 1. Minimal syntactic changes that make the model run  
+
+Copy‑paste the **diff‑style** block below into your existing `.inp` file.  
+Only the highlighted lines are changed; everything else can stay exactly as you wrote it.
+
+```diff
+*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE
++*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+- Sslav,Smast
++ Sslav, Smast               ! both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.                    ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000                 ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE,NAME=A1
+ 0.,1.,1.,1.                ! you can keep this block or delete it (see note below)
+
+*STEP, NLGEOM=YES
+ 1.,1.
+*DLOAD, AMPLITUDE=A1
+-80,  P5, 100.000000
++80,  P, 100.
+-84,  P5, 100.000000
++84,  P, 100.
+-88,  P5, 100.000000
++88,  P, 100.
+-92,  P5, 100.000000
++92,  P, 100.
+-96,  P5, 100.000000
++96,  P, 100.
+-100, P5, 100.000000
++100, P, 100.
+-104, P5, 100.000000
++104, P, 100.
+-108, P5, 100.000000
++108, P, 100.
+-112, P5, 100.000000
++112, P, 100.
+-116, P5, 100.000000
++116, P, 100.
+-120, P5, 100.000000
++120, P, 100.
+-124, P5, 100.000000
++124, P, 100.
+-128, P5, 100.000000
++128, P, 100.
+
+*CONTACT PRINT,NSET=Nall
++*CONTACT PRINT,NSET=Nfix   ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+### What changed and why  
+
+| Original line | New line | Reason |
+|---------------|----------|--------|
+| `*CONTACT PAIR,…,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,…,TYPE=SURFACE TO SURFACE` | Allows the use of `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` | `Sslav, Smast` (both are surfaces) | A surface‑to‑surface pair must contain **two surfaces**, not a node set. |
+| `80,  P5, 100.` (and the other load lines) | `80,  P, 100.` (etc.) | `P5` is not a valid load type; a pressure load is `P`. |
+| `*CONTACT PRINT,NSET=Nall` | `*CONTACT PRINT,NSET=Nfix` (or any defined node set) | `Nall` does not exist; using a defined set prevents a “node set not found” error. |
+| (optional) `*AMPLITUDE,NAME=A1 …` | keep or delete | The amplitude block is harmless if you keep it, but you can delete it because the default amplitude is 1. |
+
+---
+
+## 2. Other “gotchas” that can still stop the job  
+
+| Issue | What you have | Fix |
+|-------|----------------|-----|
+| **Undefined node set in `*CONTACT PRINT`** | `Nall` does not exist | Replace with an existing set (`Nfix`, `Nload`, etc.) **or** create a set called `Nall`. |
+| **Amplitude block not used** | You defined `A1` but never referenced it (except in the `*DLOAD` line) | No action needed if you keep `*DLOAD, AMPLITUDE=A1`. If you delete the amplitude block, also delete `AMPLITUDE=A1` from the `*DLOAD` line. |
+| **Unnecessary amplitude block** | You may not need a time‑varying load | Delete the whole `*AMPLITUDE,NAME=A1 …` block and remove `AMPLITUDE=A1` from the `*DLOAD` line. |
+| **Contact output you don’t need** | `*CONTACT PRINT,NSET=Nall` | Comment it out (`** *CONTACT PRINT …`) if you don’t need the output. |
+| **Missing `*END STEP`** | You already have it | Just be sure it is the very last line of the file. |
+
+---
+
+## 3. Quick sanity‑check after editing  
+
+1. **Run a short static step first** (`*STEP, NLGEOM=NO`).  
+   - This verifies that the contact definition is syntactically correct without the extra difficulty of large deformations.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Make sure the slave surface (`Sslav`) actually comes into contact with the master (`Smast`).  
+
+3. **If you need the pressure‑overclosure** (e.g., to model a small initial gap that closes under load) keep the `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE=LINEAR` line.  
+   - If you do **not** need it, you can delete the whole `*SURFACE BEHAVIOR` block; the contact will then behave as a standard hard‑contact with friction.  
+
+---
+
+## 4. TL;DR – What you must do  
+
+1. **Change the contact type** to `SURFACE TO SURFACE`.  
+2. **Make the pair definition use two surfaces** (`Sslav, Smast`).  
+3. **Keep the pressure‑overclosure block** (it is now allowed).  
+4. **Replace the invalid load type** `P5` with `P`.  
+5. **Fix the undefined node set** in `*CONTACT PRINT` (use a set that exists or comment the line out).  
+
+After those three core changes (plus the two minor fixes above) the model will run without the two error messages you reported. If a new warning appears, it will most likely be a geometry‑related issue (e.g., the slave surface is too far from the master), which can be solved by adjusting the initial gap or the over‑closure pressure.
+
+Good luck with your analysis! If you encounter a different error after applying these edits, paste the new message here and we can troubleshoot further.
+A: ## Short answer – what you have to change to make the job run  
+
+| What you wrote | What you must write | Why |
+|----------------|--------------------|-----|
+| `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Only **surface‑to‑surface** pairs can use `*SURFACE BEHAVIOR … PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` (two *surfaces* listed as a *node‑to‑surface* pair) | `Sslav, Smast` (both are **surfaces**) | A surface‑to‑surface pair must contain **two surfaces** – the first is the *slave* surface, the second the *master* surface. |
+| `80,  P5, 100.` (and the other load lines) | `80,  P, 100.` (etc.) | `P5` is not a valid load type; a pressure load is simply `P`. |
+| `*CONTACT PRINT,NSET=Nall` (undefined set) | `*CONTACT PRINT,NSET=Nfix` **or** any node set that really exists (or comment the line out) | Abaqus aborts if the node set does not exist. |
+| (optional) `*AMPLITUDE,NAME=A1 …` while you never use it elsewhere | Delete the block **or** keep it and leave `AMPLITUDE=A1` on the `*DLOAD` line | The block is harmless if you keep it, but you can remove it to simplify the input. |
+
+---
+
+## 1. Ready‑to‑paste diff (copy‑paste the whole block into your *.inp* file)
+
+```diff
+*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE
++*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+- Sslav,Smast
++ Sslav, Smast               ! both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.                    ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000                 ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE,NAME=A1          ! ← you may delete this whole block if you do not need a time‑varying load
+ 0.,1.,1.,1.
+
+*STEP, NLGEOM=YES
+ 1.,1.
+*DLOAD, AMPLITUDE=A1
+-80,  P5, 100.000000
++80,  P, 100.
+-84,  P5, 100.000000
++84,  P, 100.
+-88,  P5, 100.000000
++88,  P, 100.
+-92,  P5, 100.000000
++92,  P, 100.
+-96,  P5, 100.000000
++96,  P, 100.
+-100, P5, 100.000000
++100, P, 100.
+-104, P5, 100.000000
++104, P, 100.
+-108, P5, 100.000000
++108, P, 100.
+-112, P5, 100.000000
++112, P, 100.
+-116, P5, 100.000000
++116, P, 100.
+-120, P5, 100.000000
++120, P, 100.
+-124, P5, 100.000000
++124, P, 100.
+-128, P5, 100.000000
++128, P, 100.
+
+*CONTACT PRINT,NSET=Nall
++*CONTACT PRINT,NSET=Nfix   ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+> **What the diff does**  
+> 1. Switches the contact algorithm to a surface‑to‑surface pair, which unlocks the pressure‑overclosure definition.  
+> 2. Makes the pair definition consist of two surfaces (`Sslav` and `Smast`).  
+> 3. Corrects the load type from the illegal `P5` to the proper pressure load `P`.  
+> 4. Fixes the undefined node set used for contact output.  
+> 5. Leaves the amplitude block untouched (you can delete it if you wish).
+
+---
+
+## 2. Other “gotchas” you may still hit  
+
+| Symptom | Likely cause | Quick fix |
+|---------|--------------|-----------|
+| **`***ERROR: Node set Nall not found`** | The `*CONTACT PRINT` line still points to a non‑existent set. | Change the set name to one that exists (`Nfix`, `Nload`, …) **or** comment the line out (`** *CONTACT PRINT …`). |
+| **`***WARNING: Amplitude A1 not used`** | You kept the `*AMPLITUDE` block but removed `AMPLITUDE=A1` from the `*DLOAD` line. | Either delete the whole `*AMPLITUDE` block **or** keep `AMPLITUDE=A1` on the `*DLOAD` line (as shown above). |
+| **Contact never activates** | The slave surface is still too far from the master or the over‑closure pressure is too low. | Reduce the initial gap, increase the pressure‑overclosure coefficient, or run a short “pre‑contact” step with a larger pressure. |
+| **Large deformations cause divergence** | `NLGEOM=YES` with a stiff contact may need a smaller time increment. | Add `*STEP, NLGEOM=YES, INC=0.01` (or use automatic incrementation) and/or increase the contact penalty. |
+| **Missing `*END STEP`** | The file ends abruptly. | Ensure `*END STEP` is the very last line of the input file. |
+
+---
+
+## 3. Minimal sanity‑check workflow  
+
+1. **Run a quick linear static step** (`*STEP, NLGEOM=NO`) with the same contact definition.  
+   - If Abaqus reads the input without aborting, the syntax is correct.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If you need the pressure‑overclosure** (e.g., to model a small initial gap that closes under load) keep the `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE=LINEAR` line.  
+   - If you do **not** need it, simply delete the whole `*SURFACE BEHAVIOR` block; the contact will behave as a standard hard‑contact with friction.  
+
+---
+
+## 4. TL;DR – the three essential edits  
+
+1. **Change the contact type** to `SURFACE TO SURFACE`.  
+2. **Make the pair definition use two surfaces** (`Sslav, Smast`).  
+3. **Replace the illegal load type** `P5` with the correct pressure load `P`.  
+
+*Optional but recommended*: fix the undefined node set in `*CONTACT PRINT` (or comment the line out) and delete the unused amplitude block if you do not need a time‑varying load.
+
+After those three core changes (plus the two minor fixes above) the model will no longer abort with the two messages you reported. If a new warning appears, it will most likely be geometry‑related (gap too large, contact not closing, etc.) – adjust the gap or the over‑closure pressure accordingly.
+
+Good luck! If you hit a different error after applying these edits, paste the new message here and we can troubleshoot further.
+
+=== 2026-04-18 05:45:22 ===
+Q: ## Short answer – what you have to change to make the job run  
+
+| What you wrote | What you must write | Why |
+|----------------|--------------------|-----|
+| `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Only **surface‑to‑surface** pairs can use `*SURFACE BEHAVIOR … PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` (two *surfaces* listed as a *node‑to‑surface* pair) | `Sslav, Smast` (both are **surfaces**) | A surface‑to‑surface pair must contain **two surfaces** – the first is the *slave* surface, the second the *master* surface. |
+| `80,  P5, 100.` (and the other load lines) | `80,  P, 100.` (etc.) | `P5` is not a valid load type; a pressure load is simply `P`. |
+| `*CONTACT PRINT,NSET=Nall` (undefined set) | `*CONTACT PRINT,NSET=Nfix` **or** any node set that really exists (or comment the line out) | Abaqus aborts if the node set does not exist. |
+| (optional) `*AMPLITUDE,NAME=A1 …` while you never use it elsewhere | Delete the block **or** keep it and leave `AMPLITUDE=A1` on the `*DLOAD` line | The block is harmless if you keep it, but you can remove it to simplify the input. |
+
+---
+
+## 1. Ready‑to‑paste diff (copy‑paste the whole block into your *.inp* file)
+
+```diff
+*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE
++*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+- Sslav,Smast
++ Sslav, Smast               ! both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.                    ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000                 ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE,NAME=A1          ! ← you may delete this whole block if you do not need a time‑varying load
+ 0.,1.,1.,1.
+
+*STEP, NLGEOM=YES
+ 1.,1.
+*DLOAD, AMPLITUDE=A1
+-80,  P5, 100.000000
++80,  P, 100.
+-84,  P5, 100.000000
++84,  P, 100.
+-88,  P5, 100.000000
++88,  P, 100.
+-92,  P5, 100.000000
++92,  P, 100.
+-96,  P5, 100.000000
++96,  P, 100.
+-100, P5, 100.000000
++100, P, 100.
+-104, P5, 100.000000
++104, P, 100.
+-108, P5, 100.000000
++108, P, 100.
+-112, P5, 100.000000
++112, P, 100.
+-116, P5, 100.000000
++116, P, 100.
+-120, P5, 100.000000
++120, P, 100.
+-124, P5, 100.000000
++124, P, 100.
+-128, P5, 100.000000
++128, P, 100.
+
+*CONTACT PRINT,NSET=Nall
++*CONTACT PRINT,NSET=Nfix   ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+### What the diff does  
+
+1. **Switches the contact algorithm** to a surface‑to‑surface pair, which unlocks the pressure‑overclosure definition.  
+2. **Makes the pair definition consist of two surfaces** (`Sslav` and `Smast`).  
+3. **Corrects the load type** from the illegal `P5` to the proper pressure load `P`.  
+4. **Fixes the undefined node set** used for contact output.  
+5. **Leaves the amplitude block untouched** (you can delete it if you do not need a time‑varying load).
+
+---
+
+## 2. Other “gotchas” you may still hit  
+
+| Symptom | Likely cause | Quick fix |
+|---------|--------------|-----------|
+| `***ERROR: Node set Nall not found` | The `*CONTACT PRINT` line still points to a non‑existent set. | Change the set name to one that exists (`Nfix`, `Nload`, …) **or** comment the line out (`** *CONTACT PRINT …`). |
+| `***WARNING: Amplitude A1 not used` | You kept the `*AMPLITUDE` block but removed `AMPLITUDE=A1` from the `*DLOAD` line. | Either delete the whole `*AMPLITUDE` block **or** keep `AMPLITUDE=A1` on the `*DLOAD` line (as shown above). |
+| Contact never activates | Slave surface still too far from master or over‑closure pressure too low. | Reduce the initial gap, increase the pressure‑overclosure coefficient, or run a short “pre‑contact” step with a larger pressure. |
+| Large deformations cause divergence | `NLGEOM=YES` with a stiff contact may need a smaller time increment. | Add `*STEP, NLGEOM=YES, INC=0.01` (or use automatic incrementation) and/or increase the contact penalty. |
+| Missing `*END STEP` | The file ends abruptly. | Ensure `*END STEP` is the very last line of the input file. |
+
+---
+
+## 3. Minimal sanity‑check workflow  
+
+1. **Run a quick linear static step** (`*STEP, NLGEOM=NO`) with the same contact definition.  
+   - If Abaqus reads the input without aborting, the syntax is correct.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If you need the pressure‑overclosure** (e.g., to model a small initial gap that closes under load) keep the `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE=LINEAR` line.  
+   - If you do **not** need it, simply delete the whole `*SURFACE BEHAVIOR` block; the contact will behave as a standard hard‑contact with friction.  
+
+---
+
+## 4. TL;DR – the three essential edits  
+
+1. **Change the contact type** to `SURFACE TO SURFACE`.  
+2. **Make the pair definition use two surfaces** (`Sslav, Smast`).  
+3. **Replace the illegal load type** `P5` with the correct pressure load `P`.  
+
+*Optional but recommended*: fix the undefined node set in `*CONTACT PRINT` (or comment the line out) and delete the unused amplitude block if you do not need a time‑varying load.
+
+After those three core changes (plus the two minor fixes above) the model will no longer abort with the two messages you reported. If a new warning appears, it will most likely be geometry‑related (gap too large, contact not closing, etc.) – adjust the gap or the over‑closure pressure accordingly.
+
+Good luck! If you hit a different error after applying these edits, paste the new message here and we can troubleshoot further.
+A: ## TL;DR – What you **must** change for the job to run  
+
+| What you wrote | What you must write | Why |
+|----------------|---------------------|-----|
+| `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Only **surface‑to‑surface** pairs can use `*SURFACE BEHAVIOR … PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` (two *surfaces* listed as a *node‑to‑surface* pair) | `Sslav, Smast` (both are **surfaces**) | A surface‑to‑surface pair must contain **two surfaces** – the first is the *slave* surface, the second the *master* surface. |
+| `80,  P5, 100.` (and the other load lines) | `80,  P, 100.` (etc.) | `P5` is not a valid load type; a pressure load is simply `P`. |
+| `*CONTACT PRINT,NSET=Nall` (undefined set) | `*CONTACT PRINT,NSET=Nfix` **or** any node set that really exists (or comment the line out) | Abaqus aborts if the node set does not exist. |
+| (optional) `*AMPLITUDE,NAME=A1 …` while you never use it elsewhere | Delete the block **or** keep it and add `AMPLITUDE=A1` on the `*DLOAD` line | The block is harmless if you keep it, but you can remove it to simplify the input. |
+
+---
+
+## Ready‑to‑paste **diff** (copy the whole block into your *.inp* file)
+
+```diff
+*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE
++*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+- Sslav,Smast
++ Sslav, Smast               ! both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.                    ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000                 ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE,NAME=A1          ! ← you may delete this whole block if you do not need a time‑varying load
+ 0.,1.,1.,1.
+
+*STEP, NLGEOM=YES
+ 1.,1.
+*DLOAD, AMPLITUDE=A1
+-80,  P5, 100.000000
++80,  P, 100.
+-84,  P5, 100.000000
++84,  P, 100.
+-88,  P5, 100.000000
++88,  P, 100.
+-92,  P5, 100.000000
++92,  P, 100.
+-96,  P5, 100.000000
++96,  P, 100.
+-100, P5, 100.000000
++100, P, 100.
+-104, P5, 100.000000
++104, P, 100.
+-108, P5, 100.000000
++108, P, 100.
+-112, P5, 100.000000
++112, P, 100.
+-116, P5, 100.000000
++116, P, 100.
+-120, P5, 100.000000
++120, P, 100.
+-124, P5, 100.000000
++124, P, 100.
+-128, P5, 100.000000
++128, P, 100.
+
+*CONTACT PRINT,NSET=Nall
++*CONTACT PRINT,NSET=Nfix   ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+### What the diff does  
+
+1. **Switches the contact algorithm** to a surface‑to‑surface pair, which unlocks the pressure‑overclosure definition.  
+2. **Makes the pair definition consist of two surfaces** (`Sslav` and `Smast`).  
+3. **Corrects the load type** from the illegal `P5` to the proper pressure load `P`.  
+4. **Fixes the undefined node set** used for contact output.  
+5. **Leaves the amplitude block untouched** (you can delete it if you do not need a time‑varying load).
+
+---
+
+## Additional “gotchas” you may still encounter  
+
+| Symptom | Likely cause | Quick fix |
+|---------|--------------|-----------|
+| `***ERROR: Node set Nall not found` | `*CONTACT PRINT` still points to a non‑existent set. | Change the set name to one that exists (`Nfix`, `Nload`, …) **or** comment the line out (`** *CONTACT PRINT …`). |
+| `***WARNING: Amplitude A1 not used` | You kept the `*AMPLITUDE` block but removed `AMPLITUDE=A1` from the `*DLOAD` line. | Either delete the whole `*AMPLITUDE` block **or** keep `AMPLITUDE=A1` on the `*DLOAD` line (as shown above). |
+| Contact never activates | Slave surface still too far from master or over‑closure pressure too low. | Reduce the initial gap, increase the pressure‑overclosure coefficient, or run a short “pre‑contact” step with a larger pressure. |
+| Large deformations cause divergence | `NLGEOM=YES` with a stiff contact may need a smaller time increment. | Add `*STEP, NLGEOM=YES, INC=0.01` (or let Abaqus control the increment automatically) and/or increase the contact penalty. |
+| Missing `*END STEP` | The file ends abruptly. | Ensure `*END STEP` is the very last line of the input file. |
+
+---
+
+## Minimal sanity‑check workflow  
+
+1. **Run a quick linear static step** (`*STEP, NLGEOM=NO`) with the same contact definition.  
+   - If Abaqus reads the input without aborting, the syntax is correct.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If you need the pressure‑overclosure** (e.g., to model a small initial gap that closes under load) keep the `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE=LINEAR` line.  
+   - If you do **not** need it, simply delete the whole `*SURFACE BEHAVIOR` block; the contact will behave as a standard hard‑contact with friction.  
+
+---
+
+## Bottom line – the three essential edits  
+
+1. **Change the contact type** to `SURFACE TO SURFACE`.  
+2. **Make the pair definition use two surfaces** (`Sslav, Smast`).  
+3. **Replace the illegal load type** `P5` with the correct pressure load `P`.  
+
+*Optional but strongly recommended*: fix the undefined node set in `*CONTACT PRINT` (or comment the line out) and delete the unused amplitude block if you do not need a time‑varying load.
+
+After applying those three core changes (plus the two minor fixes above) the model will no longer abort with the two errors you reported. If a new warning appears, it will most likely be geometry‑related (gap too large, contact not closing, etc.) – adjust the gap or the over‑closure pressure accordingly.
+
+Good luck! If you hit a different error after making these edits, paste the new message here and we can troubleshoot further.
+
+=== 2026-04-18 05:46:09 ===
+Q: ## TL;DR – What you **must** change for the job to run  
+
+| What you wrote | What you must write | Why |
+|----------------|---------------------|-----|
+| `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Only **surface‑to‑surface** pairs can use `*SURFACE BEHAVIOR … PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` (two *surfaces* listed as a *node‑to‑surface* pair) | `Sslav, Smast` (both are **surfaces**) | A surface‑to‑surface pair must contain **two surfaces** – the first is the *slave* surface, the second the *master* surface. |
+| `80,  P5, 100.` (and the other load lines) | `80,  P, 100.` (etc.) | `P5` is not a valid load type; a pressure load is simply `P`. |
+| `*CONTACT PRINT,NSET=Nall` (undefined set) | `*CONTACT PRINT,NSET=Nfix` **or** any node set that really exists (or comment the line out) | Abaqus aborts if the node set does not exist. |
+| (optional) `*AMPLITUDE,NAME=A1 …` while you never use it elsewhere | Delete the block **or** keep it and add `AMPLITUDE=A1` on the `*DLOAD` line | The block is harmless if you keep it, but you can remove it to simplify the input. |
+
+---
+
+## Ready‑to‑paste **diff** (copy the whole block into your *.inp* file)
+
+```diff
+*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE
++*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+- Sslav,Smast
++ Sslav, Smast               ! both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.                    ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000                 ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE,NAME=A1          ! ← you may delete this whole block if you do not need a time‑varying load
+ 0.,1.,1.,1.
+
+*STEP, NLGEOM=YES
+ 1.,1.
+*DLOAD, AMPLITUDE=A1
+-80,  P5, 100.000000
++80,  P, 100.
+-84,  P5, 100.000000
++84,  P, 100.
+-88,  P5, 100.000000
++88,  P, 100.
+-92,  P5, 100.000000
++92,  P, 100.
+-96,  P5, 100.000000
++96,  P, 100.
+-100, P5, 100.000000
++100, P, 100.
+-104, P5, 100.000000
++104, P, 100.
+-108, P5, 100.000000
++108, P, 100.
+-112, P5, 100.000000
++112, P, 100.
+-116, P5, 100.000000
++116, P, 100.
+-120, P5, 100.000000
++120, P, 100.
+-124, P5, 100.000000
++124, P, 100.
+-128, P5, 100.000000
++128, P, 100.
+
+*CONTACT PRINT,NSET=Nall
++*CONTACT PRINT,NSET=Nfix   ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+### What the diff does  
+
+1. **Switches the contact algorithm** to a surface‑to‑surface pair, which unlocks the pressure‑overclosure definition.  
+2. **Makes the pair definition consist of two surfaces** (`Sslav` and `Smast`).  
+3. **Corrects the load type** from the illegal `P5` to the proper pressure load `P`.  
+4. **Fixes the undefined node set** used for contact output.  
+5. **Leaves the amplitude block untouched** (you can delete it if you do not need a time‑varying load).
+
+---
+
+## Additional “gotchas” you may still encounter  
+
+| Symptom | Likely cause | Quick fix |
+|---------|--------------|-----------|
+| `***ERROR: Node set Nall not found` | `*CONTACT PRINT` still points to a non‑existent set. | Change the set name to one that exists (`Nfix`, `Nload`, …) **or** comment the line out (`** *CONTACT PRINT …`). |
+| `***WARNING: Amplitude A1 not used` | You kept the `*AMPLITUDE` block but removed `AMPLITUDE=A1` from the `*DLOAD` line. | Either delete the whole `*AMPLITUDE` block **or** keep `AMPLITUDE=A1` on the `*DLOAD` line (as shown above). |
+| Contact never activates | Slave surface still too far from master or over‑closure pressure too low. | Reduce the initial gap, increase the pressure‑overclosure coefficient, or run a short “pre‑contact” step with a larger pressure. |
+| Large deformations cause divergence | `NLGEOM=YES` with a stiff contact may need a smaller time increment. | Add `*STEP, NLGEOM=YES, INC=0.01` (or let Abaqus control the increment automatically) and/or increase the contact penalty. |
+| Missing `*END STEP` | The file ends abruptly. | Ensure `*END STEP` is the very last line of the input file. |
+
+---
+
+## Minimal sanity‑check workflow  
+
+1. **Run a quick linear static step** (`*STEP, NLGEOM=NO`) with the same contact definition.  
+   - If Abaqus reads the input without aborting, the syntax is correct.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If you need the pressure‑overclosure** (e.g., to model a small initial gap that closes under load) keep the `*SURFACE BEHAVIOR,PRESSURE‑OVERCLOSURE=LINEAR` line.  
+   - If you do **not** need it, simply delete the whole `*SURFACE BEHAVIOR` block; the contact will behave as a standard hard‑contact with friction.  
+
+---
+
+## Bottom line – the three essential edits  
+
+1. **Change the contact type** to `SURFACE TO SURFACE`.  
+2. **Make the pair definition use two surfaces** (`Sslav, Smast`).  
+3. **Replace the illegal load type** `P5` with the correct pressure load `P`.  
+
+*Optional but strongly recommended*: fix the undefined node set in `*CONTACT PRINT` (or comment the line out) and delete the unused amplitude block if you do not need a time‑varying load.
+
+After applying those three core changes (plus the two minor fixes above) the model will no longer abort with the two errors you reported. If a new warning appears, it will most likely be geometry‑related (gap too large, contact not closing, etc.) – adjust the gap or the over‑closure pressure accordingly.
+
+Good luck! If you hit a different error after making these edits, paste the new message here and we can troubleshoot further.
+A: Below is a **complete, ready‑to‑copy** set of changes that will make your Abaqus job run.  
+Everything that was wrong in the original input is highlighted, and a short “why” is given for each edit.
+
+---
+
+## 1️⃣  The three mandatory fixes  
+
+| What was wrong | What you must write | Why it matters |
+|----------------|---------------------|----------------|
+| `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Only **surface‑to‑surface** pairs can use `*SURFACE BEHAVIOR … PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` (two *nodes* listed as a *node‑to‑surface* pair) | `Sslav, Smast` (both are **surfaces**) | A surface‑to‑surface pair must contain **two surfaces** – the first is the *slave* surface, the second the *master* surface. |
+| Load lines like `80,  P5, 100.` | `80,  P, 100.` | `P5` is not a valid load type; a pressure load is simply `P`. |
+
+---
+
+## 2️⃣  Optional (but highly recommended) clean‑ups  
+
+| Issue | Fix | Reason |
+|-------|-----|--------|
+| `*CONTACT PRINT,NSET=Nall` – the node set **does not exist** | Change to a set that **does** exist (e.g. `Nfix`) **or** comment the line out. | Abaqus aborts if the set cannot be found. |
+| `*AMPLITUDE,NAME=A1 …` is defined but never used | Either delete the whole block **or** add `AMPLITUDE=A1` on the `*DLOAD` line. | An unused amplitude is harmless, but removing it keeps the file tidy. |
+| Large time increment may cause divergence when NLGEOM=YES | Add a modest initial increment, e.g. `*STEP, NLGEOM=YES, INC=0.01`. | Gives the solver a smoother start for highly non‑linear contact. |
+
+---
+
+## 3️⃣  Full “diff” you can paste directly into your *.inp* file  
+
+```diff
+*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE
++*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+- Sslav,Smast
++ Sslav, Smast               ! both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.                    ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000                 ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE,NAME=A1          ! ← you may delete this whole block if you do not need a time‑varying load
+ 0.,1.,1.,1.
+
+*STEP, NLGEOM=YES
+ 1.,1.
+*DLOAD, AMPLITUDE=A1
+-80,  P5, 100.000000
++80,  P, 100.
+-84,  P5, 100.000000
++84,  P, 100.
+-88,  P5, 100.000000
++88,  P, 100.
+-92,  P5, 100.000000
++92,  P, 100.
+-96,  P5, 100.000000
++96,  P, 100.
+-100, P5, 100.000000
++100, P, 100.
+-104, P5, 100.000000
++104, P, 100.
+-108, P5, 100.000000
++108, P, 100.
+-112, P5, 100.000000
++112, P, 100.
+-116, P5, 100.000000
++116, P, 100.
+-120, P5, 100.000000
++120, P, 100.
+-124, P5, 100.000000
++124, P, 100.
+-128, P5, 100.000000
++128, P, 100.
+
+*CONTACT PRINT,NSET=Nall
++*CONTACT PRINT,NSET=Nfix   ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+*If you decide to delete the amplitude block, also remove `AMPLITUDE=A1` from the `*DLOAD` line.*
+
+---
+
+## 4️⃣  Quick sanity‑check workflow  
+
+1. **Run a linear static step first** (`*STEP, NLGEOM=NO`).  
+   - If Abaqus reads the file without aborting, the syntax is now correct.  
+
+2. **Look at the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If contact never activates**:  
+   - Reduce the initial gap between the two surfaces,  
+   - Increase the pressure‑overclosure coefficient, or  
+   - Add a short “pre‑contact” step with a larger pressure value.  
+
+4. **If the solution diverges** (large deformations, NLGEOM=YES):  
+   - Use a smaller initial increment (`INC=0.01` or let Abaqus control it automatically),  
+   - Check the friction penalty (47000 is typical, but may need tweaking).  
+
+---
+
+## 5️⃣  Bottom line  
+
+- **Change the contact type to `SURFACE TO SURFACE`.**  
+- **Make the pair definition consist of two surfaces (`Sslav, Smast`).**  
+- **Replace every `P5` with the correct pressure load `P`.**  
+
+*Optional but advisable*: fix the undefined node set in `*CONTACT PRINT` and delete (or use) the unused amplitude block.
+
+After applying the three core edits (plus the two minor clean‑ups) the model will no longer abort with the errors you reported. If a new warning appears, it will almost always be geometry‑related (gap too large, contact not closing, etc.) – adjust the gap or the over‑closure pressure accordingly.
+
+Feel free to paste the diff above into your input file, run the job, and let me know if anything else pops up!
+
+=== 2026-04-18 05:46:52 ===
+Q: Below is a **complete, ready‑to‑copy** set of changes that will make your Abaqus job run.  
+All the problems in the original input are highlighted, and a short “why” is given for each edit.
+
+---
+
+## 1️⃣  Mandatory fixes (you have to apply these)
+
+| What was wrong | What you must write | Why it matters |
+|----------------|---------------------|----------------|
+| `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Only **surface‑to‑surface** pairs can use `*SURFACE BEHAVIOR … PRESSURE‑OVERCLOSURE`. |
+| `Sslav,Smast` (two *nodes* listed as a *node‑to‑surface* pair) | `Sslav, Smast` (both are **surfaces**) | A surface‑to‑surface pair must contain **two surfaces** – the first is the *slave* surface, the second the *master* surface. |
+| Load lines like `80,  P5, 100.` | `80,  P, 100.` | `P5` is not a valid load type; a pressure load is simply `P`. |
+
+---
+
+## 2️⃣  Recommended clean‑ups (optional but keep the file tidy)
+
+| Issue | Fix | Reason |
+|-------|-----|--------|
+| `*CONTACT PRINT,NSET=Nall` – the node set **does not exist** | Change to a set that **does** exist (e.g. `Nfix`) **or** comment the line out. | Abaqus aborts if the set cannot be found. |
+| `*AMPLITUDE,NAME=A1 …` is defined but never used | Either delete the whole block **or** add `AMPLITUDE=A1` on the `*DLOAD` line. | An unused amplitude is harmless, but removing it keeps the file tidy. |
+| Large time increment may cause divergence when `NLGEOM=YES` | Add a modest initial increment, e.g. `*STEP, NLGEOM=YES, INC=0.01`. | Gives the solver a smoother start for highly non‑linear contact. |
+
+---
+
+## 3️⃣  Full “diff” – just copy‑paste this into your *.inp* file  
+
+```diff
+*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE
++*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE
+- Sslav,Smast
++ Sslav, Smav               ! both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION,NAME=SI1
+*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.                    ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000                 ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE,NAME=A1          ! ← you may delete this whole block if you do not need a time‑varying load
+ 0.,1.,1.,1.
+
+*STEP, NLGEOM=YES
+ 1.,1.
+*DLOAD, AMPLITUDE=A1
+-80,  P5, 100.000000
++80,  P, 100.
+-84,  P5, 100.000000
++84,  P, 100.
+-88,  P5, 100.000000
++88,  P, 100.
+-92,  P5, 100.000000
++92,  P, 100.
+-96,  P5, 100.000000
++96,  P, 100.
+-100, P5, 100.000000
++100, P, 100.
+-104, P5, 100.000000
++104, P, 100.
+-108, P5, 100.000000
++108, P, 100.
+-112, P5, 100.000000
++112, P, 100.
+-116, P5, 100.000000
++116, P, 100.
+-120, P5, 100.000000
++120, P, 100.
+-124, P5, 100.000000
++124, P, 100.
+-128, P5, 100.000000
++128, P, 100.
+
+*CONTACT PRINT,NSET=Nall
++*CONTACT PRINT,NSET=Nfix   ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+> **If you decide to delete the amplitude block, also remove `AMPLITUDE=A1` from the `*DLOAD` line.**
+
+---
+
+## 4️⃣  Quick sanity‑check workflow  
+
+1. **Run a linear static step first** (`*STEP, NLGEOM=NO`).  
+   - If Abaqus reads the file without aborting, the syntax is now correct.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If contact never activates**:  
+   - Reduce the initial gap between the two surfaces,  
+   - Increase the pressure‑overclosure coefficient, or  
+   - Add a short “pre‑contact” step with a larger pressure value.  
+
+4. **If the solution diverges** (large deformations, `NLGEOM=YES`):  
+   - Use a smaller initial increment (`INC=0.01` or let Abaqus control it automatically),  
+   - Check the friction penalty (47000 is typical, but may need tweaking).  
+
+---
+
+## 5️⃣  Bottom line  
+
+- **Change the contact type to `SURFACE TO SURFACE`.**  
+- **Make the pair definition consist of two surfaces (`Sslav, Smast`).**  
+- **Replace every `P5` with the correct pressure load `P`.**  
+
+*Optional but advisable*: fix the undefined node set in `*CONTACT PRINT` and delete (or use) the unused amplitude block.
+
+After applying the three core edits (plus the two minor clean‑ups) the model will no longer abort with the errors you reported. If a new warning appears, it will almost always be geometry‑related (gap too large, contact not closing, etc.) – adjust the gap or the over‑closure pressure accordingly.
+
+Copy the diff above into your input file, run the job, and let me know if anything else pops up!
+A: Below is a **complete, ready‑to‑copy** version of your Abaqus input file that incorporates **all mandatory fixes** (the three items that must be changed) and the **recommended clean‑ups** that keep the file tidy and avoid aborts.  
+If you prefer to keep the amplitude block, leave it as‑is; otherwise you can delete the whole `*AMPLITUDE` section **and** remove `AMPLITUDE=A1` from the `*DLOAD` line – both ways are valid.
+
+---
+
+## ✅  Full corrected *.inp* file  
+
+```abaqus
+*HEADING
+...                     ! (your existing heading lines)
+
+*PART, NAME=PART-1
+...                     ! (your part definition)
+
+*END PART
+*ASSEMBLY, NAME=ASSEMBLY
+...                     ! (your assembly definition)
+
+*END ASSEMBLY
+
+*SURFACE, NAME=Sslav
+...                     ! (definition of the slave surface)
+
+*SURFACE, NAME=Smast
+...                     ! (definition of the master surface)
+
+*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE
+Sslav, Smast            ! <-- both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION, NAME=SI1
+*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.               ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000            ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE, NAME=A1    ! ← you may delete this whole block if you do not need a time‑varying load
+ 0., 1., 1., 1.
+
+*STEP, NLGEOM=YES, INC=0.01   ! modest initial increment helps convergence
+*DLOAD, AMPLITUDE=A1
+ 80,  P, 100.
+ 84,  P, 100.
+ 88,  P, 100.
+ 92,  P, 100.
+ 96,  P, 100.
+100,  P, 100.
+104,  P, 100.
+108,  P, 100.
+112,  P, 100.
+116,  P, 100.
+120,  P, 100.
+124,  P, 100.
+128,  P, 100.
+
+*CONTACT PRINT, NSET=Nfix      ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+---
+
+## 📌 What was changed and **why**
+
+| # | Original line | New line | Reason |
+|---|---------------|----------|--------|
+| 1️⃣ | `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Only **surface‑to‑surface** pairs can use `*SURFACE BEHAVIOR … PRESSURE‑OVERCLOSURE`. |
+| 2️⃣ | `Sslav,Smast` (treated as nodes) | `Sslav, Smast` (both are **surfaces**) | A surface‑to‑surface pair must contain **two surfaces** – the first is the *slave* surface, the second the *master* surface. |
+| 3️⃣ | `80,  P5, 100.` (and the other similar lines) | `80,  P, 100.` (and the other similar lines) | `P5` is not a valid load type; a pressure load is simply `P`. |
+| 4️⃣ | `*CONTACT PRINT,NSET=Nall` | `*CONTACT PRINT,NSET=Nfix` | The node set `Nall` does not exist; using a defined set prevents an abort. |
+| 5️⃣ | No initial increment control | `*STEP, NLGEOM=YES, INC=0.01` | Gives the solver a smoother start for highly non‑linear contact. |
+| 6️⃣ | `*AMPLITUDE` block defined but never used | Either keep it **and** reference it (`AMPLITUDE=A1` on `*DLOAD`) **or** delete the block entirely. | Removes an unused definition and keeps the file tidy. |
+
+---
+
+## 🛠️ Quick sanity‑check workflow  
+
+1. **Run a linear static step first** (`*STEP, NLGEOM=NO`).  
+   - If Abaqus reads the file without aborting, the syntax is now correct.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If contact never activates**:  
+   - Reduce the initial gap between the two surfaces,  
+   - Increase the pressure‑overclosure coefficient, or  
+   - Add a short “pre‑contact” step with a larger pressure value.  
+
+4. **If the solution diverges** (large deformations, `NLGEOM=YES`):  
+   - Use a smaller initial increment (`INC=0.01` or let Abaqus control it automatically),  
+   - Check the friction penalty (47000 is typical, but may need tweaking).  
+
+---
+
+## 📥 What to do next  
+
+1. **Copy the entire block above** into your original `.inp` file, overwriting the highlighted sections.  
+2. **Save** and **run** the job.  
+3. If a new warning appears, it will most likely be geometry‑related (gap too large, contact not closing, etc.). Adjust the gap or the over‑closure pressure accordingly and re‑run.
+
+That’s it – after applying these three core edits (plus the two minor clean‑ups) the model will no longer abort with the errors you reported. Let me know if anything else pops up!
+
+=== 2026-04-18 05:47:34 ===
+Q: Below is a **complete, ready‑to‑copy** version of your Abaqus input file.  
+All three items that *must* be changed are already fixed, and the optional clean‑ups that keep the file tidy are also included.  
+
+> **If you decide to delete the amplitude block, also remove `AMPLITUDE=A1` from the `*DLOAD` line.**  
+> (Both ways are valid – keep the block and reference it, or delete the block entirely.)
+
+---
+
+## ✅  Full corrected *.inp* file  
+
+```abaqus
+*HEADING
+...                     ! (your existing heading lines)
+
+*PART, NAME=PART-1
+...                     ! (your part definition)
+
+*END PART
+*ASSEMBLY, NAME=ASSEMBLY
+...                     ! (your assembly definition)
+
+*END ASSEMBLY
+
+*SURFACE, NAME=Sslav
+...                     ! (definition of the slave surface)
+
+*SURFACE, NAME=Smast
+...                     ! (definition of the master surface)
+
+*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE
+Sslav, Smast            ! <-- both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION, NAME=SI1
+*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.               ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000            ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE, NAME=A1    ! ← you may delete this whole block if you do not need a time‑varying load
+ 0., 1., 1., 1.
+
+*STEP, NLGEOM=YES, INC=0.01   ! modest initial increment helps convergence
+*DLOAD, AMPLITUDE=A1
+ 80,  P, 100.
+ 84,  P, 100.
+ 88,  P, 100.
+ 92,  P, 100.
+ 96,  P, 100.
+100,  P, 100.
+104,  P, 100.
+108,  P, 100.
+112,  P, 100.
+116,  P, 100.
+120,  P, 100.
+124,  P, 100.
+128,  P, 100.
+
+*CONTACT PRINT, NSET=Nfix      ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+---
+
+## 📌 What was changed and **why**
+
+| # | Original line | New line | Reason |
+|---|---------------|----------|--------|
+| 1️⃣ | `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | Only **surface‑to‑surface** pairs can use `*SURFACE BEHAVIOR … PRESSURE‑OVERCLOSURE`. |
+| 2️⃣ | `Sslav,Smast` (treated as nodes) | `Sslav, Smast` (both are **surfaces**) | A surface‑to‑surface pair must contain **two surfaces** – the first is the *slave* surface, the second the *master* surface. |
+| 3️⃣ | `80,  P5, 100.` (and the other similar lines) | `80,  P, 100.` (and the other similar lines) | `P5` is not a valid load type; a pressure load is simply `P`. |
+| 4️⃣ | `*CONTACT PRINT,NSET=Nall` | `*CONTACT PRINT,NSET=Nfix` | The node set `Nall` does not exist; using a defined set prevents an abort. |
+| 5️⃣ | No increment control | `*STEP, NLGEOM=YES, INC=0.01` | Gives the solver a smoother start for highly non‑linear contact. |
+| 6️⃣ | `*AMPLITUDE` block defined but never used | Either keep it **and** reference it (`AMPLITUDE=A1` on `*DLOAD`) **or** delete the block entirely. | Removes an unused definition and keeps the file tidy. |
+
+---
+
+## 🛠️ Quick sanity‑check workflow  
+
+1. **Run a linear static step first** (`*STEP, NLGEOM=NO`).  
+   - If Abaqus reads the file without aborting, the syntax is now correct.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If contact never activates**:  
+   - Reduce the initial gap between the two surfaces,  
+   - Increase the pressure‑overclosure coefficient, or  
+   - Add a short “pre‑contact” step with a larger pressure value.  
+
+4. **If the solution diverges** (large deformations, `NLGEOM=YES`):  
+   - Use a smaller initial increment (`INC=0.01` or let Abaqus control it automatically),  
+   - Check the friction penalty (47000 is typical, but may need tweaking).  
+
+---
+
+## 📥 What to do next  
+
+1. **Copy the block above** into your original `.inp` file, overwriting the highlighted sections.  
+2. **Save** and **run** the job.  
+3. If a new warning appears, it will most likely be geometry‑related (gap too large, contact not closing, etc.). Adjust the gap or the over‑closure pressure accordingly and re‑run.
+
+After applying these three core edits (plus the two minor clean‑ups) the model will no longer abort with the errors you reported. Let me know if anything else pops up!
+A: Below is a **complete, ready‑to‑copy** version of your Abaqus *.inp* file.  
+All three mandatory fixes are already applied, and the optional clean‑ups that keep the file tidy are also included.  
+
+> **If you decide to delete the amplitude block, also remove `AMPLITUDE=A1` from the `*DLOAD` line.**  
+> (Both ways are valid – keep the block and reference it, or delete the block entirely.)
+
+---
+
+## ✅ Full corrected *.inp* file  
+
+```abaqus
+*HEADING
+...                     ! (your existing heading lines)
+
+*PART, NAME=PART-1
+...                     ! (your part definition)
+
+*END PART
+*ASSEMBLY, NAME=ASSEMBLY
+...                     ! (your assembly definition)
+
+*END ASSEMBLY
+
+*SURFACE, NAME=Sslav
+...                     ! (definition of the slave surface)
+
+*SURFACE, NAME=Smast
+...                     ! (definition of the master surface)
+
+*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE
+Sslav, Smast            ! <-- both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION, NAME=SI1
+*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.               ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000            ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE, NAME=A1    ! ← you may delete this whole block if you do not need a time‑varying load
+ 0., 1., 1., 1.
+
+*STEP, NLGEOM=YES, INC=0.01   ! modest initial increment helps convergence
+*DLOAD, AMPLITUDE=A1
+ 80,  P, 100.
+ 84,  P, 100.
+ 88,  P, 100.
+ 92,  P, 100.
+ 96,  P, 100.
+100,  P, 100.
+104,  P, 100.
+108,  P, 100.
+112,  P, 100.
+116,  P, 100.
+120,  P, 100.
+124,  P, 100.
+128,  P, 100.
+
+*CONTACT PRINT, NSET=Nfix      ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+---
+
+## 📋 What was changed and **why**
+
+| # | Original issue | Fix applied | Reason |
+|---|----------------|-------------|--------|
+| 1️⃣ | `*CONTACT PAIR,INTERACTION=SI1,TYPE=NODE TO SURFACE` | `*CONTACT PAIR,INTERACTION=SI1,TYPE=SURFACE TO SURFACE` | `PRESSURE‑OVERCLOSURE` can only be used with **surface‑to‑surface** contact. |
+| 2️⃣ | `Sslav,Smast` interpreted as a node set + surface | `Sslav, Smast` (both are surfaces) | A surface‑to‑surface pair must contain **two surfaces** – the first is the *slave*, the second the *master*. |
+| 3️⃣ | Load lines used `P5` (invalid) | Changed to `P` (standard pressure load) | `P5` is not a recognized load type; a pressure load is simply `P`. |
+| 4️⃣ | `*CONTACT PRINT,NSET=Nall` (undefined set) | `*CONTACT PRINT,NSET=Nfix` (or any existing node set) | Prevents an abort due to a non‑existent node set. |
+| 5️⃣ | No explicit increment control | Added `*STEP, NLGEOM=YES, INC=0.01` | Gives the solver a smoother start for the highly non‑linear contact problem. |
+| 6️⃣ | `*AMPLITUDE` block defined but never referenced (or vice‑versa) | Either keep the block **and** reference it (`AMPLITUDE=A1` on `*DLOAD`) **or** delete the block and the reference. | Removes an unused definition and keeps the file tidy. |
+
+---
+
+## 🛠️ Quick sanity‑check workflow  
+
+1. **Run a linear static step first** (`*STEP, NLGEOM=NO`).  
+   - If Abaqus reads the file without aborting, the syntax is now correct.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If contact never activates**:  
+   - Reduce the initial gap between the two surfaces,  
+   - Increase the pressure‑overclosure coefficient, or  
+   - Add a short “pre‑contact” step with a larger pressure value.  
+
+4. **If the solution diverges** (large deformations, `NLGEOM=YES`):  
+   - Use a smaller initial increment (`INC=0.01` or let Abaqus control it automatically),  
+   - Check the friction penalty (47000 is typical, but may need tweaking).  
+
+---
+
+## 📥 What to do next  
+
+1. **Copy the block above** into your original `.inp` file, overwriting the highlighted sections.  
+2. **Save** and **run** the job.  
+3. If a new warning appears, it will most likely be geometry‑related (gap too large, contact not closing, etc.). Adjust the gap or the over‑closure pressure accordingly and re‑run.
+
+After applying these three core edits (plus the two minor clean‑ups) the model will no longer abort with the errors you reported. Let me know if anything else pops up!
+
+=== 2026-04-18 05:48:12 ===
+Q: Here’s the **ready‑to‑copy** version of your Abaqus *.inp* file with **all mandatory fixes** applied and the optional clean‑ups that keep the file tidy.
+
+> **If you decide to delete the amplitude block, also remove `AMPLITUDE=A1` from the `*DLOAD` line.**  
+> (Either keep the block and reference it, or delete the block entirely – both are valid.)
+
+---
+
+## ✅ Full corrected *.inp* file  
+
+```abaqus
+*HEADING
+...                     ! (your existing heading lines)
+
+*PART, NAME=PART-1
+...                     ! (your part definition)
+
+*END PART
+*ASSEMBLY, NAME=ASSEMBLY
+...                     ! (your assembly definition)
+
+*END ASSEMBLY
+
+*SURFACE, NAME=Sslav
+...                     ! (definition of the slave surface)
+
+*SURFACE, NAME=Smast
+...                     ! (definition of the master surface)
+
+*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE
+Sslav, Smast            ! <-- both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION, NAME=SI1
+*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.               ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000            ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE, NAME=A1    ! ← you may delete this whole block if you do not need a time‑varying load
+ 0., 1., 1., 1.
+
+*STEP, NLGEOM=YES, INC=0.01   ! modest initial increment helps convergence
+*DLOAD, AMPLITUDE=A1
+ 80,  P, 100.
+ 84,  P, 100.
+ 88,  P, 100.
+ 92,  P, 100.
+ 96,  P, 100.
+100,  P, 100.
+104,  P, 100.
+108,  P, 100.
+112,  P, 100.
+116,  P, 100.
+120,  P, 100.
+124,  P, 100.
+128,  P, 100.
+
+*CONTACT PRINT, NSET=Nfix      ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+---
+
+## 📌 What was changed and **why**
+
+| # | Original issue | Fix applied | Reason |
+|---|----------------|-------------|--------|
+| 1️⃣ | `*CONTACT PAIR, … TYPE=NODE TO SURFACE` | `*CONTACT PAIR, … TYPE=SURFACE TO SURFACE` | `PRESSURE‑OVERCLOSURE` works only with surface‑to‑surface contact. |
+| 2️⃣ | `Sslav,Smast` interpreted as a node set + surface | `Sslav, Smast` (both are surfaces) | A surface‑to‑surface pair must contain **two surfaces** – first the *slave*, second the *master*. |
+| 3️⃣ | Load lines used `P5` (invalid) | Changed to `P` (standard pressure load) | `P5` is not a recognized load type; a pressure load is simply `P`. |
+| 4️⃣ | `*CONTACT PRINT,NSET=Nall` (undefined set) | `*CONTACT PRINT,NSET=Nfix` (or any existing node set) | Prevents an abort due to a non‑existent node set. |
+| 5️⃣ | No explicit increment control | Added `*STEP, NLGEOM=YES, INC=0.01` | Gives the solver a smoother start for the highly non‑linear contact problem. |
+| 6️⃣ | `*AMPLITUDE` block defined but never referenced (or vice‑versa) | Either keep the block **and** reference it (`AMPLITUDE=A1` on `*DLOAD`) **or** delete the block and the reference. | Removes an unused definition and keeps the file tidy. |
+
+---
+
+## 🛠️ Quick sanity‑check workflow  
+
+1. **Run a linear static step first** (`*STEP, NLGEOM=NO`).  
+   - If Abaqus reads the file without aborting, the syntax is now correct.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If contact never activates**:  
+   - Reduce the initial gap between the two surfaces,  
+   - Increase the pressure‑overclosure coefficient, or  
+   - Add a short “pre‑contact” step with a larger pressure value.  
+
+4. **If the solution diverges** (large deformations, `NLGEOM=YES`):  
+   - Use a smaller initial increment (`INC=0.01` or let Abaqus control it automatically),  
+   - Check the friction penalty (47000 is typical, but may need tweaking).  
+
+---
+
+## 📥 Next steps  
+
+1. **Copy the block above** into your original `.inp` file, overwriting the highlighted sections.  
+2. **Save** and **run** the job.  
+3. If a new warning appears, it will most likely be geometry‑related (gap too large, contact not closing, etc.). Adjust the gap or the over‑closure pressure accordingly and re‑run.
+
+After these three core edits (plus the two minor clean‑ups) the model will no longer abort with the errors you reported. Let me know if anything else pops up!
+A: Below is a **ready‑to‑copy** version of your Abaqus *.inp* file that contains **all mandatory fixes** (so the job will run) and the **optional clean‑ups** that keep the file tidy.  
+If you decide to delete the `*AMPLITUDE` block, simply also delete the `AMPLITUDE=A1` option on the `*DLOAD` line – otherwise leave both as shown.
+
+---
+
+## ✅ Complete, corrected *.inp* file  
+
+```abaqus
+*HEADING
+...                     ! (your existing heading lines)
+
+*PART, NAME=PART-1
+...                     ! (your part definition)
+
+*END PART
+*ASSEMBLY, NAME=ASSEMBLY
+...                     ! (your assembly definition)
+
+*END ASSEMBLY
+
+*SURFACE, NAME=Sslav
+...                     ! (definition of the slave surface)
+
+*SURFACE, NAME=Smast
+...                     ! (definition of the master surface)
+
+*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE
+Sslav, Smast            ! <-- both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION, NAME=SI1
+*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.               ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000            ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE, NAME=A1    ! ← you may delete this whole block if you do not need a time‑varying load
+ 0., 1., 1., 1.
+
+*STEP, NLGEOM=YES, INC=0.01   ! modest initial increment helps convergence
+*DLOAD, AMPLITUDE=A1
+ 80,  P, 100.
+ 84,  P, 100.
+ 88,  P, 100.
+ 92,  P, 100.
+ 96,  P, 100.
+100,  P, 100.
+104,  P, 100.
+108,  P, 100.
+112,  P, 100.
+116,  P, 100.
+120,  P, 100.
+124,  P, 100.
+128,  P, 100.
+
+*CONTACT PRINT, NSET=Nfix      ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+---
+
+## 📋 What was changed and **why**
+
+| # | Issue in the original file | Fix applied | Reason |
+|---|----------------------------|-------------|--------|
+| 1️⃣ | `*CONTACT PAIR … TYPE=NODE TO SURFACE` | `TYPE=SURFACE TO SURFACE` | `PRESSURE‑OVERCLOSURE` works only with surface‑to‑surface contact. |
+| 2️⃣ | `Sslav,Smast` interpreted as *node‑set* + *surface* | `Sslav, Smast` (both defined as surfaces) | A surface‑to‑surface pair must contain **two surfaces** – first the *slave*, second the *master*. |
+| 3️⃣ | Load lines used `P5` (invalid) | Changed to `P` (standard pressure load) | `P5` is not a recognized load type; a pressure load is simply `P`. |
+| 4️⃣ | `*CONTACT PRINT,NSET=Nall` (undefined set) | `*CONTACT PRINT,NSET=Nfix` (or any existing node set) | Prevents an abort due to a non‑existent node set. |
+| 5️⃣ | No explicit increment control for a highly non‑linear step | Added `*STEP, NLGEOM=YES, INC=0.01` | Gives the solver a smoother start and improves convergence. |
+| 6️⃣ | `*AMPLITUDE` block defined but never referenced (or vice‑versa) | Keep the block **and** reference it (`AMPLITUDE=A1` on `*DLOAD`) **or** delete both. | Removes an unused definition and keeps the file tidy. |
+
+---
+
+## 🛠️ Quick sanity‑check workflow  
+
+1. **Run a linear static step first** (`*STEP, NLGEOM=NO`).  
+   - If Abaqus reads the file without aborting, the syntax is now correct.  
+
+2. **Inspect the contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If contact never activates**:  
+   - Reduce the initial gap between the two surfaces,  
+   - Increase the pressure‑overclosure coefficient, or  
+   - Add a short “pre‑contact” step with a larger pressure value.  
+
+4. **If the solution diverges** (large deformations, `NLGEOM=YES`):  
+   - Use a smaller initial increment (`INC=0.01` or let Abaqus control it automatically),  
+   - Check the friction penalty (47000 is typical, but may need tweaking).  
+
+---
+
+## 📥 What to do next  
+
+1. **Copy the block above** into your original `.inp` file, overwriting the highlighted sections.  
+2. **Save** the file and **run** the job.  
+3. If a new warning appears, it will most likely be geometry‑related (gap too large, contact not closing, etc.). Adjust the gap or the over‑closure pressure accordingly and re‑run.  
+
+After these three core edits (plus the two minor clean‑ups) the model will no longer abort with the errors you reported.  
+
+Feel free to let me know if any other warnings pop up or if you need help tweaking the contact parameters further!
+
+=== 2026-04-18 05:48:51 ===
+Q: Below is a **ready‑to‑copy** version of your Abaqus *.inp* file.  
+All three **mandatory fixes** (so the job will run) are already applied, and the **optional clean‑ups** that keep the file tidy are included.  
+
+> **If you decide to delete the `*AMPLITUDE` block, also delete the `AMPLITUDE=A1` option on the `*DLOAD` line.**  
+> (Otherwise leave both as shown.)
+
+---
+
+## ✅ Complete, corrected *.inp* file  
+
+```abaqus
+*HEADING
+...                     ! (your existing heading lines)
+
+*PART, NAME=PART-1
+...                     ! (your part definition)
+
+*END PART
+*ASSEMBLY, NAME=ASSEMBLY
+...                     ! (your assembly definition)
+
+*END ASSEMBLY
+
+*SURFACE, NAME=Sslav
+...                     ! (definition of the slave surface)
+
+*SURFACE, NAME=Smast
+...                     ! (definition of the master surface)
+
+*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE
+Sslav, Smast            ! <-- both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION, NAME=SI1
+*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.               ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000            ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE, NAME=A1    ! ← you may delete this whole block if you do not need a time‑varying load
+ 0., 1., 1., 1.
+
+*STEP, NLGEOM=YES, INC=0.01   ! modest initial increment helps convergence
+*DLOAD, AMPLITUDE=A1
+ 80,  P, 100.
+ 84,  P, 100.
+ 88,  P, 100.
+ 92,  P, 100.
+ 96,  P, 100.
+100,  P, 100.
+104,  P, 100.
+108,  P, 100.
+112,  P, 100.
+116,  P, 100.
+120,  P, 100.
+124,  P, 100.
+128,  P, 100.
+
+*CONTACT PRINT, NSET=Nfix      ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+---
+
+### What was changed and why  
+
+| # | Original issue | Fix applied | Reason |
+|---|----------------|-------------|--------|
+| 1️⃣ | `*CONTACT PAIR … TYPE=NODE TO SURFACE` | `TYPE=SURFACE TO SURFACE` | `PRESSURE‑OVERCLOSURE` works only with surface‑to‑surface contact. |
+| 2️⃣ | `Sslav,Smast` interpreted as node‑set + surface | `Sslav, Smast` (both defined as surfaces) | A surface‑to‑surface pair must contain **two surfaces** – first the *slave*, second the *master*. |
+| 3️⃣ | Load lines used `P5` (invalid) | Changed to `P` (standard pressure load) | `P5` is not a recognized load type; a pressure load is simply `P`. |
+| 4️⃣ | `*CONTACT PRINT,NSET=Nall` (undefined set) | `*CONTACT PRINT,NSET=Nfix` (or any existing node set) | Prevents an abort due to a non‑existent node set. |
+| 5️⃣ | No explicit increment control for a highly non‑linear step | Added `*STEP, NLGEOM=YES, INC=0.01` | Gives the solver a smoother start and improves convergence. |
+| 6️⃣ | `*AMPLITUDE` block defined but never referenced (or vice‑versa) | Keep the block **and** reference it (`AMPLITUDE=A1` on `*DLOAD`) **or** delete both. | Removes an unused definition and keeps the file tidy. |
+
+---
+
+### Quick sanity‑check workflow  
+
+1. **Run a linear static step first** (`*STEP, NLGEOM=NO`).  
+   - If Abaqus reads the file without aborting, the syntax is now correct.  
+
+2. **Check contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If contact never activates**: reduce the initial gap, increase the pressure‑overclosure coefficient, or add a short “pre‑contact” step with a larger pressure.  
+
+4. **If the solution diverges** (large deformations, `NLGEOM=YES`): use a smaller initial increment (e.g., `INC=0.01`) or adjust the friction penalty.
+
+---
+
+### Next steps  
+
+1. Copy the block above into your original `.inp` file, overwriting the corresponding sections.  
+2. Save the file and run the job.  
+3. If new warnings appear, they will most likely be geometry‑related (gap too large, contact not closing, etc.). Adjust the gap or the over‑closure parameters accordingly and re‑run.
+
+With these three core edits (plus the two minor clean‑ups) the model should run without the previous abort errors. Let me know if any other warnings pop up or if you need further assistance!
+A: Below is the **complete, ready‑to‑copy** Abaqus *.inp* file that incorporates **all three mandatory fixes** (so the job will run) and the **optional clean‑ups** that keep the file tidy.  
+If you decide you do **not** need a time‑varying load, simply delete the `*AMPLITUDE` block **and** the `AMPLITUDE=A1` option on the `*DLOAD` line (both must be removed together).
+
+---
+
+## ✅ Corrected *.inp* file  
+
+```abaqus
+*HEADING
+...                     ! (your existing heading lines)
+
+*PART, NAME=PART-1
+...                     ! (your part definition)
+
+*END PART
+*ASSEMBLY, NAME=ASSEMBLY
+...                     ! (your assembly definition)
+
+*END ASSEMBLY
+
+*SURFACE, NAME=Sslav
+...                     ! (definition of the slave surface)
+
+*SURFACE, NAME=Smast
+...                     ! (definition of the master surface)
+
+*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE
+Sslav, Smast            ! <-- both entries are now surfaces (order does not matter)
+
+*SURFACE INTERACTION, NAME=SI1
+*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.               ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000            ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE, NAME=A1    ! ← delete this whole block **and** the AMPLITUDE=A1 option on *DLOAD if you do not need a time‑varying load
+ 0., 1., 1., 1.
+
+*STEP, NLGEOM=YES, INC=0.01   ! modest initial increment helps convergence
+*DLOAD, AMPLITUDE=A1          ! remove “AMPLITUDE=A1” if you deleted the *AMPLITUDE block
+ 80,  P, 100.
+ 84,  P, 100.
+ 88,  P, 100.
+ 92,  P, 100.
+ 96,  P, 100.
+100,  P, 100.
+104,  P, 100.
+108,  P, 100.
+112,  P, 100.
+116,  P, 100.
+120,  P, 100.
+124,  P, 100.
+128,  P, 100.
+
+*CONTACT PRINT, NSET=Nfix      ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+---
+
+## What was changed and why  
+
+| # | Original problem | Fix applied | Why it matters |
+|---|------------------|-------------|----------------|
+| 1️⃣ | `*CONTACT PAIR … TYPE=NODE TO SURFACE` (invalid for pressure‑overclosure) | `TYPE=SURFACE TO SURFACE` | Pressure‑overclosure works only with surface‑to‑surface contact. |
+| 2️⃣ | `Sslav,Smast` interpreted as *node‑set* + *surface* | Both `Sslav` and `Smast` are now **surfaces** (defined with `*SURFACE`) | A surface‑to‑surface pair must contain two surfaces – slave then master. |
+| 3️⃣ | Load lines used `P5` (non‑existent load type) | Changed to `P` (standard pressure load) | `P5` is not a recognized keyword; `P` applies a uniform pressure. |
+| 4️⃣ | `*CONTACT PRINT,NSET=Nall` referenced a set that does not exist | Replaced with `NSET=Nfix` (or any node set that **does** exist) | Prevents an abort due to an undefined node set. |
+| 5️⃣ | No explicit increment control for a highly non‑linear step | Added `INC=0.01` on the `*STEP` line | Gives the solver a smoother start and improves convergence. |
+| 6️⃣ | `*AMPLITUDE` block defined but never used (or used without being defined) | Keep the block **and** reference it (`AMPLITUDE=A1`) **or** delete both. | Removes an unused definition and keeps the file tidy. |
+
+---
+
+## Quick sanity‑check workflow  
+
+1. **Run a linear static step first** (`*STEP, NLGEOM=NO`).  
+   - If Abaqus reads the file without aborting, the syntax is now correct.  
+
+2. **Inspect contact output** (`CDISP`, `CSTRESS`).  
+   - Verify that the slave surface (`Sslav`) actually contacts the master (`Smast`).  
+
+3. **If contact never activates**:  
+   - Reduce the initial gap, increase the pressure‑overclosure coefficient, or add a short “pre‑contact” step with a larger pressure.  
+
+4. **If the solution diverges** (large deformations, `NLGEOM=YES`):  
+   - Use a smaller initial increment (e.g., `INC=0.01` → `INC=0.005`) or adjust the friction penalty.  
+
+---
+
+## Next steps for you  
+
+1. **Copy** the block above into your original `.inp` file, overwriting the corresponding sections.  
+2. **Save** the file and submit the job.  
+3. **Watch the Abaqus log** for any new warnings. Most post‑fix warnings will be geometry‑related (gap too large, contact not closing, etc.). Adjust the gap or the over‑closure parameters accordingly and re‑run.  
+
+With these three core edits (plus the two minor clean‑ups) the model should run without the previous abort errors. If any new warnings appear, feel free to share them and I’ll help you troubleshoot further.
+
+=== 2026-04-18 05:49:28 ===
+Q: Here is a short recap of what was wrong in the original input and how the three **mandatory** fixes (plus a couple of optional clean‑ups) make the job run:
+
+| # | What was wrong | How it is fixed | Why it matters |
+|---|----------------|----------------|----------------|
+| 1️⃣ | `*CONTACT PAIR … TYPE=NODE TO SURFACE` | `TYPE=SURFACE TO SURFACE` | Pressure‑overclosure can only be used with surface‑to‑surface contact. |
+| 2️⃣ | `Sslav,Smast` was interpreted as a *node set* + *surface* | Both are now defined as **surfaces** (`*SURFACE`) and listed as `Sslav, Smast` in the contact pair | A surface‑to‑surface pair must contain two surfaces – slave then master. |
+| 3️⃣ | Load lines used the non‑existent keyword `P5` | Changed to `P` (uniform pressure) | `P5` is not a valid load type; `P` correctly applies pressure. |
+| 4️⃣ | `*CONTACT PRINT,NSET=Nall` referenced a set that does not exist | Replaced with `NSET=Nfix` (or any existing node set) | Prevents an abort caused by an undefined node set. |
+| 5️⃣ | No increment control for a highly non‑linear step | Added `INC=0.01` on the `*STEP` line | Gives the solver a smoother start and improves convergence. |
+| 6️⃣ | `*AMPLITUDE` block defined but never used (or used without being defined) | Keep the block **and** reference it (`AMPLITUDE=A1`) **or** delete both together. | Removes an unused definition and keeps the file tidy. |
+
+---
+
+### Quick sanity‑check before a full run  
+
+1. **Linear static test** – add a quick `*STEP, NLGEOM=NO` and run the job. If Abaqus reads the file without aborting, the syntax is now correct.  
+2. **Contact verification** – after the non‑linear step, look at the `CDISP` and `CSTRESS` output. The slave surface (`Sslav`) should be in contact with the master (`Smast`).  
+3. **If contact never activates** – reduce the initial gap, increase the pressure‑overclosure coefficient, or insert a short “pre‑contact” step with a larger pressure.  
+4. **If the solution diverges** (large deformations, `NLGEOM=YES`) – lower the initial increment (`INC=0.005` or smaller) or adjust the friction penalty.
+
+---
+
+### What to do now  
+
+1. **Copy** the corrected block below into your original `.inp` file, replacing the corresponding sections.  
+2. **Save** the file and submit the job.  
+3. **Monitor the log** for any new warnings. Most post‑fix warnings will be geometry‑related (gap too large, contact not closing, etc.). Adjust the gap or over‑closure parameters as needed and re‑run.
+
+---
+
+## ✅ Complete, ready‑to‑copy *.inp* file  
+
+```abaqus
+*HEADING
+...                     ! (your existing heading lines)
+
+*PART, NAME=PART-1
+...                     ! (your part definition)
+
+*END PART
+*ASSEMBLY, NAME=ASSEMBLY
+...                     ! (your assembly definition)
+
+*END ASSEMBLY
+
+*SURFACE, NAME=Sslav
+...                     ! (definition of the slave surface)
+
+*SURFACE, NAME=Smast
+...                     ! (definition of the master surface)
+
+*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE
+Sslav, Smast            ! <-- both entries are now surfaces (order: slave, master)
+
+*SURFACE INTERACTION, NAME=SI1
+*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.               ! keep your pressure‑overclosure data
+
+*FRICTION
+ 0.2, 47000            ! friction coefficient & penalty (unchanged)
+
+*AMPLITUDE, NAME=A1    ! ← delete this whole block **and** the AMPLITUDE=A1 option on *DLOAD if you do not need a time‑varying load
+ 0., 1., 1., 1.
+
+*STEP, NLGEOM=YES, INC=0.01   ! modest initial increment helps convergence
+*DLOAD, AMPLITUDE=A1          ! remove “AMPLITUDE=A1” if you deleted the *AMPLITUDE block
+ 80,  P, 100.
+ 84,  P, 100.
+ 88,  P, 100.
+ 92,  P, 100.
+ 96,  P, 100.
+100,  P, 100.
+104,  P, 100.
+108,  P, 100.
+112,  P, 100.
+116,  P, 100.
+120,  P, 100.
+124,  P, 100.
+128,  P, 100.
+
+*CONTACT PRINT, NSET=Nfix      ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+---
+
+After inserting these changes, the job should start without the abort errors you were seeing. If any new warnings appear, let me know and we can fine‑tune the contact parameters further. Happy modelling!
+A: Below is a **complete, ready‑to‑copy** Abaqus *.inp* snippet that incorporates **all three mandatory fixes** (contact‑type, surface definitions, and load keyword) plus the two optional clean‑ups that were recommended.  
+If you replace the corresponding sections of your original input file with the block below, the job will no longer abort on the syntax errors you reported.
+
+---
+
+## 1️⃣ What was wrong & how it is fixed  
+
+| # | Problem (original) | Fixed version | Why it matters |
+|---|--------------------|---------------|----------------|
+| 1️⃣ | `*CONTACT PAIR … TYPE=NODE TO SURFACE` | `*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE` | Pressure‑overclosure can only be used with **surface‑to‑surface** contact. |
+| 2️⃣ | `Sslav,Smast` interpreted as *node‑set + surface* | Both `Sslav` and `Smast` are now **surfaces** (`*SURFACE` cards) and are listed as `Sslav, Smast` (slave, then master) | A contact pair must contain two **surfaces** – the order matters. |
+| 3️⃣ | Load lines used the non‑existent keyword `P5` | `P` (uniform pressure) | `P5` is not a valid load type; `P` correctly applies pressure. |
+| 4️⃣ | `*CONTACT PRINT,NSET=Nall` referenced a set that does not exist | `*CONTACT PRINT,NSET=Nfix` (or any existing node set) | Prevents an abort caused by an undefined node set. |
+| 5️⃣ | No increment control for a highly non‑linear step | `*STEP, NLGEOM=YES, INC=0.01` | Gives the solver a smoother start and improves convergence. |
+| 6️⃣ | `*AMPLITUDE` block defined but never used (or used without being defined) | Either keep the block **and** reference it (`AMPLITUDE=A1`) **or** delete both. In the snippet below the block is **kept** and referenced, but you may delete both if you do not need a time‑varying load. | Removes an unused definition (or makes the intended time‑varying load work). |
+
+---
+
+## 2️⃣ Quick sanity‑check before a full run  
+
+1. **Linear static test** – add a temporary `*STEP, NLGEOM=NO` with a tiny load and run. If Abaqus reads the file without aborting, the syntax is correct.  
+2. **Contact verification** – after the non‑linear step, inspect the `CDISP` and `CSTRESS` output. The slave surface (`Sslav`) should be in contact with the master (`Smast`).  
+3. **If contact never activates** – reduce the initial gap, increase the pressure‑overclosure coefficient, or insert a short “pre‑contact” step with a larger pressure.  
+4. **If the solution diverges** – lower the initial increment (`INC=0.005` or smaller) or adjust the friction penalty.
+
+---
+
+## 3️⃣ Final, copy‑and‑paste *.inp* block  
+
+```abaqus
+*HEADING
+...                     ! (your existing heading lines)
+
+*PART, NAME=PART-1
+...                     ! (your part definition)
+
+*END PART
+*ASSEMBLY, NAME=ASSEMBLY
+...                     ! (your assembly definition)
+
+*END ASSEMBLY
+
+*SURFACE, NAME=Sslav
+...                     ! (definition of the slave surface – e.g. element set + side)
+
+*SURFACE, NAME=Smast
+...                     ! (definition of the master surface – e.g. element set + side)
+
+*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE
+Sslav, Smast            ! <-- slave surface first, master surface second
+
+*SURFACE INTERACTION, NAME=SI1
+*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR
+ 1.e7, 3.               ! (your pressure‑overclosure data)
+
+*FRICTION
+ 0.2, 47000            ! (friction coefficient & penalty – unchanged)
+
+*AMPLITUDE, NAME=A1    ! <-- keep this block only if you need a time‑varying load
+ 0., 1., 1., 1.
+
+*STEP, NLGEOM=YES, INC=0.01   ! modest initial increment helps convergence
+*DLOAD, AMPLITUDE=A1          ! remove “AMPLITUDE=A1” if you deleted the *AMPLITUDE block
+ 80,  P, 100.
+ 84,  P, 100.
+ 88,  P, 100.
+ 92,  P, 100.
+ 96,  P, 100.
+100,  P, 100.
+104,  P, 100.
+108,  P, 100.
+112,  P, 100.
+116,  P, 100.
+120,  P, 100.
+124,  P, 100.
+128,  P, 100.
+
+*CONTACT PRINT, NSET=Nfix      ! replace the undefined set Nall with a set that exists
+   CDISP, CSTRESS
+*END STEP
+```
+
+> **What to do next**  
+> 1. Paste the block above into your original `.inp`, overwriting the old contact, load, and step sections.  
+> 2. Save the file and submit the job.  
+> 3. Watch the `.log`/`.msg` files for any new warnings (they will now be geometry‑ or convergence‑related, not syntax errors).  
+> 4. If you encounter contact‑gap or convergence warnings, adjust the gap, pressure‑overclosure coefficient, or the initial increment as described in the sanity‑check section.
+
+That’s it – the input file is now syntactically correct and ready for a full non‑linear analysis. If any new warnings appear, drop them here and we can fine‑tune the contact parameters further. Happy modelling!
+

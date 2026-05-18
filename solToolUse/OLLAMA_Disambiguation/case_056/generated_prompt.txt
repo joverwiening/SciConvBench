@@ -1,0 +1,101 @@
+**Why the message appears**
+
+In a load definition (`*DLOAD`, `*CLOAD`, `*BOUNDARY`, …) the **third entry is the magnitude of the load**.  
+When Abaqus reads
+
+```abaqus
+*DLOAD
+1, P, p
+```
+
+the token **p** is **not** interpreted as a number.  
+Any word that appears in this position is taken to be a **field variable** – a quantity that can vary with time, step, or spatial position.  
+
+A field variable may be used only **after it has been created** somewhere earlier in the input file (by a `*FIELD`, `*AMPLITUDE`, `*INITIAL CONDITIONS` card, a user sub‑routine, etc.).  
+Because no definition for a variable called **p** exists in the model, the parser stops and prints
+
+```
+The variable p is not defined in the model.
+```
+
+---
+
+## How to eliminate the error
+
+You have two possible routes, depending on what you really want to apply.
+
+| What you need | What you must do |
+|---------------|------------------|
+| **A constant pressure** (same value everywhere and at all times) | Replace the identifier **p** with the numeric value you want (e.g. `0.0`, `5.0`, …). |
+| **A pressure that varies** (in time, in space, or both) | Define a field variable called **p** **before** the `*DLOAD` line (using `*FIELD`, `*AMPLITUDE`, a user sub‑routine, etc.). |
+
+Below are the two complete routes.
+
+---
+
+### 1. Constant pressure – the simplest fix  
+
+Edit every load line that contains `p` and write the required number directly, e.g.
+
+```abaqus
+*DLOAD
+1, P, 0.0          ! 0 MPa pressure on surface 1
+```
+
+If you need a different constant, simply change `0.0` to that value (e.g. `5.0` for 5 MPa). No other changes are required.
+
+---
+
+### 2. Variable pressure – define the field variable **p**
+
+#### a) Decide how the pressure varies  
+
+* **Time‑dependent (amplitude) example** – pressure ramps from 0 MPa at *t* = 0 to 5 MPa at *t* = 1 s  
+
+```abaqus
+*Amplitude, name=PressAmp, definition=TABULAR
+0.,   0.0
+1.,   5.0
+```
+
+* **Spatially dependent example** – values are read from a file `press.dat` that contains node‑ID/value pairs  
+
+```abaqus
+*FIELD, VARIABLE=p, FILE=press.dat, TYPE=NODE
+```
+
+#### b) Create the variable **p** that points to the amplitude (only needed for the time‑dependent case)
+
+```abaqus
+*Field, variable=p, amplitude=PressAmp
+```
+
+*(When a `*FIELD` card is used, the variable **p** is already created, so the line above is not required.)*
+
+#### c) Use the variable in the load  
+
+```abaqus
+*DLOAD
+1, P, p
+```
+
+Now **p** is known to Abaqus (its value is taken from the amplitude `PressAmp` at the current step/time, or from the spatial field you supplied) and the analysis will run without the “variable p is not defined” error.
+
+---
+
+## Quick sanity‑check before re‑running
+
+1. **Search** the whole input file for any occurrence of `p` (or any other non‑numeric identifier).  
+2. **Decide** for each occurrence whether it should be a constant or a variable.  
+3. **If constant** – replace the identifier with the numeric pressure you want.  
+4. **If variable** – add the appropriate definition (`*Amplitude` + `*Field`, a spatial `*FIELD`, or a user sub‑routine such as `DLOAD`) **before** the first line that uses the variable.  
+5. Save the file and run the analysis again. The error should disappear.
+
+---
+
+### TL;DR
+
+* **Constant pressure needed?** → Change `p` to a numeric value (e.g. `0.0`, `5.0`).  
+* **Variable pressure needed?** → Define a field variable named **p** (via `*Amplitude` + `*Field`, a spatial `*FIELD`, or a user sub‑routine) **before** the `*DLOAD` line, then keep `p` in the load.
+
+Either of these fixes removes the “The variable p is not defined in the model.” message and allows the job to run.

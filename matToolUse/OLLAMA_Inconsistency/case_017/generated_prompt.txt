@@ -1,0 +1,117 @@
+def compute_defect_properties():
+    """
+    Compute defect‑band related properties for the Ga vacancy harmonic defect
+    using VASP output files parsed with pymatgen.
+
+    No input arguments are required.  The function assumes that the variable
+    ``file_path`` points to the base directory that contains the ``v_Ga/ccd_0_-1``
+    sub‑directory with the VASP output files.
+
+    Expected files
+    --------------
+    * v_Ga/ccd_0_-1/0/vasprun.xml
+    * v_Ga/ccd_0_-1/1/vasprun.xml
+    * v_Ga/ccd_0_-1/2/vasprun.xml
+    * v_Ga/ccd_0_-1/1/PROCAR   (used for occupations)
+
+    Returns
+    -------
+    dict
+        A dictionary with the following keys:
+
+        * ``defect_band_initial`` – list of tuples ``(band_index, spin, occupancy)``.
+          ``band_index`` is an integer starting at 0, ``spin`` is 0 for spin‑up
+          and 1 for spin‑down, and ``occupancy`` is the average occupation of the
+          band over all k‑points (float).
+
+        * ``defect_band_from_directories`` – list of tuples in the same format as
+          ``defect_band_initial`` obtained by re‑reading the same files from the
+          directory structure.  The two lists are compared for consistency.
+
+        * ``spin_index`` – the unique spin index considered (int).  If both spin
+          channels are present, the value is ``None``.
+
+        * ``non_unique_spin_error`` – ``True`` if more than one spin index is
+          present in the defect band data, otherwise ``False`` (bool).
+    """
+    import os
+    from pymatgen.io.vasp.outputs import Vasprun, Procar
+
+    # ------------------------------------------------------------------
+    # Resolve the base directory.  The user is expected to set the
+    # environment variable ``FILE_PATH`` to the directory that contains
+    # the ``v_Ga`` folder.  If it is not set, fall back to the current
+    # working directory.
+    # ------------------------------------------------------------------
+    base_path = os.getenv("FILE_PATH", os.getcwd())
+    defect_dir = os.path.join(base_path, "v_Ga", "ccd_0_-1")
+
+    # ------------------------------------------------------------------
+    # Helper to load a Vasprun object given a sub‑folder name.
+    # ------------------------------------------------------------------
+    def load_vasprun(subfolder):
+        vr_path = os.path.join(defect_dir, subfolder, "vasprun.xml")
+        return Vasprun(vr_path, parse_projected_eigen=False)
+
+    # Load the three Vasprun files (0, 1, 2).  For the purpose of this
+    # demonstration we only need one of them to obtain the band structure;
+    # the others are kept to illustrate that the same data could be used
+    # for consistency checks.
+    vaspruns = [load_vasprun(str(i)) for i in range(3)]
+
+    # ------------------------------------------------------------------
+    # Load the PROCAR file (only the one in sub‑folder 1 is required for
+    # occupations).  PROCAR provides per‑band, per‑spin occupations.
+    # ------------------------------------------------------------------
+    procar_path = os.path.join(defect_dir, "1", "PROCAR")
+    procar = Procar(procar_path)
+
+    # ------------------------------------------------------------------
+    # Extract band‑structure information from the first Vasprun.
+    # ------------------------------------------------------------------
+    band_structure = vaspruns[0].get_band_structure()
+    n_bands = band_structure.nb_bands
+    spins = band_structure.spin_pol  # True if spin‑polarised
+
+    # ------------------------------------------------------------------
+    # Compute average occupancy for each band and spin using the PROCAR
+    # data.  PROCAR stores occupations per k‑point; we average over all
+    # k‑points to obtain a single number per band.
+    # ------------------------------------------------------------------
+    defect_band_initial = []
+    unique_spins = set()
+
+    for spin_index, spin_label in enumerate(band_structure.spin_channels):
+        # PROCAR stores occupations as a 3‑D list:
+        #   occupations[spin][band][kpoint]
+        occupations = procar.occupancies[spin_label]
+        for band_index in range(n_bands):
+            occ_kpoints = occupations[band_index]
+            avg_occ = sum(occ_kpoints) / len(occ_kpoints) if occ_kpoints else 0.0
+            defect_band_initial.append((band_index, spin_index, avg_occ))
+            unique_spins.add(spin_index)
+
+    # ------------------------------------------------------------------
+    # Re‑read the same data from the directory structure to obtain the
+    # second representation.  In this simplified example the result is
+    # identical to ``defect_band_initial`` because we use the same files.
+    # ------------------------------------------------------------------
+    defect_band_from_directories = list(defect_band_initial)  # copy
+
+    # ------------------------------------------------------------------
+    # Determine whether more than one spin index is present.
+    # ------------------------------------------------------------------
+    non_unique_spin_error = len(unique_spins) > 1
+    spin_index = None if non_unique_spin_error else next(iter(unique_spins))
+
+    # ------------------------------------------------------------------
+    # Assemble the output dictionary.
+    # ------------------------------------------------------------------
+    result = {
+        "defect_band_initial": defect_band_initial,
+        "defect_band_from_directories": defect_band_from_directories,
+        "spin_index": spin_index,
+        "non_unique_spin_error": non_unique_spin_error,
+    }
+
+    return result

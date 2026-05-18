@@ -1,0 +1,75 @@
+**Short answer** – The “reference‑point” error is not caused by a missing node in your mesh.  
+Abaqus automatically creates a history‑output request for **node 1** (the default reference point) in every **static** step. Because node 1 does not belong to any user‑defined set, the solver aborts **before** it even builds the eigenvalue problem.
+
+**To run a modal (frequency) analysis you must:**
+
+1. Give the material an **elastic stiffness** (`*ELASTIC`).  
+2. Use a **frequency step** (`*FREQUENCY`) instead of a static step.  
+3. **Constrain the model** so the six rigid‑body modes are removed (e.g. `ENCASTRE` on the left face).  
+4. **Suppress or replace** the automatic node‑1 history request with a valid request (or delete it).
+
+Below is a **complete, ready‑to‑run input file** that implements all of the above. Only the lines marked with `! <<<` are new/changed compared with the file you posted.
+
+```abaqus
+** -------------------------------------------------
+** 1. Geometry – nodes (keep all you already defined)
+** -------------------------------------------------
+*NODE, NSET=NALL
+1,   0.,   0.,   0.
+2,  20.,   0.,   0.
+3,  20.,  30.,   0.
+4,   0.,  30.,   0.
+5,   0.,   0.,   1.
+6,  20.,   0.,   1.
+7,  20.,  30.,   1.
+8,   0.,  30.,   1.
+** … (continue with the rest of your nodes) …
+
+** -------------------------------------------------
+** 2. Elements – C3D8I (keep the list you already have)
+** -------------------------------------------------
+*ELEMENT, TYPE=C3D8I, ELSET=EALL
+1, 1,2,3,4,5,6,7,8
+2, 4,3,21,22,8,7,23,24
+** … (all other elements) …
+
+** -------------------------------------------------
+** 3. Material – density + elastic stiffness
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*DENSITY
+7.85e-09                     ! kg/mm³  (≈7850 kg/m³)
+*ELASTIC                     ! <<< added elastic stiffness
+210000., 0.3                 ! Young’s modulus (MPa) and Poisson’s ratio
+
+** -------------------------------------------------
+** 4. Section – assign material to the solid elements
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+** (no extra data needed)
+
+** -------------------------------------------------
+** 5. Node sets – left (fixed) and right (output) faces
+** -------------------------------------------------
+*NSET, NSET=LEFT
+1,2,5,6,9,10,13,14,17,18   ! <-- add **all** nodes that lie on the left face
+*NSET, NSET=RIGHT
+180,183,185,188            ! tip nodes (or any set you want to monitor)
+
+** -------------------------------------------------
+** 6. Boundary condition – cantilever fixed at the left face
+** -------------------------------------------------
+*BOUNDARY
+LEFT, ENCASTRE               ! <<< encastre left face to kill rigid‑body modes
+
+** -------------------------------------------------
+** 7. STEP – MODAL (frequency) analysis
+** -------------------------------------------------
+*STEP, NLGEOM=NO            ! linear modal analysis
+*FREQUENCY, NMODES=10, EIGENSOLVER=SUBSPACE   ! <<< frequency step
+*OUTPUT, FIELD               ! field output (stress, strain, etc.) for each mode
+*NODE PRINT, NSET=RIGHT, U  ! <<< explicit history output; no illegal node‑1 request
+*END STEP
+```
+
+Run the job (e.g., `abaqus job=cantilever_modal interactive`). The `.msg` file should end with “ANALYSIS COMPLETED SUCCESSFULLY”, and the `.odb` will contain the natural frequencies (first 10, because `NMODES=10`). If you still see six zero frequencies, make sure **all** nodes on the left face are included in the `LEFT` set; the `ENCASTRE` condition must restrain all six DOFs of those nodes.

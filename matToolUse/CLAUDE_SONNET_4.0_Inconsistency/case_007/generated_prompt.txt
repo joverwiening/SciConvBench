@@ -1,0 +1,107 @@
+```python
+from pymatgen.analysis.defects.core import DefectEntry, Substitution
+from pymatgen.analysis.defects.corrections import FreysoldtCorrection
+from pymatgen.io.vasp import Vasprun, Locpot
+from pymatgen.core import Structure, Element
+from pathlib import Path
+import gzip
+
+def compute_defect_properties():
+    """
+    Computes defect properties for Mg_Ga substitution defect in GaN using Pymatgen.
+    
+    This function loads charge-state data from local files, constructs DefectEntry objects,
+    and calculates Freysoldt corrections and related properties.
+    
+    Returns:
+        dict: A dictionary containing:
+            - freysoldt_correction (float): Freysoldt correction for q=1 case with dielectric=10
+            - potential_alignment_consistency (bool): Consistency check for potential alignment
+            - energy_difference (float): Energy difference between defect and bulk supercells for q=1
+    """
+    
+    # Assume file_path is current directory or define base path
+    file_path = Path(".")
+    mg_ga_path = file_path / "Mg_Ga"
+    
+    # Define charge states and corresponding folder names
+    charge_states = [-2, -1, 0, 1]
+    
+    # Load bulk structure from neutral charge state
+    neutral_vasprun_path = mg_ga_path / "q0" / "vasprun.xml.gz"
+    with gzip.open(neutral_vasprun_path, 'rt') as f:
+        neutral_vasprun = Vasprun(f)
+    bulk_structure = neutral_vasprun.final_structure
+    
+    # Create Mg_Ga substitution defect
+    # Find Ga site to substitute (assuming first Ga site)
+    ga_sites = [i for i, site in enumerate(bulk_structure) if site.specie == Element("Ga")]
+    defect_site_index = ga_sites[0]
+    
+    mg_ga_defect = Substitution(bulk_structure, defect_site_index, Element("Mg"))
+    
+    # Load defect entries for all charge states
+    defect_entries = {}
+    
+    for q in charge_states:
+        folder_name = f"q{q}" if q >= 0 else f"q{q}"
+        defect_folder = mg_ga_path / folder_name
+        
+        # Load vasprun.xml.gz
+        vasprun_path = defect_folder / "vasprun.xml.gz"
+        with gzip.open(vasprun_path, 'rt') as f:
+            vasprun = Vasprun(f)
+        
+        # Load LOCPOT.gz
+        locpot_path = defect_folder / "LOCPOT.gz"
+        with gzip.open(locpot_path, 'rt') as f:
+            locpot = Locpot.from_file(f)
+        
+        # Create DefectEntry
+        defect_entry = DefectEntry(
+            defect=mg_ga_defect,
+            charge_state=q,
+            sc_entry=vasprun.final_structure,
+            sc_defect_entry=vasprun.final_structure,
+            bulk_entry=bulk_structure
+        )
+        
+        defect_entries[q] = {
+            'entry': defect_entry,
+            'vasprun': vasprun,
+            'locpot': locpot
+        }
+    
+    # Generate Freysoldt correction metadata with dielectric constant 14
+    freysoldt_corr_14 = FreysoldtCorrection(dielectric=14)
+    
+    # Get correction metadata for q=1 case with dielectric 14
+    q1_entry = defect_entries[1]['entry']
+    q1_locpot = defect_entries[1]['locpot']
+    
+    correction_metadata_14 = freysoldt_corr_14.get_correction(q1_entry, q1_locpot)
+    
+    # Calculate Freysoldt correction for q=1 case with dielectric constant 10
+    freysoldt_corr_10 = FreysoldtCorrection(dielectric=10)
+    freysoldt_correction_10 = freysoldt_corr_10.get_correction(q1_entry, q1_locpot)['freysoldt_electrostatic']
+    
+    # Check potential alignment consistency
+    # Compare potential alignment from dielectric 14 metadata with dielectric 10 calculation
+    potential_alignment_14 = correction_metadata_14.get('potential_alignment', 0.0)
+    potential_alignment_10 = freysoldt_corr_10.get_correction(q1_entry, q1_locpot).get('potential_alignment', 0.0)
+    
+    # Consider consistent if difference is within 0.01 eV
+    potential_alignment_consistency = abs(potential_alignment_14 - potential_alignment_10) < 0.01
+    
+    # Calculate energy difference between defect supercell and bulk supercell for q=1
+    q1_vasprun = defect_entries[1]['vasprun']
+    neutral_vasprun = defect_entries[0]['vasprun']
+    
+    energy_difference = q1_vasprun.final_energy - neutral_vasprun.final_energy
+    
+    return {
+        'freysoldt_correction': freysoldt_correction_10,
+        'potential_alignment_consistency': potential_alignment_consistency,
+        'energy_difference': energy_difference
+    }
+```

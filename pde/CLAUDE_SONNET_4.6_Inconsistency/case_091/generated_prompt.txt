@@ -1,0 +1,137 @@
+Solve the 1D wave equation u_tt = (1.0)^2 * u_xx + sin(pi*x)*sin(2*pi*t) numerically using Python.
+The unknown field is u(x,t).
+The spatial domain is x in [0,1] (closed interval) and the time domain is t in [0,1.0].
+The parameter c = 2 appears in the CFL condition but note the PDE coefficient on u_xx is (1.0)^2 = 1.0; use c=2 only for the CFL stability criterion.
+Use Nx=400 uniform intervals so there are 401 grid points including both endpoints; dx = 1/400.
+Compute dt0 = 0.9 * dx / c where c=2, so dt0 = 0.9 / (400 * 2) = 0.9/800.
+Set Nt = ceil(1.0 / dt0) and then dt = 1.0 / Nt so the final time T=1.0 is hit exactly.
+Apply Dirichlet boundary conditions u=0 at x=0 and x=1 at every time step.
+Set initial condition u(x,0) = 0 for all interior and boundary points.
+Set initial velocity u_t(x,0) = 0 for all points.
+Use the Taylor start for the first time step: u^1_i = u^0_i + dt*v0_i + 0.5*dt**2*(1.0**2 * u_xx^0_i + f(x_i, 0)) for interior points, where u_xx is approximated by the 2nd-order central difference (u^0_{i-1} - 2*u^0_i + u^0_{i+1}) / dx**2 and f(x,t) = sin(pi*x)*sin(2*pi*t).
+After the Taylor start, enforce Dirichlet BCs: set u^1_0 = 0 and u^1_{Nx} = 0.
+For all subsequent time steps n >= 1, use the leapfrog update for interior points: u^{n+1}_i = 2*u^n_i - u^{n-1}_i + dt**2 * (1.0**2 * (u^n_{i-1} - 2*u^n_i + u^n_{i+1}) / dx**2 + sin(pi*x_i)*sin(2*pi*t_n)) where t_n = n*dt.
+After each leapfrog step, enforce Dirichlet BCs: set u^{n+1}_0 = 0 and u^{n+1}_{Nx} = 0.
+March forward until t = T = 1.0 (exactly Nt steps total).
+After the time loop, extract the final solution array u of length 401 at T=1.0.
+Compute and print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2) * dx).
+Save a file named "solution_agent_wave_10.npz" containing: array x of shape (401,) with x_i = i*dx for i=0..400, array u of shape (401,) with the solution at T=1.0, scalar T=1.0, scalar dx=1/400, scalar dt as computed above.
+Save a line plot of u versus x at T=1.0 as "solution_agent_wave_10.png" with labeled axes.
+Use numpy for all array operations and matplotlib for the plot.
+Interpret '^' as exponentiation and use '**' in Python code for powers.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+
+# Parameters
+c = 2.0          # used for CFL only
+coeff = 1.0      # PDE coefficient: u_tt = coeff**2 * u_xx + f
+wave_speed = coeff  # actual wave speed in PDE = 1.0
+
+Nx = 400
+dx = 1.0 / Nx
+T = 1.0
+
+# Time step
+dt0 = 0.9 * dx / c  # CFL based on c=2
+Nt = math.ceil(T / dt0)
+dt = T / Nt
+
+print(f"Nx={Nx}, dx={dx:.6f}, dt0={dt0:.6f}, Nt={Nt}, dt={dt:.6f}")
+print(f"CFL = c*dt/dx = {c*dt/dx:.6f}")
+
+# Grid
+x = np.linspace(0.0, 1.0, Nx + 1)  # 401 points
+
+# Forcing function
+def f(x_arr, t):
+    return np.sin(np.pi * x_arr) * np.sin(2.0 * np.pi * t)
+
+# Initial conditions
+u0 = np.zeros(Nx + 1)   # u(x,0) = 0
+v0 = np.zeros(Nx + 1)   # u_t(x,0) = 0
+
+# Interior indices
+interior = slice(1, Nx)  # indices 1 to Nx-1
+
+# Laplacian operator (2nd-order central difference)
+def laplacian(u_arr):
+    lap = np.zeros_like(u_arr)
+    lap[interior] = (u_arr[:-2] - 2.0*u_arr[1:-1] + u_arr[2:]) / dx**2
+    return lap
+
+# Taylor start: u^1
+u_prev = u0.copy()
+lap0 = laplacian(u_prev)
+f0 = f(x, 0.0)
+
+u_curr = np.zeros(Nx + 1)
+u_curr[interior] = (u_prev[interior]
+                    + dt * v0[interior]
+                    + 0.5 * dt**2 * (wave_speed**2 * lap0[interior] + f0[interior]))
+# Dirichlet BCs
+u_curr[0] = 0.0
+u_curr[Nx] = 0.0
+
+# Time marching
+for n in range(1, Nt):
+    t_n = n * dt
+    lap_curr = laplacian(u_curr)
+    fn = f(x, t_n)
+
+    u_next = np.zeros(Nx + 1)
+    u_next[interior] = (2.0 * u_curr[interior]
+                        - u_prev[interior]
+                        + dt**2 * (wave_speed**2 * lap_curr[interior] + fn[interior]))
+    # Dirichlet BCs
+    u_next[0] = 0.0
+    u_next[Nx] = 0.0
+
+    u_prev = u_curr
+    u_curr = u_next
+
+# Final solution at T=1.0
+u_final = u_curr
+
+# Diagnostics
+u_min = np.min(u_final)
+u_max = np.max(u_final)
+l2_norm = np.sqrt(np.sum(u_final**2) * dx)
+
+print(f"min(u)    = {u_min:.6e}")
+print(f"max(u)    = {u_max:.6e}")
+print(f"L2 norm   = {l2_norm:.6e}")
+
+# Save npz
+np.savez("solution_agent_wave_10.npz",
+         x=x,
+         u=u_final,
+         T=T,
+         dx=dx,
+         dt=dt)
+print("Saved solution_agent_wave_10.npz")
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u_final, linewidth=1.5)
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T=1.0)")
+ax.set_title("Wave equation solution at T=1.0")
+ax.grid(True)
+plt.tight_layout()
+plt.savefig("solution_agent_wave_10.png", dpi=150)
+plt.close()
+print("Saved solution_agent_wave_10.png")
+```
+
+Output from running the code:
+
+Nx=400, dx=0.002500, dt0=0.001125, Nt=889, dt=0.001125
+CFL = c*dt/dx = 0.899888
+min(u)    = -8.836752e-02
+max(u)    = 8.836752e-02
+L2 norm   = 3.719739e-02
+Saved solution_agent_wave_10.npz
+Saved solution_agent_wave_10.png

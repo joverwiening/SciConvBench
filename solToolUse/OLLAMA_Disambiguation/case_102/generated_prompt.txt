@@ -1,0 +1,121 @@
+**Why the job stops**
+
+`*BOUNDARY` can prescribe **only a displacement (or a rotation)**.  
+In the original file you have  
+
+```abaqus
+*BOUNDARY  CN7,3,3,0.0      ! left face – U3 = 0  (fixed)
+*BOUNDARY  GIBO,3,3,0.1    ! the same nodes (and interior nodes) are forced to U3 = 0.1 mm
+```
+
+Both cards act on the **same degree of freedom (U3)** of the same nodes, so the model contains two contradictory constraints (U3 = 0 and U3 = 0.1 mm).  
+During assembly Abaqus detects the inconsistency and aborts the solution with the message
+
+```
+model database has been modified …
+```
+
+In addition, a `*BOUNDARY` card **cannot generate a load**.  
+The loading you need – a **concentrated force at the tip of the cantilever** – must be introduced with `*CLOAD` (or `*DLOAD`).
+
+--------------------------------------------------------------------
+
+## Minimal, ready‑to‑run correction (only three blocks are added)
+
+1. **Delete** the line that prescribes the 0.1 mm displacement  
+
+   ```abaqus
+   *BOUNDARY  GIBO,3,3,0.1
+   ```
+
+2. **Add** the three blocks below (place them after all the *NODE, *ELEMENT, *ELSET and *NSET definitions, or at the end of the file).
+
+```abaqus
+*HEADING
+Cantilever – point load at the tip
+*PREPRINT, ECHO=YES
+
+! -------------------------------------------------
+! 1) Set that contains the tip node(s)
+!    Replace the number(s) with the actual tip node ID(s)
+! -------------------------------------------------
+*NSET, NSET=TIP
+5                ! <-- tip node number (change as required)
+
+! -------------------------------------------------
+! 2) Fully fix the left end (the set CN7 that already exists)
+! -------------------------------------------------
+*BOUNDARY
+CN7, 1, 3, 0.0   ! U1 = U2 = U3 = 0  → completely restrained
+
+! -------------------------------------------------
+! 3) Step: left end fixed + tip point load
+! -------------------------------------------------
+*STEP, NLGEOM, INC=50
+*STATIC
+
+** Apply a Z‑direction point load at the tip
+*CLOAD
+TIP, 3, -1.0e3   ! downward 1000 N (negative = –Z direction)
+
+*END STEP
+```
+
+### What each command does  
+
+| Command                     | Effect |
+|-----------------------------|--------|
+| `*NSET, NSET=TIP …`         | Creates a set that contains only the tip node(s). |
+| `*BOUNDARY CN7,1,3,0.0`     | Fully restrains the left face (U1 = U2 = U3 = 0). |
+| `*CLOAD TIP,3,-1.0e3`       | Applies a concentrated load of **1000 N** in the –Z direction to the tip node(s). |
+| `*STEP … *STATIC`           | Performs a static analysis (with `NLGEOM` enabled for large‑displacement effects). |
+
+--------------------------------------------------------------------
+
+## Alternative when the tip is a surface (several nodes)
+
+If the tip consists of many nodes and you prefer a single “point” load, create a reference point and tie the tip nodes to it:
+
+```abaqus
+*REFERENCE POINT, NSET=RP
+200, 0., 0., 0.          ! dummy coordinates – only a load carrier
+
+*TIE
+TIP, RP                 ! tie every tip node to the reference point
+
+*CLOAD
+RP, 3, -1.0e3           ! same 1000 N downward load, now acting on the RP
+```
+
+The mechanical response is identical to applying `*CLOAD` directly to a tip node, but the load appears attached to a single point in the post‑processor.
+
+--------------------------------------------------------------------
+
+## Quick‑check checklist before running
+
+1. **Save** the edited file (e.g. `cantilever.inp`).  
+2. Ensure no previous Abaqus job with the same name is still running.  
+3. Run the job  
+
+   ```bash
+   abaqus job=cantilever input=cantilever.inp
+   ```
+
+4. After the run, open the **.odb** file and verify:  
+   * Reaction force at the left end ≈ +1 kN (opposite to the applied –1 kN).  
+   * Tip deflection is reasonable (compare with hand calculations or literature).  
+5. To change the load magnitude, edit the value in the `*CLOAD` line and re‑submit.
+
+--------------------------------------------------------------------
+
+## TL;DR – five essential steps
+
+| # | Action |
+|---|--------|
+| 1 | **Delete** the conflicting line `*BOUNDARY GIBO,3,3,0.1`. |
+| 2 | **Create** a tip node set (`*NSET, NSET=TIP …`). |
+| 3 | **Fully fix** the left end with `*BOUNDARY CN7,1,3,0.0`. |
+| 4 | **Apply** the point load with `*CLOAD TIP,3,-<desired‑force>` (or use a reference point + `*TIE`). |
+| 5 | **Run** the job – the “model database has been modified …” error disappears and the cantilever analysis completes successfully. |
+
+Implement these modifications and the model will solve without aborting. Happy modelling!

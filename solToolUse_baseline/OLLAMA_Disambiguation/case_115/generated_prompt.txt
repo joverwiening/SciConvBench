@@ -1,0 +1,82 @@
+**错误产生的根本原因**  
+Abaqus 按文件的顺序从上到下逐行读取。  
+当它遇到 **需要引用集合的关键字**（如 `*BOUNDARY`、`*CLOAD`、`*CONTACT`、`*OUTPUT` 等）时，**该集合必须已经在文件中被定义**。  
+
+在你的模型中，节点集合 **N1** 是这样创建的：
+
+```abaqus
+*NSET,NSET=N1
+5
+```
+
+但随后（或在前面的两个空 *STEP* 中）已经出现了使用 **N1** 的载荷/边界条件。  
+因此，在解析到第一次引用 **N1** 时，Abaqus 并没有在之前找到对应的集合定义，程序便报出
+
+```
+*Node set N1 is not defined
+```
+
+> 该错误是在 **使用点** 报出的，而不是在后面才出现的定义处。
+
+---
+
+## 逐步排查与修正（检查表）
+
+| 步骤 | 操作 | 目的 |
+|------|------|------|
+| **1** | **先定义集合，再使用**<br>把 `*NSET,NSET=N1`（或任何 `*NODE,NSET=…`）移动到 **第一次在 *STEP* 中引用 N1 之前**。 | Abaqus 在解析 `*BOUNDARY`、`*CLOAD` 等关键字时已经知道该集合。 |
+| **2** | **所有载荷、边界条件、接触、输出请求必须放在 *STEP* 块内部**（`*STEP … *END STEP`）。 | 这些关键字只能在步骤中出现，且必须引用已存在的集合。 |
+| **3** | **删除不必要的空步骤**（如 `*STEP,NLGEOM … *END STEP`、第二个空 *STEP*），除非你真的需要一个“空”步骤。 | 空步骤会浪费计算时间，也可能掩盖顺序错误。 |
+| **4** | **检查节点编号是否真实存在**。确认节点 5（或 N1 中列出的任何节点）已经在 `*NODE` 部分出现。 | 集合中包含不存在的节点同样会导致错误。 |
+| **5** | **对所有其他集合（ELSET、SURF、CONTACT 等）遵循同样的“先定义后使用”原则**。 | 保持一致性，防止类似错误在别处出现。 |
+
+---
+
+## 最小可运行示例（展示正确的顺序）
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                ; 完整的节点列表（1‑261）
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                ; 完整的单元列表
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                 ; **在任何使用 N1 的 STEP 之前定义**
+
+*STEP, NLGEOM, STATIC
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; 对节点 5 施加 X 方向位移
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+使用上述顺序提交后，Abaqus/Standard（任意近期版本）能够顺利运行，且不会再出现 “*Node set N1 is not defined*” 的报错。
+
+---
+
+## 提交前快速检查清单
+
+1. **所有集合（NSET、ELSET、SURF、CONTACT 等）在首次被步骤引用之前已经定义。**  
+2. **所有载荷、边界条件、接触和输出请求均位于 `*STEP … *END STEP` 块内部。**  
+3. **不存在无意义的空步骤**（除非确实需要）。  
+4. **集合中使用的节点/单元编号在对应的 `*NODE`/`*ELEMENT` 部分真实存在。**  
+
+只要上述每一项都满足，**“Node set N1 is not defined”** 错误就会消失，模型即可正常提交并求解。

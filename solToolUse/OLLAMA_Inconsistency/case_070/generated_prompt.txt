@@ -1,0 +1,133 @@
+**Why all the natural‑frequency values are 0 Hz**
+
+In a *FREQUENCY* step Abaqus solves the eigen‑value problem  
+
+\[
+\mathbf K\,\mathbf u = \lambda \,\mathbf M\,\mathbf u ,\qquad 
+f=\frac{\sqrt{\lambda}}{2\pi}
+\]
+
+If the model contains **no elements**, the global stiffness matrix **K** and the mass matrix **M** are empty.  
+The only eigen‑value that satisfies the equation is \(\lambda =0\); therefore every frequency that Abaqus writes to the *.odb* is **0.00000 Hz**.
+
+The line that appears in the *.log* file  
+
+```
+WARNING: No elements are defined for the model.
+```  
+
+is not a cosmetic message – it tells you exactly why the frequencies are zero.
+
+---------------------------------------------------------------------
+
+## What is wrong with the current `*ELEMENT` block
+
+```text
+*ELEMENT, TYPE=C3D8I, ELSET=elall
+1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+2, 4, 3, 21, 22, 8, 7, 23, 24, 11, 25,
+...
+```
+
+| Problem | Why Abaqus discards the block |
+|---------|--------------------------------|
+| **C3D8I is an 8‑node brick** – the line must contain **exactly nine numbers** (element label + 8 node IDs). | The parser expects 9 numbers; when it finds more it cannot interpret the line and drops the whole block. |
+| **More than eight node IDs are supplied** (`9,10` after element 1, `11,25` after element 2, …). | The extra IDs are interpreted as the start of a new element, but because they are on the same line the continuation rules are violated. |
+| **Two elements on the same line** (the comma after the first element). | Abaqus allows a continuation line only for line‑length, not for defining a second element on the same line. |
+| **Set‑name mismatch** – `ELSET=elall` in the element definition but later referenced as `ELALL` in the solid section. | If the set name does not match, the solid section receives an empty element set, reinforcing the “no elements” situation. |
+
+Because the block is malformed Abaqus reads **zero elements**, issues the warning, and consequently prints all natural frequencies as **0.00000 Hz**.
+
+---------------------------------------------------------------------
+
+## How to fix the element definition
+
+### 1. One element per line, exactly eight node IDs
+
+```text
+*ELEMENT, TYPE=C3D8I, ELSET=ELALL
+1,  1,  2,  4,  3,  5,  6,  8,  7
+2,  2, 10, 12,  4,  6, 14, 16,  8
+3, 10, 11, 13, 12, 14, 15, 17, 16
+4, 11, 20, 22, 13, 15, 24, 26, 17
+5, 20, 21, 23, 22, 24, 25, 27, 26
+6, 21, 30, 32, 23, 25, 34, 36, 27
+7, 30, 31, 33, 32, 34, 35, 37, 36
+8, 31, 40, 42, 33, 35, 44, 46, 37
+9, 40, 41, 43, 42, 44, 45, 47, 46
+10,106,105,117,118,108,107,119,120
+```
+
+*Each line now follows the required syntax*  
+
+```
+<element‑label>, <node‑1>, <node‑2>, … , <node‑8>
+```  
+
+There is **exactly one element per line** and **exactly eight node IDs** after the element label.  
+If a line exceeds 80 characters you may use a continuation line (it must start with a comma), but the total number of node IDs for that element must remain eight.
+
+### 2. Keep the element‑set name identical everywhere
+
+```text
+*ELEMENT, TYPE=C3D8I, ELSET=ELALL
+...
+*SOLID SECTION, ELSET=ELALL, MATERIAL=STEEL
+```
+
+If you prefer a different name, change it **everywhere** it is referenced (`*SOLID SECTION`, `*BOUNDARY`, `*OUTPUT`, …).
+
+### 3. Verify that all node IDs used above are defined in a preceding `*NODE` block
+
+```text
+*NODE
+1, 0.0, 0.0, 0.0
+2, 10.0, 0.0, 0.0
+3, 10.0, 10.0, 0.0
+4, 0.0, 10.0, 0.0
+5, 0.0, 0.0, 10.0
+...
+```
+
+If any node is missing, Abaqus will again drop the element that references it.
+
+---------------------------------------------------------------------
+
+## What you will see after the correction
+
+* The warning **“No elements are defined for the model.”** disappears.  
+* Abaqus assembles a non‑zero global stiffness matrix **K** and a mass matrix **M** (using the density you supplied in the material definition).  
+* The *FREQUENCY* step now returns realistic natural frequencies, e.g.
+
+```text
+EIGENVALUE =  1.234567E+02
+FREQUENCY =  5.5678  Hz
+...
+```
+
+All the requested modes (10 in the example) will have non‑zero values.
+
+---------------------------------------------------------------------
+
+## Quick pre‑run checklist
+
+| ✔ | Item to verify |
+|---|----------------|
+| 1 | **Element block** – one line per element, exactly 8 node IDs for a `C3D8I`. |
+| 2 | **Element‑set name** – the name after `ELSET=` in `*ELEMENT` matches the name used in `*SOLID SECTION` (and any other reference). |
+| 3 | **Node block** – every node ID referenced in the element list is defined. |
+| 4 | **Material** – density, elastic modulus, Poisson’s ratio are defined in the same unit system as the geometry. |
+| 5 | **Boundary conditions** – correctly constrain the intended faces (e.g., `LEFT, 1,2,3`). |
+| 6 | **Frequency step** – `*FREQUENCY, NMODES=10` (or the number you need). |
+| 7 | **Output requests** – optional but useful (`*NODE PRINT, NSET=LEFT RF`). |
+
+If all items are satisfied, re‑run the job – Abaqus will now have elements, will build the stiffness and mass matrices, solve the eigenvalue problem, and will return a proper set of natural frequencies.
+
+---------------------------------------------------------------------
+
+### TL;DR
+
+All frequencies are zero because **no elements are present** in the model.  
+The `*ELEMENT` block is malformed: you supplied more than eight node IDs for a `C3D8I` element and placed two elements on the same line, causing Abaqus to discard the block.
+
+**Fix:** write each element on its own line with **exactly eight node IDs** after the element label, and keep the element‑set name consistent (`ELSET=ELALL`). After correcting the element definition the warning disappears and Abaqus prints realistic, non‑zero natural frequencies.

@@ -1,0 +1,170 @@
+Solve the 2D heat equation u_t = 0.1 * (u_xx + u_yy) numerically using implicit Euler time integration.
+The spatial domain is (x,y) in [0,1] x [0,1] and the time domain is t in [0, 1.0].
+Use alpha = 0.1 as the diffusion coefficient.
+The exact reference solution is u(x,y,t) = x + y for all t.
+Use a uniform grid with Nx=Ny=40 intervals, giving 41x41 grid points including both endpoints.
+Set dx = 1/40, dy = 1/40, and dt = 0.01 with 100 time steps.
+Define x_i = i*dx for i=0..40 and y_j = j*dy for j=0..40.
+Set the initial condition u(x,y,0) = x + y on all grid points.
+Apply Dirichlet boundary conditions consistent with u = x + y on all four boundaries at every time step: u(0,y,t)=y, u(1,y,t)=1+y, u(x,0,t)=x, u(x,1,t)=x+1.
+Discretize the Laplacian using the standard 5-point stencil: (u_{i-1,j} - 2*u_{i,j} + u_{i+1,j})/dx**2 + (u_{i,j-1} - 2*u_{i,j} + u_{i,j+1})/dy**2.
+At each time step, form and solve a sparse linear system for the interior nodes only (i=1..39, j=1..39) using implicit Euler: (u_new - u_old)/dt = alpha * Laplacian(u_new).
+Fix boundary nodes to their Dirichlet values before solving each step.
+Use scipy.sparse and scipy.sparse.linalg.spsolve to assemble and solve the linear system.
+After 100 steps, compute u(x,y,T=1.0) on the full 41x41 grid.
+Store the solution in a 2D array u with shape (41, 41) where u[j,i] = u(x_i, y_j).
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2)*dx*dy) at T=1.0.
+Compute the reference solution u_ref[j,i] = x_i + y_j on the same grid.
+Print the max absolute error max(|u - u_ref|) and the L2 error sqrt(sum((u - u_ref)**2)*dx*dy).
+Save "solution_agent_heat_18.npz" containing: x as a 1D array of length 41, y as a 1D array of length 41, u as the 2D solution array of shape (41,41), and scalar metadata T=1.0, dx=1/40, dy=1/40, dt=0.01.
+Save a heatmap or filled-contour plot of u(x,y,T=1.0) as "solution_agent_heat_18.png" with labeled axes and a colorbar.
+
+```python
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+
+# Parameters
+alpha = 0.1
+Nx, Ny = 40, 40
+dx = 1.0 / Nx
+dy = 1.0 / Ny
+dt = 0.01
+T = 1.0
+Nt = int(round(T / dt))  # 100 steps
+
+# Grid
+x = np.linspace(0, 1, Nx + 1)  # shape (41,)
+y = np.linspace(0, 1, Ny + 1)  # shape (41,)
+
+# Number of interior nodes
+nx_int = Nx - 1  # 39
+ny_int = Ny - 1  # 39
+N_int = nx_int * ny_int  # 39*39 = 1521
+
+# Index mapping: interior node (ii, jj) -> row index
+# ii = i-1 for i in 1..Nx-1, jj = j-1 for j in 1..Ny-1
+# row = jj * nx_int + ii
+
+def interior_index(ii, jj):
+    return jj * nx_int + ii
+
+# Build the implicit Euler matrix: (I - alpha*dt*L) u_new = u_old + dt*alpha*rhs_bc
+# L is the 5-point Laplacian for interior nodes
+
+rows = []
+cols = []
+data = []
+
+rx = alpha * dt / dx**2
+ry = alpha * dt / dy**2
+
+for jj in range(ny_int):
+    for ii in range(nx_int):
+        row = interior_index(ii, jj)
+        # Diagonal
+        rows.append(row)
+        cols.append(row)
+        data.append(1.0 + 2*rx + 2*ry)
+        # Left neighbor (ii-1, jj)
+        if ii > 0:
+            rows.append(row)
+            cols.append(interior_index(ii-1, jj))
+            data.append(-rx)
+        # Right neighbor (ii+1, jj)
+        if ii < nx_int - 1:
+            rows.append(row)
+            cols.append(interior_index(ii+1, jj))
+            data.append(-rx)
+        # Bottom neighbor (ii, jj-1)
+        if jj > 0:
+            rows.append(row)
+            cols.append(interior_index(ii, jj-1))
+            data.append(-ry)
+        # Top neighbor (ii, jj+1)
+        if jj < ny_int - 1:
+            rows.append(row)
+            cols.append(interior_index(ii, jj+1))
+            data.append(-ry)
+
+A = sp.csr_matrix((data, (rows, cols)), shape=(N_int, N_int))
+
+# Initial condition: u(x,y,0) = x + y
+# u[j,i] = x[i] + y[j]
+XX, YY = np.meshgrid(x, y)  # shape (41,41), XX[j,i]=x[i], YY[j,i]=y[j]
+u = XX + YY  # shape (41,41)
+
+# Boundary values (constant in time for this problem)
+# u(0,y)=y, u(1,y)=1+y, u(x,0)=x, u(x,1)=x+1
+# These are already set in u and remain fixed.
+
+# Time stepping
+for step in range(Nt):
+    # Build RHS for interior nodes
+    rhs = np.zeros(N_int)
+    for jj in range(ny_int):
+        for ii in range(nx_int):
+            i = ii + 1  # global x index
+            j = jj + 1  # global y index
+            row = interior_index(ii, jj)
+            rhs[row] = u[j, i]
+            # Add boundary contributions to RHS
+            # Left boundary (i=0)
+            if ii == 0:
+                rhs[row] += rx * u[j, 0]
+            # Right boundary (i=Nx)
+            if ii == nx_int - 1:
+                rhs[row] += rx * u[j, Nx]
+            # Bottom boundary (j=0)
+            if jj == 0:
+                rhs[row] += ry * u[0, i]
+            # Top boundary (j=Ny)
+            if jj == ny_int - 1:
+                rhs[row] += ry * u[Ny, i]
+
+    # Solve
+    u_int = spla.spsolve(A, rhs)
+
+    # Update interior nodes
+    for jj in range(ny_int):
+        for ii in range(nx_int):
+            i = ii + 1
+            j = jj + 1
+            u[j, i] = u_int[interior_index(ii, jj)]
+
+    # Boundary nodes remain fixed (already set from IC = exact solution)
+
+# Diagnostics
+min_u = np.min(u)
+max_u = np.max(u)
+l2_norm = np.sqrt(np.sum(u**2) * dx * dy)
+print(f"min(u) = {min_u:.6e}")
+print(f"max(u) = {max_u:.6e}")
+print(f"L2 norm of u = {l2_norm:.6e}")
+
+# Error vs reference
+u_ref = XX + YY
+max_err = np.max(np.abs(u - u_ref))
+l2_err = np.sqrt(np.sum((u - u_ref)**2) * dx * dy)
+print(f"Max absolute error = {max_err:.6e}")
+print(f"L2 error = {l2_err:.6e}")
+
+# Save npz
+np.savez("solution_agent_heat_18.npz",
+         x=x, y=y, u=u,
+         T=T, dx=dx, dy=dy, dt=dt)
+print("Saved solution_agent_heat_18.npz")
+
+# Save plot
+fig, ax = plt.subplots(figsize=(6, 5))
+cp = ax.contourf(x, y, u, levels=50, cmap='hot')
+plt.colorbar(cp, ax=ax, label='u(x,y,T)')
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_title(f'u(x,y,T={T}) — Heat Equation (Implicit Euler)')
+plt.tight_layout()
+plt.savefig("solution_agent_heat_18.png", dpi=150)
+plt.close()
+print("Saved solution_agent_heat_18.png")
+```

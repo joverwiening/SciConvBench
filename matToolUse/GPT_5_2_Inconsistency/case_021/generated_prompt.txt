@@ -1,0 +1,172 @@
+Write a Python function named compute_freysoldt_correction_energy() that takes no required input arguments.
+Assume a global variable file_path exists and points to the base directory containing a Mg_Ga/ folder.
+Iterate all immediate subdirectories under <file_path>/Mg_Ga/ without assuming specific subfolder names.
+For each Mg_Ga/<subfolder>/, require exactly two files: vasprun.xml.gz and LOCPOT.gz.
+Load each subfolder’s vasprun.xml.gz using pymatgen.io.vasp.Vasprun with parse_potcar_file=False.
+Load each subfolder’s LOCPOT.gz using pymatgen.io.vasp.Locpot.from_file.
+Store all loaded data in a dictionary keyed by subfolder name.
+Select the bulk/pristine reference subfolder by case-insensitive name matching containing one of: bulk, pristine, host, perfect.
+If zero or multiple bulk candidates are found, raise a RuntimeError instructing the user to uniquely identify the bulk folder.
+Select a defect subfolder to correct by choosing the first non-bulk subfolder in sorted order.
+If no non-bulk subfolder exists, raise a RuntimeError indicating no defect calculation is available.
+Compute the Freysoldt correction using pymatgen.analysis.defects.corrections.freysoldt.get_freysoldt_correction with bulk and defect LOCPOTs and structures.
+Handle pymatgen API differences by attempting both keyword-argument and positional-argument calling conventions for get_freysoldt_correction.
+Normalize the correction result to a float correction energy in eV, supporting return types of float, dict with common energy keys, or objects with an energy attribute.
+Return a dictionary with a single key freysoldt_correction_energy mapped to the computed float value, expected to be approximately 0 in the neutral-state reference case.
+Include all necessary imports inside the function.
+Include a complete docstring describing that there are no parameters, that file_path must exist in the caller scope, what files are read, what assumptions are made for bulk/defect selection, what is returned, and what errors may be raised.
+
+def compute_freysoldt_correction_energy():
+    """
+    Compute the Freysoldt correction energy for the Mg_Ga defect set using Pymatgen.
+
+    The function scans `<file_path>/Mg_Ga/` for immediate subdirectories, each expected to
+    contain `vasprun.xml.gz` and `LOCPOT.gz`. It loads all such subfolders into a dictionary
+    keyed by subfolder name.
+
+    Because the requirement does not specify how to choose the bulk/pristine reference or
+    which defect subfolder to correct, the function uses best-practice assumptions:
+    - Bulk/pristine reference is identified by subfolder name containing (case-insensitive)
+      one of: "bulk", "pristine", "host", "perfect". If none or multiple match, an error is raised.
+    - The defect to correct is chosen as the first non-bulk subfolder in sorted order.
+
+    Parameters
+    ----------
+    None
+        This function takes no required input arguments.
+
+    External context required
+    -------------------------
+    file_path : str or pathlib.Path
+        A global variable named `file_path` must exist in the caller's scope and point to the
+        base directory containing the `Mg_Ga/` folder.
+
+    Returns
+    -------
+    dict
+        Dictionary with:
+        - "freysoldt_correction_energy" (float): Freysoldt correction energy in eV.
+
+    Raises
+    ------
+    RuntimeError
+        If `file_path` is not defined, if bulk cannot be uniquely identified, if no defect
+        folder exists, or if the correction cannot be computed with the available inputs.
+    FileNotFoundError
+        If expected directories or required files are missing.
+    """
+    from pathlib import Path
+
+    from pymatgen.io.vasp import Locpot, Vasprun
+    from pymatgen.analysis.defects.corrections.freysoldt import get_freysoldt_correction
+
+    # Resolve base paths
+    try:
+        base = Path(file_path)  # noqa: F821 (expected to exist in caller scope)
+    except NameError as exc:
+        raise RuntimeError(
+            "Expected a global variable `file_path` pointing to the base directory, "
+            "but it is not defined."
+        ) from exc
+
+    mg_ga_dir = base / "Mg_Ga"
+    if not mg_ga_dir.is_dir():
+        raise FileNotFoundError(f"Expected directory not found: {mg_ga_dir}")
+
+    # Discover immediate subdirectories
+    subdirs = sorted([p for p in mg_ga_dir.iterdir() if p.is_dir()])
+    if not subdirs:
+        raise RuntimeError(f"No subdirectories found under: {mg_ga_dir}")
+
+    # Load all calculations into a dict keyed by subfolder name
+    calcs = {}
+    for d in subdirs:
+        vr_path = d / "vasprun.xml.gz"
+        lp_path = d / "LOCPOT.gz"
+        if not vr_path.is_file():
+            raise FileNotFoundError(f"Missing required file: {vr_path}")
+        if not lp_path.is_file():
+            raise FileNotFoundError(f"Missing required file: {lp_path}")
+
+        vasprun = Vasprun(str(vr_path), parse_potcar_file=False)
+        locpot = Locpot.from_file(str(lp_path))
+
+        calcs[d.name] = {
+            "dir": d,
+            "vasprun": vasprun,
+            "locpot": locpot,
+            "structure": vasprun.final_structure,
+        }
+
+    # Identify bulk/pristine reference by best-practice name matching
+    bulk_tokens = ("bulk", "pristine", "host", "perfect")
+    bulk_candidates = [
+        name for name in calcs.keys()
+        if any(tok in name.lower() for tok in bulk_tokens)
+    ]
+    if len(bulk_candidates) != 1:
+        raise RuntimeError(
+            "Could not uniquely identify the bulk/pristine reference folder under "
+            f"{mg_ga_dir}.\n"
+            f"Bulk candidates found: {bulk_candidates}\n"
+            "Please ensure exactly one subfolder name contains one of: "
+            f"{bulk_tokens} (case-insensitive)."
+        )
+
+    bulk_name = bulk_candidates[0]
+    bulk = calcs[bulk_name]
+
+    # Choose a defect calculation to correct (best-practice assumption)
+    defect_names = sorted([n for n in calcs.keys() if n != bulk_name])
+    if not defect_names:
+        raise RuntimeError(
+            f"Only bulk folder '{bulk_name}' found; no defect subfolders available to correct."
+        )
+    defect_name = defect_names[0]
+    defect = calcs[defect_name]
+
+    # Compute Freysoldt correction (handle API differences across pymatgen versions)
+    try:
+        corr = get_freysoldt_correction(
+            defect_locpot=defect["locpot"],
+            bulk_locpot=bulk["locpot"],
+            defect_structure=defect["structure"],
+            bulk_structure=bulk["structure"],
+        )
+    except TypeError:
+        try:
+            corr = get_freysoldt_correction(
+                defect["locpot"],
+                bulk["locpot"],
+                defect["structure"],
+                bulk["structure"],
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to compute Freysoldt correction with available inputs. "
+                "Your pymatgen version may require additional parameters (e.g., dielectric, "
+                "defect charge, defect site)."
+            ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to compute Freysoldt correction. Ensure LOCPOTs are compatible and "
+            "the bulk/defect cells are commensurate."
+        ) from exc
+
+    # Normalize return to float energy
+    if isinstance(corr, (int, float)):
+        energy = float(corr)
+    elif isinstance(corr, dict):
+        for k in ("energy", "correction_energy", "freysoldt_correction_energy", "E_corr"):
+            if k in corr and isinstance(corr[k], (int, float)):
+                energy = float(corr[k])
+                break
+        else:
+            raise RuntimeError(f"Unrecognized correction dict format: keys={list(corr.keys())}")
+    else:
+        energy = getattr(corr, "energy", None)
+        if energy is None:
+            raise RuntimeError(f"Unrecognized correction return type: {type(corr)}")
+        energy = float(energy)
+
+    return {"freysoldt_correction_energy": energy}

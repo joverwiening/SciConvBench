@@ -1,0 +1,197 @@
+Write a Python function with no required input arguments that computes defect_name_consistency using Pymatgen.
+
+The function is named compute_defect_properties and accepts no required arguments. It has an optional parameter file_path that defaults to the current working directory.
+
+Include a complete docstring describing the function, its optional input parameter file_path as a string, and the returned dictionary with key defect_name_consistency as a boolean.
+
+Import the following at the top of the function file: os, gzip, shutil, tempfile, from pymatgen.core import Structure, from pymatgen.io.vasp.outputs import Vasprun and Locpot, from pymatgen.analysis.defects.core import Substitution and PeriodicSite, from pymatgen.analysis.defects.thermo import DefectEntry.
+
+Load the bulk structure from os.path.join(file_path, "GaN.vasp") using Structure.from_file.
+
+Load the bulk LOCPOT from os.path.join(file_path, "bulk_sc", "LOCPOT.gz") by decompressing the gz file into a temporary file and then calling Locpot.from_file on the temporary file path.
+
+For each charge state in [-2, -1, 0, 1], do the following. Decompress vasprun.xml.gz from os.path.join(file_path, "Mg_Ga", "charge_" + str(q), "vasprun.xml.gz") into a temporary file and parse it with Vasprun. Decompress LOCPOT.gz from os.path.join(file_path, "Mg_Ga", "charge_" + str(q), "LOCPOT.gz") into a temporary file and parse it with Locpot. Extract the defect structure from vasprun.final_structure. Identify the Mg substitution site by finding the site in the defect structure where the species is Mg. Create a PeriodicSite for the substitution using the Mg site's species, fractional coordinates, and the bulk structure lattice. Create a Substitution defect object using the bulk structure and the Mg periodic site. Create a DefectEntry using the Substitution object, charge state q, and the parsed Vasprun and Locpot data as needed by the Pymatgen API. Append the DefectEntry to a list called mg_ga_entries.
+
+Construct a Ga-vacancy reference entry programmatically as follows. Use the bulk structure. Find the first Ga site in the bulk structure. Create a PeriodicSite for that Ga site using its species, fractional coordinates, and the bulk structure lattice. Create a Vacancy defect object from pymatgen.analysis.defects.core using the bulk structure and the Ga periodic site. Create a DefectEntry for this vacancy with charge state 0. Append this entry to a separate list called reference_entries.
+
+Form a mixed group by combining mg_ga_entries and reference_entries into one list called mixed_group.
+
+Compute defect_name_consistency as follows. Extract the defect name from each DefectEntry in mixed_group by accessing entry.defect.name or the equivalent Pymatgen attribute that returns the string name of the defect. Collect all names into a set. Set defect_name_consistency to True if the length of the set is 1, and False otherwise.
+
+Return a dictionary with the single key "defect_name_consistency" mapped to the boolean value computed above.
+
+Clean up all temporary files after use with try/finally blocks or the tempfile context manager to ensure no temp files are left on disk.
+
+```python
+import os
+import gzip
+import shutil
+import tempfile
+from pymatgen.core import Structure, PeriodicSite
+from pymatgen.io.vasp.outputs import Vasprun, Locpot
+from pymatgen.analysis.defects.core import Substitution, Vacancy
+from pymatgen.analysis.defects.thermo import DefectEntry
+
+
+def compute_defect_properties(file_path="."):
+    """
+    Compute defect properties for Mg_Ga defect entries in GaN using Pymatgen.
+
+    This function loads the bulk GaN structure and LOCPOT, parses VASP output
+    files for Mg_Ga substitution defects at charge states -2, -1, 0, and +1,
+    constructs a programmatic Ga-vacancy reference entry, and evaluates whether
+    all entries in the mixed group share the same defect name.
+
+    Parameters
+    ----------
+    file_path : str, optional
+        Path to the base directory containing GaN.vasp, bulk_sc/LOCPOT.gz,
+        and Mg_Ga/charge_<q>/ subdirectories. Defaults to the current working
+        directory.
+
+    Returns
+    -------
+    dict
+        A dictionary with the following key:
+        - "defect_name_consistency" (bool): True if every DefectEntry in the
+          mixed group (Mg_Ga charge states plus the Ga-vacancy reference) shares
+          the same defect name; False otherwise.
+    """
+
+    def _decompress_gz(gz_path):
+        """Decompress a .gz file to a named temporary file; return its path."""
+        suffix = os.path.splitext(gz_path.replace(".gz", ""))[1]
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        tmp.close()
+        with gzip.open(gz_path, "rb") as f_in, open(tmp.name, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        return tmp.name
+
+    # ------------------------------------------------------------------ #
+    # 1. Load bulk structure
+    # ------------------------------------------------------------------ #
+    bulk_structure = Structure.from_file(os.path.join(file_path, "GaN.vasp"))
+
+    # ------------------------------------------------------------------ #
+    # 2. Load bulk LOCPOT
+    # ------------------------------------------------------------------ #
+    bulk_locpot_gz = os.path.join(file_path, "bulk_sc", "LOCPOT.gz")
+    tmp_bulk_locpot = _decompress_gz(bulk_locpot_gz)
+    try:
+        bulk_locpot = Locpot.from_file(tmp_bulk_locpot)
+    finally:
+        os.remove(tmp_bulk_locpot)
+
+    # ------------------------------------------------------------------ #
+    # 3. Build Mg_Ga DefectEntry objects for each charge state
+    # ------------------------------------------------------------------ #
+    mg_ga_entries = []
+
+    for q in [-2, -1, 0, 1]:
+        charge_dir = os.path.join(file_path, "Mg_Ga", f"charge_{q}")
+
+        # Decompress and parse vasprun.xml.gz
+        tmp_vasprun = _decompress_gz(os.path.join(charge_dir, "vasprun.xml.gz"))
+        try:
+            vasprun = Vasprun(tmp_vasprun, parse_potcar_file=False)
+        finally:
+            os.remove(tmp_vasprun)
+
+        # Decompress and parse LOCPOT.gz
+        tmp_locpot = _decompress_gz(os.path.join(charge_dir, "LOCPOT.gz"))
+        try:
+            defect_locpot = Locpot.from_file(tmp_locpot)
+        finally:
+            os.remove(tmp_locpot)
+
+        defect_structure = vasprun.final_structure
+
+        # Find the Mg substitution site in the defect structure
+        mg_site = None
+        for site in defect_structure:
+            if site.species_string == "Mg":
+                mg_site = site
+                break
+
+        if mg_site is None:
+            raise ValueError(
+                f"No Mg site found in defect structure for charge state {q}."
+            )
+
+        # Create the substitution periodic site referenced to the bulk lattice
+        sub_site = PeriodicSite(
+            species=mg_site.species,
+            coords=mg_site.frac_coords,
+            lattice=bulk_structure.lattice,
+            coords_are_cartesian=False,
+        )
+
+        # Build the Substitution defect and its DefectEntry
+        substitution_defect = Substitution(bulk_structure, sub_site)
+
+        defect_entry = DefectEntry(
+            defect=substitution_defect,
+            charge_state=q,
+            sc_entry=vasprun.get_computed_entry(inc_structure=True),
+            sc_defect_frac_coords=mg_site.frac_coords,
+            bulk_entry=None,
+        )
+
+        mg_ga_entries.append(defect_entry)
+
+    # ------------------------------------------------------------------ #
+    # 4. Build a programmatic Ga-vacancy reference entry (charge 0)
+    # ------------------------------------------------------------------ #
+    ga_site = None
+    for site in bulk_structure:
+        if site.species_string == "Ga":
+            ga_site = site
+            break
+
+    if ga_site is None:
+        raise ValueError("No Ga site found in the bulk structure.")
+
+    vac_site = PeriodicSite(
+        species=ga_site.species,
+        coords=ga_site.frac_coords,
+        lattice=bulk_structure.lattice,
+        coords_are_cartesian=False,
+    )
+
+    vacancy_defect = Vacancy(bulk_structure, vac_site)
+
+    # Minimal ComputedStructureEntry for the vacancy reference
+    from pymatgen.entries.computed_entries import ComputedStructureEntry
+
+    vacancy_sc_entry = ComputedStructureEntry(
+        structure=bulk_structure.copy(),
+        energy=0.0,
+    )
+
+    vacancy_entry = DefectEntry(
+        defect=vacancy_defect,
+        charge_state=0,
+        sc_entry=vacancy_sc_entry,
+        sc_defect_frac_coords=ga_site.frac_coords,
+        bulk_entry=None,
+    )
+
+    reference_entries = [vacancy_entry]
+
+    # ------------------------------------------------------------------ #
+    # 5. Form the mixed group and evaluate defect_name_consistency
+    # ------------------------------------------------------------------ #
+    mixed_group = mg_ga_entries + reference_entries
+
+    defect_names = set()
+    for entry in mixed_group:
+        # Pymatgen DefectEntry exposes the defect name via entry.defect.name
+        defect_names.add(entry.defect.name)
+
+    defect_name_consistency = len(defect_names) == 1
+
+    # ------------------------------------------------------------------ #
+    # 6. Return results
+    # ------------------------------------------------------------------ #
+    return {"defect_name_consistency": defect_name_consistency}
+```

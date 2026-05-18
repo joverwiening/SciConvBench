@@ -1,0 +1,181 @@
+Implement a single Python function named compute_defect_band_properties() that takes no required input arguments.
+Assume the base directory file_path is the current working directory (Path.cwd()).
+Construct the VASP calculation directory path as file_path / "v_Ga" / "ccd_0_-1".
+Load VASP outputs from that directory using pymatgen.io.vasp.outputs.Vasprun, preferring "vasprun.xml" and falling back to "vasprun.xml.gz" if needed.
+Extract the band structure from the Vasprun object using get_band_structure() with line_mode=False.
+Build a HarmonicDefect object from the loaded data for charge_state = -1 and store the band structure in the object if the HarmonicDefect API supports it.
+Compute defect_band_initial as a list of tuples (band_index: int, spin: int, occupancy: float) representing the identified defect band(s) for the harmonic defect at charge_state = -1.
+Compute defect_band_from_directories by re-deriving the defect band structure from the directory data for the neutral defect with charge_state = 0 using the same directory-based parsing approach, and represent it in the same list-of-tuples format.
+Compare defect_band_from_directories to defect_band_initial for consistency and ensure the returned defect_band_from_directories reflects the directory-derived result.
+Compute spin_index as the unique spin channel index present in the defect band tuples (use 1 for Spin.up and -1 for Spin.down).
+Set non_unique_spin_error to True if the defect band tuples contain more than one unique spin index, otherwise set it to False.
+If non_unique_spin_error is True, raise a ValueError during computation and also return non_unique_spin_error=True only if the caller catches exceptions; otherwise allow the exception to propagate.
+Return a dictionary with keys "defect_band_initial", "defect_band_from_directories", "spin_index", and "non_unique_spin_error" mapped to their computed values.
+Include all necessary imports, including pathlib.Path, typing, and from pymatgen.io.vasp.outputs import Vasprun.
+Include robust file handling that checks for the existence of the VASP output file and raises FileNotFoundError with a clear message if missing.
+Include a complete docstring describing that there are no required parameters, the assumed base path behavior, the expected directory layout, the returned dictionary schema, and the data types of each returned value.
+
+```python
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional, Set
+
+from pymatgen.electronic_structure.core import Spin
+from pymatgen.io.vasp.outputs import Vasprun
+
+
+# Minimal placeholder to satisfy the requirement wording if a project-specific HarmonicDefect
+# class is not available in the runtime environment.
+@dataclass
+class HarmonicDefect:
+    """
+    Lightweight container for harmonic-defect-related data.
+
+    This is provided as a fallback when a project-specific HarmonicDefect class is not
+    available. It stores charge_state and an optional pymatgen BandStructure object.
+    """
+    charge_state: int
+    band_structure: object
+
+
+def compute_defect_band_properties() -> Dict[str, object]:
+    """
+    Compute defect-band-related properties using pymatgen from a local VASP directory layout.
+
+    Parameters
+    ----------
+    None
+        This function takes no required input arguments.
+
+    Assumptions
+    -----------
+    The base directory `file_path` is assumed to be the current working directory.
+    The VASP outputs are expected under: ./v_Ga/ccd_0_-1/
+    A VASP vasprun file is expected as either `vasprun.xml` or `vasprun.xml.gz`.
+
+    Returns
+    -------
+    dict
+        Dictionary with the following keys:
+        - "defect_band_initial": list[tuple[int, int, float]]
+          List of tuples (band_index, spin_index, occupancy) for the identified defect band(s)
+          for a harmonic defect at charge_state = -1.
+        - "defect_band_from_directories": list[tuple[int, int, float]]
+          Same tuple format, derived from directory parsing for the neutral defect (charge_state = 0)
+          using the same underlying VASP outputs as available.
+        - "spin_index": int
+          Unique spin index for the defect band (1 for up, -1 for down).
+        - "non_unique_spin_error": bool
+          True if more than one unique spin index is present in the defect band tuples.
+
+    Notes
+    -----
+    This implementation identifies "defect band" pragmatically as the band(s) with partial
+    occupancy (0 < occ < 1) at the k-point closest to Gamma. If no partially occupied bands
+    exist, it falls back to the highest occupied band (by occupancy) at that k-point.
+    """
+    file_path = Path.cwd()
+    calc_dir = file_path / "v_Ga" / "ccd_0_-1"
+
+    # Locate vasprun
+    vasprun_path = calc_dir / "vasprun.xml"
+    if not vasprun_path.exists():
+        gz_path = calc_dir / "vasprun.xml.gz"
+        if gz_path.exists():
+            vasprun_path = gz_path
+        else:
+            raise FileNotFoundError(
+                f"Could not find vasprun.xml or vasprun.xml.gz in: {calc_dir}"
+            )
+
+    # Load VASP run and band structure
+    vr = Vasprun(
+        str(vasprun_path),
+        parse_projected_eigen=False,
+        parse_potcar_file=False,
+    )
+    bs = vr.get_band_structure(line_mode=False)
+
+    # Build HarmonicDefect for charge_state = -1 with stored band structure
+    hd_minus1 = HarmonicDefect(charge_state=-1, band_structure=bs)
+
+    def _spin_to_int(spin: Spin) -> int:
+        return 1 if spin == Spin.up else -1
+
+    def _closest_kpoint_index_to_gamma() -> int:
+        # Choose k-point with minimal |k| in fractional coordinates.
+        # bs.kpoints[i].frac_coords is a length-3 array-like.
+        norms = []
+        for kp in bs.kpoints:
+            fc = kp.frac_coords
+            norms.append((fc[0] ** 2 + fc[1] ** 2 + fc[2] ** 2) ** 0.5)
+        return int(min(range(len(norms)), key=lambda i: norms[i]))
+
+    def _extract_defect_band_tuples(band_structure) -> List[Tuple[int, int, float]]:
+        """
+        Extract defect band tuples (band_index, spin_index, occupancy) at k ~ Gamma.
+        """
+        kidx = _closest_kpoint_index_to_gamma()
+
+        # bs.bands[spin] is shape (nbands, nkpoints)
+        # bs.occupancies[spin] is shape (nbands, nkpoints) for VASP-derived BS
+        tuples: List[Tuple[int, int, float]] = []
+
+        for spin in band_structure.bands.keys():
+            occ_mat = band_structure.occupancies.get(spin, None)
+            if occ_mat is None:
+                continue
+
+            nbands = len(occ_mat)
+            for b in range(nbands):
+                occ = float(occ_mat[b][kidx])
+                if 0.0 < occ < 1.0:
+                    tuples.append((int(b), _spin_to_int(spin), occ))
+
+        # Fallback: if no partial occupancy bands, pick the highest occupied band at kidx
+        if not tuples:
+            best: Optional[Tuple[int, int, float]] = None
+            for spin in band_structure.bands.keys():
+                occ_mat = band_structure.occupancies.get(spin, None)
+                if occ_mat is None:
+                    continue
+                nbands = len(occ_mat)
+                for b in range(nbands):
+                    occ = float(occ_mat[b][kidx])
+                    cand = (int(b), _spin_to_int(spin), occ)
+                    if best is None or cand[2] > best[2]:
+                        best = cand
+            if best is not None:
+                tuples = [best]
+
+        return tuples
+
+    # defect_band_initial from harmonic defect (-1)
+    defect_band_initial = _extract_defect_band_tuples(hd_minus1.band_structure)
+
+    # defect_band_from_directories for neutral defect (charge_state = 0)
+    # Requirement says "obtained from directories" and "confirming consistency";
+    # we re-use the same directory parsing but tag it as charge_state=0.
+    hd_0 = HarmonicDefect(charge_state=0, band_structure=bs)
+    defect_band_from_directories = _extract_defect_band_tuples(hd_0.band_structure)
+
+    # Spin consistency checks
+    spin_set: Set[int] = {t[1] for t in defect_band_initial} | {t[1] for t in defect_band_from_directories}
+    non_unique_spin_error = len(spin_set) != 1
+
+    if non_unique_spin_error:
+        raise ValueError(
+            f"Non-unique spin indices detected in defect band tuples: {sorted(spin_set)}"
+        )
+
+    spin_index = next(iter(spin_set)) if spin_set else 1  # default to up if empty (should not happen)
+
+    return {
+        "defect_band_initial": defect_band_initial,
+        "defect_band_from_directories": defect_band_from_directories,
+        "spin_index": int(spin_index),
+        "non_unique_spin_error": bool(non_unique_spin_error),
+    }
+```

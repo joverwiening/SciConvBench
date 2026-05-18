@@ -1,0 +1,162 @@
+I have all the information needed to write a complete, unambiguous specification.
+
+
+
+Solve the 2D heat equation numerically and save the results as described below.
+
+The PDE is u_t = 0.01 * (u_xx + u_yy) + 10*exp(-50*((x-0.5)**2 + (y-0.5)**2)).
+The spatial domain is (x,y) in [0,1] x [0,1] and the time domain is t in [0, 0.5].
+The diffusion coefficient alpha is 0.01.
+
+Use a uniform grid on [0,1] x [0,1] with Nx=Ny=80 intervals, giving 81 x 81 grid points including both endpoints.
+Set dx = 1/80 and dy = 1/80.
+Set x_i = i*dx for i=0..80 and y_j = j*dy for j=0..80.
+Use dt=0.001 and take 500 time steps to reach T=0.5.
+
+Apply zero Dirichlet boundary conditions: u=0 on all four edges at all times.
+Set the initial condition u(x,y,0)=0 everywhere.
+
+Discretize the Laplacian using the standard 5-point stencil (second-order centered differences) on interior nodes.
+Use implicit Euler (backward Euler) time integration for the diffusion terms.
+At each time step, add the source term 10*exp(-50*((x-0.5)**2 + (y-0.5)**2)) explicitly evaluated at the current interior grid points to the right-hand side.
+Enforce Dirichlet boundary conditions by fixing boundary nodes to zero each step.
+Assemble and solve the sparse linear system for interior nodes only at each time step using a sparse solver (e.g., scipy.sparse.linalg.spsolve).
+
+After 500 steps, compute u(x,y,T=0.5) on the full 81x81 grid.
+Store the solution as a 2D array u with shape (81, 81) such that u[j,i] = u(x_i, y_j).
+
+Save a file named "solution_agent_heat_13.npz" containing: x as a 1D array of length 81, y as a 1D array of length 81, u as the 2D array of shape (81,81), and scalar metadata T=0.5, dx=1/80, dy=1/80, dt=0.001.
+
+Save a heatmap or filled-contour plot of u(x,y,T=0.5) as "solution_agent_heat_13.png".
+
+Print the following scalar diagnostics at T=0.5: min(u), max(u), and the discrete L2 norm computed as sqrt(sum(u**2)*dx*dy).
+
+```python
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+
+# Grid parameters
+Nx, Ny = 80, 80
+x = np.linspace(0, 1, Nx+1)
+y = np.linspace(0, 1, Ny+1)
+dx = x[1] - x[0]
+dy = y[1] - y[0]
+dt = 0.001
+T = 0.5
+nsteps = int(round(T / dt))  # 500
+
+alpha = 0.01
+
+# Interior nodes: i=1..Nx-1, j=1..Ny-1
+# Number of interior points in each direction
+nx_int = Nx - 1  # 79
+ny_int = Ny - 1  # 79
+N_int = nx_int * ny_int  # 79*79 = 6241
+
+# Mapping: interior node (ii, jj) with ii=0..nx_int-1, jj=0..ny_int-1
+# corresponds to grid point x[ii+1], y[jj+1]
+# Linear index: k = jj * nx_int + ii
+
+# Build the implicit Euler matrix: (I - dt*alpha*L) u^{n+1} = u^n + dt*S
+# where L is the 5-point Laplacian on interior nodes
+
+# Build sparse Laplacian matrix for interior nodes
+# L_h u_k = (u_{i-1,j} - 2u_{i,j} + u_{i+1,j})/dx^2
+#          + (u_{i,j-1} - 2u_{i,j} + u_{i,j+1})/dy^2
+
+diag_main = -2.0/dx**2 - 2.0/dy**2
+diag_x = 1.0/dx**2
+diag_y = 1.0/dy**2
+
+# Build using diagonals
+main_diag = np.full(N_int, diag_main)
+
+# x-neighbors: offset ±1, but not across row boundaries
+off_x = np.full(N_int - 1, diag_x)
+# Zero out connections across row boundaries (when ii == nx_int-1)
+for jj in range(ny_int):
+    idx = jj * nx_int + (nx_int - 1)  # last column of row jj
+    if idx < N_int - 1:
+        off_x[idx] = 0.0
+
+# y-neighbors: offset ±nx_int
+off_y = np.full(N_int - nx_int, diag_y)
+
+L = sp.diags(
+    [off_y, off_x, main_diag, off_x, off_y],
+    [-nx_int, -1, 0, 1, nx_int],
+    shape=(N_int, N_int),
+    format='csr'
+)
+
+# Build system matrix A = I - dt*alpha*L
+I_mat = sp.eye(N_int, format='csr')
+A = I_mat - dt * alpha * L
+
+# Precompute source term on interior nodes (time-independent)
+X_int, Y_int = np.meshgrid(x[1:Nx], y[1:Ny], indexing='ij')
+# X_int shape: (nx_int, ny_int), X_int[ii,jj] = x[ii+1], Y_int[ii,jj] = y[jj+1]
+S_2d = 10.0 * np.exp(-50.0 * ((X_int - 0.5)**2 + (Y_int - 0.5)**2))
+# Flatten in order: k = jj * nx_int + ii  => need to transpose
+# k = jj * nx_int + ii, so we need S[ii, jj] -> index jj*nx_int+ii
+# Flatten with Fortran order (column-major) to get jj varying slowest... 
+# Actually: k = jj*nx_int + ii means jj is the "row" index in the flat array
+# S_2d[ii, jj], flatten so that ii varies fastest: use order='F'
+S_flat = S_2d.flatten(order='F')  # shape (N_int,), index k=jj*nx_int+ii
+
+# Factorize A once (since A is constant)
+A_factored = spla.splu(A)
+
+# Initial condition
+u_full = np.zeros((Nx+1, Ny+1))  # u_full[i,j] = u(x_i, y_j)
+
+# Time stepping
+u_int = np.zeros(N_int)  # interior values, initially zero
+
+for step in range(nsteps):
+    rhs = u_int + dt * S_flat
+    u_int = A_factored.solve(rhs)
+
+# Reconstruct full solution
+u_full = np.zeros((Nx+1, Ny+1))
+for jj in range(ny_int):
+    for ii in range(nx_int):
+        k = jj * nx_int + ii
+        u_full[ii+1, jj+1] = u_int[k]
+# Boundary remains zero
+
+# u array with shape (len(y), len(x)) so u[j,i] = u(x_i, y_j)
+# u_full[i,j] = u(x_i, y_j), so we need to transpose
+u_out = u_full.T  # shape (Ny+1, Nx+1), u_out[j,i] = u(x_i, y_j)
+
+# Diagnostics
+u_min = np.min(u_out)
+u_max = np.max(u_out)
+l2_norm = np.sqrt(np.sum(u_out**2) * dx * dy)
+print(f"min(u) = {u_min:.6e}")
+print(f"max(u) = {u_max:.6e}")
+print(f"L2 norm = {l2_norm:.6e}")
+
+# Save npz
+np.savez("solution_agent_heat_13.npz",
+         x=x, y=y, u=u_out,
+         T=np.float64(T),
+         dx=np.float64(dx),
+         dy=np.float64(dy),
+         dt=np.float64(dt))
+
+# Save plot
+XX, YY = np.meshgrid(x, y)  # XX[j,i]=x[i], YY[j,i]=y[j]
+plt.figure(figsize=(7, 6))
+cp = plt.contourf(XX, YY, u_out, levels=50, cmap='hot')
+plt.colorbar(cp, label='u(x,y,T)')
+plt.title(f'u(x,y,T=0.5) — Heat Equation (agent_heat_13)')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.tight_layout()
+plt.savefig("solution_agent_heat_13.png", dpi=150)
+plt.close()
+print("Files saved: solution_agent_heat_13.npz, solution_agent_heat_13.png")
+```

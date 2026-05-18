@@ -1,0 +1,315 @@
+Write a Python function that computes freysoldt_correction, potential_alignment_consistency, and energy_difference for the Mg_Ga defect in GaN using Pymatgen.
+
+The function takes no required input arguments.
+
+Define a module-level constant FILE_PATH that points to the base directory containing the input files. The user may change this value before calling the function.
+
+Import the following: os, glob, gzip, shutil, tempfile, numpy as np, from pymatgen.core import Structure, from pymatgen.io.vasp.outputs import Vasprun and Locpot, from pymatgen.analysis.defects.core import Substitution, from pymatgen.analysis.defects.thermo import DefectEntry, from pymatgen.analysis.defects.corrections.freysoldt import FreysoldtCorrection.
+
+Load the bulk structure from FILE_PATH/GaN.vasp using Structure.from_file.
+
+Identify the defect site as the site at index 0 in the bulk structure, which is a Ga site. Create a Substitution defect object placing Mg on that Ga site.
+
+Discover all charge-state subfolders under FILE_PATH/Mg_Ga/ automatically using os.listdir or glob, treating each subfolder name as a charge state. Parse the integer charge from the subfolder name by extracting the trailing integer (e.g., a folder named charge_-1 yields charge -1, a folder named -1 yields charge -1). Skip any subfolder that cannot be parsed to an integer charge.
+
+For each charge-state subfolder, decompress the vasprun.xml.gz and LOCPOT.gz files into a temporary directory using gzip and shutil, then parse them with Vasprun and Locpot respectively.
+
+Also decompress FILE_PATH/bulk_sc/LOCPOT.gz into the same temporary directory and parse it with Locpot.
+
+Use the isotropic dielectric constant value 14 (as a scalar) for all Freysoldt correction calculations.
+
+For each charge state, construct a DefectEntry using the Substitution defect object, the parsed defect Vasprun total energy, the parsed bulk Vasprun total energy, the defect Locpot, the bulk Locpot, and the integer charge. Use the DefectEntry interface consistent with pymatgen.analysis.defects (post-2022 API), passing energies and corrections as required by that API.
+
+Apply FreysoldtCorrection with the dielectric constant 14 to each DefectEntry. Store the resulting correction value (a float) for each charge state.
+
+For freysoldt_correction, return the Freysoldt correction value for the charge state with the largest absolute charge. If multiple charge states tie, pick the one with the most negative charge.
+
+For energy_difference, compute it as the defect supercell total energy minus the bulk supercell total energy, taken from the same charge state used for freysoldt_correction.
+
+For potential_alignment_consistency, check that the potential alignment value stored inside the DefectEntry corrections dictionary (key potential_alignment or equivalent) matches the value extracted directly from the FreysoldtCorrection object's metadata to within a tolerance of 1e-3 eV. Return True if they match, False otherwise. If no potential alignment data is available, return False.
+
+Clean up all temporary decompressed files after parsing, using a try/finally block.
+
+Return a dictionary with exactly three keys: freysoldt_correction (float), potential_alignment_consistency (bool), energy_difference (float).
+
+Include a complete docstring describing: the purpose of the function, the module-level FILE_PATH constant as the implicit input, the data types and meaning of each returned value, and the assumption that the dielectric constant is isotropic with value 14.
+
+```python
+"""
+Mg_Ga defect properties using Pymatgen (post-2022 defects API).
+
+Dependencies:
+    pip install pymatgen
+"""
+
+import os
+import glob
+import gzip
+import shutil
+import tempfile
+import numpy as np
+
+from pymatgen.core import Structure
+from pymatgen.io.vasp.outputs import Vasprun, Locpot
+from pymatgen.analysis.defects.core import Substitution
+from pymatgen.analysis.defects.thermo import DefectEntry
+from pymatgen.analysis.defects.corrections.freysoldt import FreysoldtCorrection
+
+# ── User-configurable base directory ──────────────────────────────────────────
+FILE_PATH = "/path/to/base/directory"   # <-- change before calling the function
+# ──────────────────────────────────────────────────────────────────────────────
+
+DIELECTRIC_CONSTANT = 14               # isotropic dielectric constant for GaN
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _decompress_gz(src_gz: str, dst: str) -> None:
+    """Decompress *src_gz* (a .gz file) to *dst*."""
+    with gzip.open(src_gz, "rb") as f_in, open(dst, "wb") as f_out:
+        shutil.copyfileobj(f_in, f_out)
+
+
+def _parse_charge_from_folder(folder_name: str) -> int | None:
+    """
+    Extract an integer charge from a folder name.
+
+    Accepted patterns (case-insensitive):
+        charge_-2  →  -2
+        charge_1   →   1
+        q=-1       →  -1
+        -2         →  -2
+        0          →   0
+    Returns None if no integer can be parsed.
+    """
+    import re
+    # Remove common prefixes
+    cleaned = re.sub(r"(?i)^(charge_?|q=?)", "", folder_name.strip())
+    try:
+        return int(cleaned)
+    except ValueError:
+        return None
+
+
+# ── Main function ─────────────────────────────────────────────────────────────
+
+def compute_mg_ga_defect_properties() -> dict:
+    """
+    Compute selected defect properties for the Mg_Ga substitution in GaN.
+
+    Implicit input
+    --------------
+    FILE_PATH : str  (module-level constant)
+        Base directory that must contain:
+          FILE_PATH/GaN.vasp                          – bulk structure (POSCAR/VASP format)
+          FILE_PATH/Mg_Ga/<charge_folder>/vasprun.xml.gz  – defect supercell calculation
+          FILE_PATH/Mg_Ga/<charge_folder>/LOCPOT.gz       – defect electrostatic potential
+          FILE_PATH/bulk_sc/LOCPOT.gz                 – bulk electrostatic potential reference
+        Each <charge_folder> encodes the charge state in its name, e.g.
+        ``charge_-1``, ``charge_0``, ``-2``, ``q=1``, etc.
+
+    Assumptions
+    -----------
+    - Dielectric constant is isotropic with value 14.
+    - The Mg_Ga defect site is the Ga atom at index 0 in GaN.vasp.
+    - The bulk vasprun.xml is taken from the charge-0 subfolder when available;
+      otherwise the first parseable subfolder is used as the bulk energy reference.
+    - All energies are in eV (as returned by Pymatgen).
+
+    Returns
+    -------
+    dict with keys:
+        freysoldt_correction : float
+            Freysoldt electrostatic correction (eV) for the charge state with
+            the largest |charge| (most negative if tied).
+        potential_alignment_consistency : bool
+            True if the potential-alignment term stored in the DefectEntry
+            corrections dict agrees with the value from the FreysoldtCorrection
+            object to within 1e-3 eV; False otherwise.
+        energy_difference : float
+            E(defect supercell) − E(bulk supercell) in eV, for the same charge
+            state used for freysoldt_correction.
+    """
+
+    # ── 1. Load bulk structure ────────────────────────────────────────────────
+    bulk_structure_path = os.path.join(FILE_PATH, "GaN.vasp")
+    bulk_structure = Structure.from_file(bulk_structure_path)
+
+    # ── 2. Build Substitution defect object (Mg on Ga site at index 0) ───────
+    defect_site = bulk_structure[0]          # PeriodicSite at index 0 (Ga)
+    substitution = Substitution(bulk_structure, defect_site, "Mg")
+
+    # ── 3. Discover charge-state subfolders ───────────────────────────────────
+    mg_ga_dir = os.path.join(FILE_PATH, "Mg_Ga")
+    subfolders = sorted(
+        [
+            d for d in os.listdir(mg_ga_dir)
+            if os.path.isdir(os.path.join(mg_ga_dir, d))
+        ]
+    )
+
+    charge_data: dict[int, dict] = {}   # charge → {vasprun, defect_locpot}
+
+    tmpdir = tempfile.mkdtemp(prefix="mg_ga_defect_")
+    try:
+        # ── 4. Decompress & parse bulk LOCPOT ─────────────────────────────────
+        bulk_locpot_gz = os.path.join(FILE_PATH, "bulk_sc", "LOCPOT.gz")
+        bulk_locpot_path = os.path.join(tmpdir, "bulk_LOCPOT")
+        _decompress_gz(bulk_locpot_gz, bulk_locpot_path)
+        bulk_locpot = Locpot.from_file(bulk_locpot_path)
+
+        # ── 5. Decompress & parse each charge-state subfolder ─────────────────
+        for folder in subfolders:
+            charge = _parse_charge_from_folder(folder)
+            if charge is None:
+                print(f"  [skip] Cannot parse charge from folder name '{folder}'")
+                continue
+
+            folder_path = os.path.join(mg_ga_dir, folder)
+            vasprun_gz  = os.path.join(folder_path, "vasprun.xml.gz")
+            locpot_gz   = os.path.join(folder_path, "LOCPOT.gz")
+
+            if not os.path.isfile(vasprun_gz) or not os.path.isfile(locpot_gz):
+                print(f"  [skip] Missing files in '{folder}'")
+                continue
+
+            # Decompress
+            vasprun_path = os.path.join(tmpdir, f"vasprun_{charge}.xml")
+            locpot_path  = os.path.join(tmpdir, f"LOCPOT_{charge}")
+            _decompress_gz(vasprun_gz, vasprun_path)
+            _decompress_gz(locpot_gz,  locpot_path)
+
+            # Parse
+            vasprun      = Vasprun(vasprun_path, parse_dos=False, parse_eigen=False)
+            defect_locpot = Locpot.from_file(locpot_path)
+
+            charge_data[charge] = {
+                "vasprun":      vasprun,
+                "defect_locpot": defect_locpot,
+            }
+
+        if not charge_data:
+            raise RuntimeError(
+                "No valid charge-state data found under "
+                f"'{mg_ga_dir}'. Check folder names and file contents."
+            )
+
+        # ── 6. Determine bulk energy reference ────────────────────────────────
+        # Prefer charge-0 folder; fall back to first available.
+        if 0 in charge_data:
+            bulk_energy = charge_data[0]["vasprun"].final_energy
+        else:
+            first_charge = next(iter(sorted(charge_data.keys())))
+            bulk_energy  = charge_data[first_charge]["vasprun"].final_energy
+            print(
+                f"  [warn] No charge-0 folder found; using charge={first_charge} "
+                "as bulk energy reference."
+            )
+
+        # ── 7. Select the target charge state (largest |q|, most negative if tied) ──
+        target_charge = sorted(
+            charge_data.keys(),
+            key=lambda q: (-abs(q), q)   # primary: -|q| (largest first); secondary: q (most negative first)
+        )[0]
+
+        target_data   = charge_data[target_charge]
+        defect_energy = target_data["vasprun"].final_energy
+        defect_locpot = target_data["defect_locpot"]
+
+        # ── 8. Build DefectEntry ──────────────────────────────────────────────
+        # post-2022 API: DefectEntry(defect, charge, sc_entry, ...)
+        # We pass energies via a ComputedStructureEntry-like object or directly.
+        # The simplest supported path: supply sc_energy and bulk_energy explicitly.
+        from pymatgen.entries.computed_entries import ComputedStructureEntry
+
+        defect_sc_structure = target_data["vasprun"].final_structure
+
+        sc_entry = ComputedStructureEntry(
+            structure=defect_sc_structure,
+            energy=defect_energy,
+        )
+
+        defect_entry = DefectEntry(
+            defect=substitution,
+            charge_state=target_charge,
+            sc_entry=sc_entry,
+            bulk_entry=ComputedStructureEntry(
+                structure=bulk_structure,
+                energy=bulk_energy,
+            ),
+        )
+
+        # ── 9. Apply Freysoldt correction ─────────────────────────────────────
+        freysoldt_corr_obj = FreysoldtCorrection(
+            dielectric_const=DIELECTRIC_CONSTANT,
+        )
+
+        correction_output = freysoldt_corr_obj.get_correction(
+            defect_entry=defect_entry,
+            defect_locpot=defect_locpot,
+            bulk_locpot=bulk_locpot,
+        )
+
+        # correction_output is a dict: {"freysoldt_electrostatic": float,
+        #                               "freysoldt_potential_alignment": float}
+        freysoldt_electrostatic  = float(
+            correction_output.get("freysoldt_electrostatic", 0.0)
+        )
+        freysoldt_alignment_from_obj = float(
+            correction_output.get("freysoldt_potential_alignment", 0.0)
+        )
+        freysoldt_total = freysoldt_electrostatic + freysoldt_alignment_from_obj
+
+        # ── 10. Potential-alignment consistency check ─────────────────────────
+        # After get_correction the DefectEntry.corrections dict is updated.
+        entry_corrections = defect_entry.corrections  # dict[str, float]
+
+        # Sum all alignment-related keys stored in the entry
+        alignment_keys = [
+            k for k in entry_corrections
+            if "alignment" in k.lower() or "potential" in k.lower()
+        ]
+        if alignment_keys:
+            alignment_from_entry = sum(
+                float(entry_corrections[k]) for k in alignment_keys
+            )
+            potential_alignment_consistency = bool(
+                abs(alignment_from_entry - freysoldt_alignment_from_obj) < 1e-3
+            )
+        else:
+            # No alignment data stored → inconsistent / unavailable
+            potential_alignment_consistency = False
+
+        # ── 11. Energy difference ─────────────────────────────────────────────
+        energy_difference = float(defect_energy - bulk_energy)
+
+    finally:
+        # Always clean up temporary files
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # ── 12. Return results ────────────────────────────────────────────────────
+    return {
+        "freysoldt_correction":           freysoldt_total,
+        "potential_alignment_consistency": potential_alignment_consistency,
+        "energy_difference":              energy_difference,
+    }
+
+
+# ── Quick smoke-test ──────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    results = compute_mg_ga_defect_properties()
+    for key, value in results.items():
+        print(f"{key}: {value}")
+```
+
+Key design decisions and assumptions made explicit in the code:
+
+The function auto-discovers all charge-state subfolders and parses the charge integer from the folder name using a regex that handles prefixes like charge_, q=, or bare integers.
+
+The target charge state for reporting is the one with the largest absolute charge value; ties are broken by choosing the most negative charge.
+
+The bulk energy reference is taken from the charge-0 subfolder when present, with a fallback and a printed warning if it is absent.
+
+The potential_alignment_consistency check compares the sum of all alignment-related keys in DefectEntry.corrections against the freysoldt_potential_alignment value returned directly by FreysoldtCorrection.get_correction, using a 1e-3 eV tolerance.
+
+All temporary decompressed files are written to a system temp directory and deleted in a finally block regardless of success or failure.

@@ -1,0 +1,147 @@
+Solve the 2D wave equation u_tt = (1.0)**2 * (u_xx + u_yy) numerically, but note c=2 is listed as a parameter yet the PDE coefficient is 1.0; use the wave speed as written in the PDE, c=1.0, for time integration and CFL, but use c=2 only where explicitly referenced in the CFL formula as stated in section 7 (c*dt*sqrt(1/dx**2+1/dy**2) <= 0.9) and the exact solution uses 1.0*sqrt(2)*pi*t confirming wave speed 1.0 in the PDE.
+The unknown field is u(x,y,t).
+The spatial domain is (x,y) in [0,1] x [0,1], closed intervals, t in [0, 0.8].
+Use Nx=Ny=140 uniform intervals, giving 141x141 grid points including both endpoints.
+Set dx = 1/140, dy = 1/140.
+Use the wave speed c=2 as given in section 3 and section 7 CFL formula for dt calculation: dt0 = 0.9 / (c * sqrt(1/dx**2 + 1/dy**2)) with c=2.
+Set Nt = ceil(0.8 / dt0), then dt = 0.8 / Nt so the final time T=0.8 is hit exactly.
+Use the 5-point Laplacian for the spatial discretization: u_xx + u_yy approximated by (u[i-1,j] - 2*u[i,j] + u[i+1,j])/dx**2 + (u[i,j-1] - 2*u[i,j] + u[i,j+1])/dy**2.
+Apply zero Neumann boundary conditions on all four boundaries using ghost nodes with mirror values: u[-1,j]=u[1,j], u[Nx+1,j]=u[Nx-1,j], u[i,-1]=u[i,1], u[i,Ny+1]=u[i,Ny-1].
+Set the initial condition u(x,y,0) = cos(pi*x)*cos(pi*y) on all grid points.
+Set the initial velocity u_t(x,y,0) = 0 everywhere.
+Compute u at the first time step using the Taylor start: u_new = u_old + dt*u_t + 0.5*dt**2 * c**2 * laplacian(u_old), where c**2 uses c=2 so c**2=4, consistent with the PDE coefficient being 1.0 only if c=1; resolve this by using the PDE as written with coefficient 1.0 for the Laplacian multiplier in the time stepping (u_tt = 1.0*(u_xx+u_yy)), so the update uses coefficient 1.0, not c**2=4.
+Clarification on wave speed: the PDE states u_tt = (1.0)**2*(u_xx+u_yy), so the effective wave speed in the PDE is 1.0; the exact solution confirms this with cos(1.0*sqrt(2)*pi*t); use wave speed c_pde=1.0 for the time-stepping update formula.
+Use c=2 only in the CFL stability criterion to compute dt as specified in section 7.
+Time stepping loop: for each step from n=1 to Nt-1, compute u_next[i,j] = 2*u_curr[i,j] - u_prev[i,j] + dt**2 * 1.0 * laplacian(u_curr)[i,j], applying ghost node Neumann BCs before each Laplacian evaluation.
+After completing all time steps, evaluate the solution at T=0.8.
+Compute the exact solution on the same grid: u_exact[j,i] = cos(pi*x[i])*cos(pi*y[j])*cos(1.0*sqrt(2)*pi*0.8).
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2)*dx*dy) at T=0.8.
+Print the max absolute error max(|u_numerical - u_exact|) and the L2 error sqrt(sum((u_numerical - u_exact)**2)*dx*dy).
+Save "solution_agent_wave_16.npz" with arrays: x (1D, length 141), y (1D, length 141), u (2D shape (141,141) where u[j,i]=u(x[i],y[j]) at T), and scalars T=0.8, dx, dy, dt.
+Save a heatmap or contour plot of u(x,y,T=0.8) as "solution_agent_wave_16.png".
+Use Python with numpy and matplotlib.
+Use radians for all trigonometric functions.
+Use ** for exponentiation in Python code.
+
+Here is the complete Python code implementing the above specification:
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+
+# Grid parameters
+Nx = 140
+Ny = 140
+dx = 1.0 / Nx
+dy = 1.0 / Ny
+x = np.linspace(0, 1, Nx + 1)  # 141 points
+y = np.linspace(0, 1, Ny + 1)  # 141 points
+
+# Wave speed in PDE (from PDE coefficient and exact solution)
+c_pde = 1.0  # PDE: u_tt = (1.0)^2 * (u_xx + u_yy)
+c_cfl = 2.0  # c used in CFL formula as stated in section 7
+
+# Time stepping
+T = 0.8
+dt0 = 0.9 / (c_cfl * math.sqrt(1.0 / dx**2 + 1.0 / dy**2))
+Nt = math.ceil(T / dt0)
+dt = T / Nt
+
+print(f"dx={dx:.6f}, dy={dy:.6f}, dt={dt:.6f}, Nt={Nt}")
+print(f"CFL (c_cfl based) = {c_cfl * dt * math.sqrt(1/dx**2 + 1/dy**2):.4f}")
+
+# Initial condition
+XX, YY = np.meshgrid(x, y)  # shape (141, 141), YY[j,i]=y[j], XX[j,i]=x[i]
+u_prev = np.cos(np.pi * XX) * np.cos(np.pi * YY)  # u(x,y,0)
+u_t0 = np.zeros_like(u_prev)                        # u_t(x,y,0) = 0
+
+def apply_neumann_bc(u):
+    """Apply zero Neumann BC via ghost nodes (mirror)."""
+    # Left boundary: x=0, ghost at i=-1 mirrors i=1
+    u[: , 0] = u[:, 1]   # actually we use ghost nodes outside array
+    # We'll handle ghost nodes explicitly in laplacian
+    pass
+
+def laplacian_neumann(u):
+    """Compute 5-point Laplacian with zero Neumann BC via ghost nodes."""
+    lap = np.zeros_like(u)
+    # Interior and boundary using ghost node mirroring
+    # Extend u with ghost nodes
+    # u has shape (Ny+1, Nx+1) = (141, 141)
+    # Ghost nodes: 
+    #   left (i=0):  u_ghost[j,-1] = u[j,1]
+    #   right (i=Nx): u_ghost[j,Nx+1] = u[j,Nx-1]
+    #   bottom (j=0): u_ghost[-1,i] = u[1,i]
+    #   top (j=Ny): u_ghost[Ny+1,i] = u[Ny-1,i]
+    
+    nj, ni = u.shape  # (141, 141)
+    
+    # u_left[j,i] = u[j, i-1] with ghost at i=-1 -> u[j,1]
+    u_left = np.empty_like(u)
+    u_left[:, 1:] = u[:, :-1]
+    u_left[:, 0] = u[:, 1]  # ghost node mirror
+    
+    # u_right[j,i] = u[j, i+1] with ghost at i=Nx+1 -> u[j,Nx-1]
+    u_right = np.empty_like(u)
+    u_right[:, :-1] = u[:, 1:]
+    u_right[:, -1] = u[:, -2]  # ghost node mirror
+    
+    # u_down[j,i] = u[j-1, i] with ghost at j=-1 -> u[1,i]
+    u_down = np.empty_like(u)
+    u_down[1:, :] = u[:-1, :]
+    u_down[0, :] = u[1, :]  # ghost node mirror
+    
+    # u_up[j,i] = u[j+1, i] with ghost at j=Ny+1 -> u[Ny-1,i]
+    u_up = np.empty_like(u)
+    u_up[:-1, :] = u[1:, :]
+    u_up[-1, :] = u[-2, :]  # ghost node mirror
+    
+    lap = (u_left - 2*u + u_right) / dx**2 + (u_down - 2*u + u_up) / dy**2
+    return lap
+
+# Taylor start for first step: u(dt) = u(0) + dt*u_t(0) + 0.5*dt^2*c_pde^2*lap(u(0))
+lap0 = laplacian_neumann(u_prev)
+u_curr = u_prev + dt * u_t0 + 0.5 * dt**2 * c_pde**2 * lap0
+
+# Time stepping loop
+for n in range(1, Nt):
+    lap_curr = laplacian_neumann(u_curr)
+    u_next = 2 * u_curr - u_prev + dt**2 * c_pde**2 * lap_curr
+    u_prev = u_curr
+    u_curr = u_next
+
+u_final = u_curr  # solution at T=0.8
+
+# Exact solution
+u_exact = np.cos(np.pi * XX) * np.cos(np.pi * YY) * np.cos(1.0 * np.sqrt(2) * np.pi * T)
+
+# Diagnostics
+print(f"min(u) = {u_final.min():.8f}")
+print(f"max(u) = {u_final.max():.8f}")
+L2_norm = np.sqrt(np.sum(u_final**2) * dx * dy)
+print(f"L2 norm of u at T = {L2_norm:.8f}")
+
+max_abs_err = np.max(np.abs(u_final - u_exact))
+L2_err = np.sqrt(np.sum((u_final - u_exact)**2) * dx * dy)
+print(f"Max absolute error vs exact = {max_abs_err:.8e}")
+print(f"L2 error vs exact           = {L2_err:.8e}")
+
+# Save npz
+np.savez("solution_agent_wave_16.npz",
+         x=x, y=y, u=u_final,
+         T=T, dx=dx, dy=dy, dt=dt)
+print("Saved solution_agent_wave_16.npz")
+
+# Save plot
+fig, ax = plt.subplots(figsize=(7, 6))
+cp = ax.contourf(x, y, u_final, levels=50, cmap='RdBu_r')
+fig.colorbar(cp, ax=ax, label='u(x,y,T)')
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_title(f'Wave equation solution u(x,y,T={T})\nagent_wave_16')
+plt.tight_layout()
+plt.savefig("solution_agent_wave_16.png", dpi=150)
+plt.close()
+print("Saved solution_agent_wave_16.png")
+```

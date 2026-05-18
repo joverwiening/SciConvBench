@@ -1,0 +1,163 @@
+Below is a **copy‑and‑paste ready** recipe for a **MEAN ROTATION** MPC in Abaqus.  
+Just drop the highlighted lines into your *.inp* (or add them through the GUI) and you’re done.
+
+---
+
+## 1️⃣ What you must have in the model  
+
+| Item | Why it’s needed | How to create it (inp syntax) |
+|------|----------------|------------------------------|
+| **Node set** (`NSET`) containing the nodes whose rotations you want to average | The MPC works on a *set* of nodes. | `*Nset, nset=MYSET`  <br>`n1, n2, n3, …` |
+| **Reference node** – a single node that will receive the averaged rotation | This node will get the mean value. It **must NOT** belong to the set above. | `*Node` <br>`9999, x, y, z` (any unused node number) |
+| **Elements with rotational DOFs** (3‑D beams, shells or solids) | Only these elements have `UR1‑UR3`. | e.g. `*Element, type=B31` … |
+
+*If you already have these, skip to step 2.*
+
+---
+
+## 2️⃣ The MPC line (the only line you need)
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=MYSET, REF NODE=9999
+```
+
+*No additional data lines follow – the whole definition is on this single line.*
+
+---
+
+## 3️⃣ Where to put it  
+
+| Situation | Placement |
+|-----------|-----------|
+| **Global (active for every step)** | **Immediately before the first `*STEP`** in the input file (or in the “Model” tree before any step). |
+| **Only for a particular step** | Put the line **inside** the step, then delete it at the end of that step: <br>`*MPC, OP=DELETE, TYPE=MEANROT, NSET=MYSET, REF NODE=9999` |
+
+---
+
+## 4️⃣ What the MPC does  
+
+For each rotational component *k* (1, 2, 3):
+
+\[
+\boxed{\;UR_k^{\text{ref}} = \frac{1}{N}\sum_{i\in\text{MYSET}} UR_k^{(i)}\;}
+\]
+
+The reference node (`9999`) receives the arithmetic mean of the rotations of all nodes in `MYSET`.  
+The constraint is **kinematic** – it adds no stiffness, only the equality above.
+
+---
+
+## 5️⃣ Common pitfalls (quick‑scan checklist)
+
+| # | Pitfall | Symptom / error | Fix |
+|---|---------|----------------|-----|
+| 1 | Reference node also listed in `MYSET` | “Reference node cannot be in the node set” abort | Use a different node number for the reference node. |
+| 2 | `MYSET` empty or contains only one node | MPC is ignored (warning) | Ensure at least two nodes are in the set. |
+| 3 | Using elements without rotational DOFs (e.g. 2‑D trusses) | No effect on the reference node | Use 3‑D beams, shells, or solids. |
+| 4 | Placing the `*MPC` line **inside** a `*STEP` block when you want a global constraint | Constraint not applied (or Abaqus says “Undefined MPC”) | Move the line before the first `*STEP`. |
+| 5 | Keeping the MPC active when it’s only needed for one step | Over‑constrained later steps | Add the `OP=DELETE` line at the end of the step where it’s no longer needed. |
+| 6 | Also fixing the reference node’s rotations with a `*Boundary` | Averaged rotation forced to zero | Apply only translational constraints to the reference node (or none at all). |
+| 7 | Nodes in the set have different local axis orientations | Mean value may be physically meaningless | Use the MPC only when all nodes share the same local axes, or write a USER‑MPC subroutine for a custom transformation. |
+
+---
+
+## 6️⃣ Minimal Working Example (copy‑paste)
+
+```abaqus
+*Heading
+** MEAN ROTATION MPC demo
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+9999, 0., 0., 0.   ; reference node (must NOT be in MYSET)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=MYSET
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=MYSET, REF NODE=9999
+
+*Boundary
+9999, 1, 3, 0.0   ; fix translations only
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation about all three local axes on node 101
+*End Step
+```
+
+Run this file (Standard or Explicit). In the resulting ODB, node 9999 will show the three rotation components equal to the arithmetic mean of the rotations of nodes 101‑104.
+
+---
+
+## 7️⃣ Quick copy‑paste checklist (tick as you go)
+
+```text
+[ ] Create NSET (MYSET) with the nodes to be averaged.
+[ ] Choose a reference node (9999) that is NOT in MYSET.
+[ ] Verify you are using elements with UR1‑UR3 (e.g., B31, S4, C3D8).
+[ ] Insert the line BEFORE the first *STEP*:
+
+    *MPC, TYPE=MEANROT, NSET=MYSET, REF NODE=9999
+
+[ ] (Optional) If only needed for one step, add at the end of that step:
+
+    *MPC, OP=DELETE, TYPE=MEANROT, NSET=MYSET, REF NODE=9999
+
+[ ] Run the analysis.
+[ ] Post‑process – plot UR1‑UR3 of node 9999 or extract with Python:
+
+    from odbAccess import *
+    odb = openOdb('job.odb')
+    step = odb.steps['Step-1']
+    frame = step.frames[-1]
+    ref = odb.rootAssembly.instances['PART-1-1'].nodes[9998]   # index = node‑1
+    ur = frame.fieldOutputs['UR'].getSubset(region=ref).values[0].data
+    print('UR1,UR2,UR3 =', ur)
+    odb.close()
+```
+
+---
+
+## 8️⃣ Handy extras (optional)
+
+| Need | How |
+|------|-----|
+| **Explicit dynamics** | Same `*MPC` line, just place it before the first `*Dynamic` step. |
+| **Rigid‑body coupling** | Define a `*Rigid Body` that includes node 9999, then add the MPC line – the reference node moves with the rigid body while still receiving the mean rotation. |
+| **Weighted average** | Abaqus does not have a built‑in weighted version. Write a USER‑MPC subroutine (`*MPC, USER`). |
+| **Very large node sets** | No performance hit – the MPC is a single equation. Use `*Elset, generate` to define the set efficiently. |
+
+---
+
+### TL;DR (30‑second recipe)
+
+```abaqus
+*Node
+...                ; your model nodes
+9999, x, y, z      ; reference node (not in the set)
+
+*Nset, nset=MYSET
+n1, n2, n3, ...    ; nodes whose rotations you want to average
+
+*MPC, TYPE=MEANROT, NSET=MYSET, REF NODE=9999
+```
+
+Place the `*MPC` line **before the first `*STEP`** (or delete it with `OP=DELETE` after a specific step).  
+Abaqus will enforce  
+
+\[
+UR_k^{9999}= \frac{1}{N}\sum_{i\in\text{MYSET}} UR_k^{(i)}\qquad(k=1,2,3)
+\]
+
+That’s all you need. Happy modelling!

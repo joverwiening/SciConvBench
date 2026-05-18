@@ -1,0 +1,36 @@
+Use FEniCS legacy (dolfin) for all implementation.
+Solve a quasi-incompressible finite-strain neo-Hookean problem in plane strain using a mixed displacement-pressure (u, p) formulation with Newton's method.
+The domain is a rectangle Omega = (0, 1.0) x (0, 0.20) metres.
+Mesh the domain with two circular holes of radius a = 0.04 m, centred at (0.40, 0.10) m and (0.60, 0.10) m, subtracted from the rectangle.
+Use mshr (or gmsh via dolfin-convert) to generate the mesh; prefer mshr if available.
+Use a mesh resolution sufficient to resolve the hole boundaries (resolution parameter >= 80 or equivalent).
+Material parameters: Young's modulus E = 5e6 Pa, Poisson's ratio nu = 0.49.
+Derive shear modulus mu = E / (2*(1+nu)) and bulk modulus kappa = E / (3*(1-2*nu)).
+Use the compressible neo-Hookean strain energy density W = (mu/2)*(I1_bar - 3) + (kappa/4)*(J^2 - 1 - 2*ln(J)), where I1_bar = J^(-2/3)*tr(C) and J = det(F), F = I + grad(u).
+Introduce hydrostatic pressure p as an independent unknown via a mixed formulation.
+The mixed weak form consists of the mechanical equilibrium equation and the incompressibility constraint p = -kappa*(J-1)/J (or equivalent volumetric penalty form) enforced weakly.
+Use Taylor-Hood elements: continuous piecewise quadratic (P2) for displacement u and continuous piecewise linear (P1) for pressure p.
+Define the total potential including the follower pressure contribution using the reference (undeformed) hole normals, i.e., the Neumann traction is P_hole * N * dA_ref on each hole boundary, where N is the outdeformed outward unit normal and dA_ref is the reference area element; implement this as the surface integral of P_hole * dot(v, N) * ds over each hole boundary marker, where N is the FEniCS FacetNormal on the reference mesh.
+Apply boundary conditions as follows.
+Left edge (x = 0): homogeneous Dirichlet, u_x = 0 and u_y = 0.
+Right edge (x = 1.0): Dirichlet, u_x = 0.060 m and u_y = 0.
+Top and bottom edges: traction-free (natural boundary condition, no action needed).
+Each hole boundary: follower pressure P_hole = 0.10e6 Pa applied using the reference outward normal N from FacetNormal and the reference surface measure ds restricted to that hole's boundary marker.
+Mark all boundary regions using a MeshFunction of size_t on facets.
+Mark left edge as tag 1, right edge as tag 2, hole 1 boundary as tag 3, hole 2 boundary as tag 4, top and bottom as tag 5.
+Use near() tolerances of 1e-10 for straight edges and a radial tolerance of 0.005 m for hole boundaries.
+Assemble the residual F_res and Jacobian J_jac using derivative(F_res, w, dw) where w = (u, p) is the mixed solution function.
+Solve with a Newton solver; use dolfin's built-in NewtonSolver or solve(F_res == 0, w, bcs, J=J_jac) interface.
+Set Newton solver absolute tolerance to 1e-10, relative tolerance to 1e-9, maximum iterations to 50.
+Use a direct linear solver (e.g., "mumps" or "petsc") for the Newton linear sub-problem.
+After solving, extract the displacement sub-function u_sol and pressure sub-function p_sol.
+Compute the Cauchy stress tensor sigma = (1/J) * F * S * F.T where S = 2*diff(W_iso, C) + p*J*inv(C) is the second Piola-Kirchhoff stress, or equivalently compute sigma directly from the deformation gradient and the mixed pressure p_sol.
+Compute von Mises stress as sigma_vm = sqrt(3/2 * dev(sigma):dev(sigma)) where dev(sigma) = sigma - (1/2)*tr(sigma)*I in plane strain (2D), projected onto a scalar DG0 or CG1 function space.
+Project p_sol onto a scalar CG1 or DG0 function space for plotting.
+Save the pressure colour map as q14_p.png using matplotlib with a suitable colormap (e.g., 'RdBu_r') and a colorbar labelled 'Pressure (Pa)'.
+Save the von Mises stress colour map as q14_vm.png using matplotlib with a suitable colormap (e.g., 'plasma') and a colorbar labelled 'von Mises Stress (Pa)'.
+For both plots, use dolfin's plot() or extract vertex values and use tripcolor with the mesh coordinates and connectivity.
+Save the displacement field (both components) to a file named q14_displacement.xdmf using XDMFFile with encoding XDMFFile.Encoding.HDF5 or ASCII.
+Write the displacement function to the XDMF file with a descriptive name "displacement".
+All output files (q14_p.png, q14_vm.png, q14_displacement.xdmf) are saved in the working directory.
+Print the maximum displacement magnitude, maximum von Mises stress, and min/max pressure to stdout after solving.

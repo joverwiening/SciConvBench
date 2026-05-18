@@ -1,0 +1,121 @@
+Solve the 1D sine-Gordon equation u_tt + q*sin(u) = u_xx on x in [0,1) with periodic boundary conditions and t in [0, 2.0].
+Use q = 1.0.
+Interpret the spatial domain as half-open [0,1) with periodicity, so Nx is the number of grid points with no duplicated endpoint.
+Set Nx = 256 (a reasonable default for this problem).
+Set dx = 1.0/Nx and x_i = i*dx for i = 0, 1, ..., Nx-1.
+Apply initial condition u(x,0) = 0.1*sin(2*pi*x) and u_t(x,0) = 0.
+Use spectral (Fourier) differentiation in space to compute u_xx accurately on the periodic domain.
+Use a second-order-in-time explicit time-stepping scheme (Stormer-Verlet / leapfrog) to advance the solution.
+Choose a time step dt that satisfies the CFL stability condition; use dt = 0.4*dx as a safe choice.
+Advance the solution from t=0 to T=2.0 using the chosen dt, adjusting the final step if necessary to land exactly at T=2.0.
+At each time step, compute u_xx using the FFT-based spectral derivative: take the FFT of u, multiply by -(2*pi*k)**2 where k are the wavenumbers, then take the inverse FFT.
+The wavenumbers k for an array of length Nx are k = [0, 1, ..., Nx/2-1, -Nx/2, ..., -1] (as returned by numpy.fft.fftfreq(Nx, d=1.0/Nx)).
+Use the Stormer-Verlet (leapfrog) scheme: given u^n and v^n = u_t^n, compute a^n = u_xx^n - q*sin(u^n), then u^{n+1} = u^n + dt*v^n + 0.5*dt**2*a^n, then compute a^{n+1} = u_xx^{n+1} - q*sin(u^{n+1}), then v^{n+1} = v^n + 0.5*dt*(a^n + a^{n+1}).
+Initialize v^0 = u_t(x,0) = array of zeros of length Nx.
+After reaching T=2.0, extract the solution array u of length Nx on the grid x of length Nx.
+Print min(u), max(u), mean(u), and the discrete L2 norm sqrt(sum(u**2)*dx) at T=2.0.
+Save a line plot of u(x,T) with x on the horizontal axis and u on the vertical axis, labeled appropriately, as "solution_molk_015.png".
+Save "solution_molk_015.npz" containing: x (1D array, length Nx), u (1D array, length Nx), scalar T=2.0, scalar dx, integer scalar Nx, and parameter scalar q=1.0.
+Use Python with numpy and matplotlib.
+Use '^' in math notation and '**' in Python code for exponentiation.
+Do not require or compare against any closed-form reference solution.
+
+Here is the complete Python code implementing the above specification:
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Parameters
+q = 1.0
+Nx = 256
+L = 1.0
+dx = L / Nx
+x = np.arange(Nx) * dx  # x_i = i*dx, i=0..Nx-1, half-open [0,1)
+T = 2.0
+
+# Time step (CFL-safe for spectral method: dt ~ dx / pi to be safe)
+# Use dt = 0.4*dx as specified
+dt = 0.4 * dx
+
+# Wavenumbers for spectral derivative
+# k = fftfreq(Nx, d=1/Nx) gives wavenumbers in cycles per unit length
+k = np.fft.fftfreq(Nx, d=1.0 / Nx)  # k in [0,1,...,Nx/2-1,-Nx/2,...,-1]
+k2 = (2.0 * np.pi * k) ** 2  # eigenvalues of d^2/dx^2 operator
+
+def compute_uxx(u):
+    """Compute u_xx using spectral (FFT-based) differentiation."""
+    u_hat = np.fft.fft(u)
+    uxx_hat = -k2 * u_hat
+    return np.fft.ifft(uxx_hat).real
+
+def compute_accel(u):
+    """Compute acceleration a = u_xx - q*sin(u)."""
+    return compute_uxx(u) - q * np.sin(u)
+
+# Initial conditions
+u = 0.1 * np.sin(2.0 * np.pi * x)
+v = np.zeros(Nx)  # u_t(x,0) = 0
+
+# Time integration using Stormer-Verlet (leapfrog) scheme
+t = 0.0
+a = compute_accel(u)
+
+n_steps = int(np.ceil(T / dt))
+dt_actual = T / n_steps  # adjust dt slightly so we land exactly at T
+
+# Recompute with adjusted dt
+dt = dt_actual
+
+# Re-initialize (dt changed slightly, recompute initial acceleration)
+u = 0.1 * np.sin(2.0 * np.pi * x)
+v = np.zeros(Nx)
+a = compute_accel(u)
+
+for _ in range(n_steps):
+    # Stormer-Verlet step
+    u_new = u + dt * v + 0.5 * dt**2 * a
+    a_new = compute_accel(u_new)
+    v_new = v + 0.5 * dt * (a + a_new)
+    u, v, a = u_new, v_new, a_new
+
+# Diagnostics
+u_min = np.min(u)
+u_max = np.max(u)
+u_mean = np.mean(u)
+l2_norm = np.sqrt(np.sum(u**2) * dx)
+
+print(f"T        = {T}")
+print(f"Nx       = {Nx}")
+print(f"dx       = {dx:.6e}")
+print(f"dt       = {dt:.6e}")
+print(f"n_steps  = {n_steps}")
+print(f"min(u)   = {u_min:.10e}")
+print(f"max(u)   = {u_max:.10e}")
+print(f"mean(u)  = {u_mean:.10e}")
+print(f"L2 norm  = {l2_norm:.10e}")
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u, linewidth=1.5)
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T)")
+ax.set_title(f"1D sine-Gordon solution at T={T} (q={q})")
+ax.grid(True)
+plt.tight_layout()
+plt.savefig("solution_molk_015.png", dpi=150)
+plt.close()
+print("Plot saved to solution_molk_015.png")
+
+# Save npz
+np.savez(
+    "solution_molk_015.npz",
+    x=x,
+    u=u,
+    T=np.float64(T),
+    dx=np.float64(dx),
+    Nx=np.int64(Nx),
+    q=np.float64(q),
+)
+print("Data saved to solution_molk_015.npz")
+```

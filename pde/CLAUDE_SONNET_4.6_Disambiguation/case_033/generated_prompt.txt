@@ -1,0 +1,122 @@
+Solve the heat equation u_t = 0.1 * u_xx numerically using the Crank-Nicolson method and save the results.
+
+The PDE is u_t = 0.1 * u_xx with alpha = 0.1.
+The spatial domain is x in [0, 1] (closed interval) and the time domain is t in [0, 0.4].
+Use Nx = 200 uniform intervals, giving 201 grid points including both endpoints, with dx = 1/200 = 0.005.
+Use dt = 0.001 and 400 time steps to reach T = 0.4.
+Set x_i = i * dx for i = 0, 1, ..., 200.
+
+Set the initial condition u(x, 0) = exp(-0.1 * pi**2 * 0) * cos(pi * x) = cos(pi * x).
+Apply zero Neumann boundary conditions at both ends using ghost points: u[-1] = u[1] at x=0 and u[Nx+1] = u[Nx-1] at x=1.
+
+Discretize u_xx using 2nd-order central differences at all interior points.
+At the left boundary (i=0), use the ghost point u[-1] = u[1] so u_xx at i=0 = (u[1] - 2*u[0] + u[1]) / dx**2 = (2*u[1] - 2*u[0]) / dx**2.
+At the right boundary (i=Nx), use the ghost point u[Nx+1] = u[Nx-1] so u_xx at i=Nx = (u[Nx-1] - 2*u[Nx] + u[Nx-1]) / dx**2 = (2*u[Nx-1] - 2*u[Nx]) / dx**2.
+At interior points i=1 to Nx-1, use u_xx = (u[i-1] - 2*u[i] + u[i+1]) / dx**2.
+
+Apply the Crank-Nicolson scheme: (u_new - u_old) / dt = 0.5 * alpha * (L @ u_new + L @ u_old), where L is the (Nx+1) x (Nx+1) tridiagonal Laplacian matrix incorporating the ghost-point boundary rows.
+Rearrange to the linear system (I - 0.5 * alpha * dt * L) @ u_new = (I + 0.5 * alpha * dt * L) @ u_old.
+Assemble L as a sparse tridiagonal matrix of size (Nx+1) x (Nx+1).
+For row 0 (left boundary): L[0, 0] = -2/dx**2, L[0, 1] = 2/dx**2.
+For rows i = 1 to Nx-1 (interior): L[i, i-1] = 1/dx**2, L[i, i] = -2/dx**2, L[i, i+1] = 1/dx**2.
+For row Nx (right boundary): L[Nx, Nx-1] = 2/dx**2, L[Nx, Nx] = -2/dx**2.
+Form A = I - 0.5 * alpha * dt * L and B = I + 0.5 * alpha * dt * L.
+Factorize A once using scipy.sparse.linalg.splu for efficiency.
+At each of the 400 time steps, solve A @ u_new = B @ u_old using the factorized form.
+
+After all time steps, compute the exact solution u_exact(x, T) = exp(-0.1 * pi**2 * 0.4) * cos(pi * x) on the same x grid.
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2) * dx) of the numerical solution at T = 0.4.
+Print the max absolute error max(abs(u - u_exact)) and the L2 error sqrt(sum((u - u_exact)**2) * dx).
+
+Save a file named "solution_agent_heat_04.npz" using numpy.savez containing: array x (1D, length 201), array u (1D, length 201), scalar T = 0.4, scalar dx = 0.005, scalar dt = 0.001.
+Save a line plot of u(x, T) versus x as "solution_agent_heat_04.png" with labeled axes and a title.
+
+Here is the complete Python code:
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+
+# Parameters
+alpha = 0.1
+Nx = 200
+dx = 1.0 / Nx
+dt = 0.001
+T = 0.4
+Nt = int(round(T / dt))  # 400 time steps
+
+# Grid
+x = np.linspace(0.0, 1.0, Nx + 1)  # 201 points
+
+# Initial condition
+u = np.cos(np.pi * x)
+
+# Build Laplacian matrix L of size (Nx+1) x (Nx+1)
+# with ghost-point Neumann BCs
+N = Nx + 1
+diag_main = np.full(N, -2.0 / dx**2)
+diag_off  = np.full(N - 1, 1.0 / dx**2)
+
+L = sp.diags([diag_off, diag_main, diag_off], offsets=[-1, 0, 1],
+             shape=(N, N), format='lil')
+
+# Left boundary row 0: ghost u[-1]=u[1] => coefficient of u[1] doubles
+L[0, 0] = -2.0 / dx**2
+L[0, 1] =  2.0 / dx**2
+
+# Right boundary row Nx: ghost u[Nx+1]=u[Nx-1] => coefficient of u[Nx-1] doubles
+L[Nx, Nx]     = -2.0 / dx**2
+L[Nx, Nx - 1] =  2.0 / dx**2
+
+L = L.tocsr()
+
+# Crank-Nicolson matrices
+I = sp.eye(N, format='csr')
+A = I - 0.5 * alpha * dt * L  # left-hand side
+B = I + 0.5 * alpha * dt * L  # right-hand side
+
+# Factorize A once
+A_lu = spla.splu(A.tocsc())
+
+# Time integration
+for _ in range(Nt):
+    rhs = B.dot(u)
+    u = A_lu.solve(rhs)
+
+# Exact solution at T=0.4
+u_exact = np.exp(-0.1 * np.pi**2 * T) * np.cos(np.pi * x)
+
+# Diagnostics
+u_min = np.min(u)
+u_max = np.max(u)
+l2_norm = np.sqrt(np.sum(u**2) * dx)
+max_err = np.max(np.abs(u - u_exact))
+l2_err  = np.sqrt(np.sum((u - u_exact)**2) * dx)
+
+print(f"min(u)       = {u_min:.6e}")
+print(f"max(u)       = {u_max:.6e}")
+print(f"L2 norm      = {l2_norm:.6e}")
+print(f"Max abs error= {max_err:.6e}")
+print(f"L2 error     = {l2_err:.6e}")
+
+# Save .npz
+np.savez("solution_agent_heat_04.npz",
+         x=x, u=u, T=np.float64(T),
+         dx=np.float64(dx), dt=np.float64(dt))
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(x, u, label="Numerical (CN)", linewidth=2)
+ax.plot(x, u_exact, '--', label="Exact", linewidth=1.5)
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T)")
+ax.set_title(f"Heat equation solution at T={T}  (Crank-Nicolson, Nx={Nx}, dt={dt})")
+ax.legend()
+ax.grid(True)
+fig.tight_layout()
+fig.savefig("solution_agent_heat_04.png", dpi=150)
+plt.close(fig)
+print("Files saved: solution_agent_heat_04.npz, solution_agent_heat_04.png")
+```

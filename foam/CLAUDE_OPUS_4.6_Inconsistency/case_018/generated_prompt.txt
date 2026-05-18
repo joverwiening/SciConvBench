@@ -1,0 +1,95 @@
+What linear solver settings should be used for the pressure, velocity, and species equations — for example, GAMG with GaussSeidel smoother for pressure, smoothSolver with GaussSeidel for velocity and species — or should I choose a standard robust set appropriate for reacting flow?
+
+Wait — the user has consistently said "make a reasonable assumption" for implementation details. Let me check if there's any remaining critical information that could lead to ambiguity or failure, rather than asking about solver settings which are standard engineering choices.
+
+Let me review what I have:
+- Domain, mesh, patches: fully specified
+- BCs for velocity, temperature, species at inlets: specified
+- Counter-flow corrected: done
+- Chemistry mechanism: assumption (DRM-19 or similar reduced mechanism)
+- Pressure: assumption (1 atm)
+- Fuel composition: pure CH4
+- Pressure BCs: assumption
+- Numerical schemes: assumption
+- Solver settings: standard assumption
+- Turbulence: laminar (specified)
+- Thermo model: specified
+- Time stepping: specified
+- ODE solver: specified
+- Initialization: T=2000K throughout domain
+
+I think this is complete enough for a competent OpenFOAM practitioner to set up without guessing on anything critical.
+
+
+
+Solver: reactingFoam (OpenFOAM).
+Domain: x in [0, 0.02] m, y in [-0.01, 0.01] m, z in [-0.01, 0.01] m.
+Mesh: 100 cells in x, 40 cells in y, 1 cell in z (uniform spacing), generated with blockMesh.
+The frontAndBack patch (z-normal faces) is type empty, making this a 2-D simulation.
+Operating pressure: 1 atm (101325 Pa).
+
+Patch definitions:
+The left patch (x = 0) is the fuel inlet.
+The right patch (x = 0.02) is the air inlet.
+The top patch (y = 0.01) is an outlet.
+The bottom patch (y = -0.01) is an outlet.
+
+Fuel inlet (left, x = 0):
+Velocity: uniform (0.1 0 0) m/s (fixed value, pointing in +x direction).
+Temperature: fixed value, 293 K.
+Species: Y_CH4 = 1.0, all other species = 0.
+Pressure: zeroGradient.
+
+Air inlet (right, x = 0.02):
+Velocity: uniform (-0.1 0 0) m/s (fixed value, pointing in -x direction for counter-flow).
+Temperature: fixed value, 293 K.
+Species: Y_O2 = 0.23, Y_N2 = 0.77, all other species = 0.
+Pressure: zeroGradient.
+
+Top and bottom outlets:
+Pressure: totalPressure with p0 = 101325 Pa (or fixedValue 101325 Pa).
+Velocity: pressureInletOutletVelocity (allows outflow and prevents inflow issues).
+Temperature: inletOutlet with inletValue 293 K.
+Species: inletOutlet with inletValue 0 for each species.
+
+Initial conditions throughout the domain:
+Temperature: 2000 K (to provide ignition energy).
+Pressure: 101325 Pa.
+Velocity: (0 0 0) m/s.
+Species: Y_O2 = 0.23, Y_N2 = 0.77, all others = 0 (air-filled initial state).
+
+Chemistry mechanism: DRM-19 (a 19-species, 84-reaction reduced methane mechanism derived from GRI-Mech), provided via foamChemistryFile in constant/reactions and corresponding thermodynamic data in constant/thermo.compactExtendedTransport or JANAF-format thermo file.
+Chemistry solver: EulerImplicit for chemistry integration.
+ODE solver: Rosenbrock43.
+Chemistry is enabled (active true) in constant/chemistryProperties.
+
+Thermophysical model (constant/thermophysicalProperties):
+Type: hePsiThermo.
+Mixture: coefficientWilkeMultiComponentMixture.
+Transport: sutherland.
+Thermodynamics: janaf.
+Equation of state: perfectGas.
+Energy: sensibleEnthalpy.
+Specie: specie.
+
+Turbulence model: laminar (no turbulence model), set in constant/momentumTransport or constant/turbulenceProperties.
+
+Temporal discretization: Euler (first-order implicit).
+Gradient schemes: Gauss linear.
+Divergence schemes: Gauss limitedLinear 1 for species and energy, Gauss linearUpwind grad(U) for momentum, Gauss limitedLinear 1 for general divergence terms.
+Laplacian schemes: Gauss linear corrected.
+Interpolation schemes: linear.
+snGrad schemes: corrected.
+
+Linear solvers (system/fvSolution):
+Pressure (p): GAMG solver with GaussSeidel smoother, tolerance 1e-6, relTol 0.01.
+Velocity (U), species (Yi), energy (h): smoothSolver with GaussSeidel smoother, tolerance 1e-8, relTol 0.
+PIMPLE outer correctors: 2, nCorrectors: 1, nNonOrthogonalCorrectors: 0.
+
+Time control (system/controlDict):
+deltaT: 1e-4 s.
+endTime: 0.5 s.
+writeInterval: 0.05 s.
+writeControl: adjustableRunTime (or runTime).
+adjustTimeStep: no (fixed time step).
+maxCo: 0.5 (informational).

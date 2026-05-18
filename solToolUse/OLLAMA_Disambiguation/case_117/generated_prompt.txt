@@ -1,0 +1,115 @@
+**Short answer**
+
+| What you want to do | Abaqus keyword | Where it belongs in the input file |
+|---------------------|----------------|------------------------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for a permanent BC; inside a `*STEP` for a step‑specific BC |
+| Tie two or more DOFs together, or impose a linear relation | `*EQUATION` (multi‑point constraint) | Outside all `*STEP` blocks – it defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model and leads to a singular‑matrix error. |
+
+---
+
+## 1.  Prescribing a displacement – the **right** way  
+
+### a) Global (permanent) displacement  
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES          ; use a node set if possible
+105, 3, 3, 0.005                    ; node 105, DOF 3 (Z), +5 mm
+```
+
+*or, without a node set*
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+| Column | Meaning |
+|--------|---------|
+| node (or node‑set name) | node that receives the BC |
+| first‑DOF | 1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ |
+| last‑DOF | same as first if only one DOF |
+| value | prescribed displacement (positive = + direction of the axis) |
+
+### b) Step‑specific displacement  
+
+If the displacement should be active only during a particular step, place it inside that step. In a step the keyword is called `*DISPLACEMENT`; it is just a synonym for `*BOUNDARY`.
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both the global `*BOUNDARY` and the step‑specific `*DISPLACEMENT` give the same numerical result; the only difference is the **time span** of the condition (permanent vs. step‑limited).
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` **does not** prescribe a value. It creates a **linear relationship** (a multi‑point constraint, MPC) among several DOFs. Use it only when you need to:
+
+* **Tie two (or more) nodes together** – e.g. enforce `U3(105) = U3(129)`.
+* **Impose a linear combination** of DOFs – e.g. `U1 + 2·U2 = constant`.
+
+### Example – tie two nodes in the Z‑direction  
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** impose a 5 mm offset  
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Important:** Do **not** apply a `*BOUNDARY`/`*DISPLACEMENT` to any DOF that already appears in an `*EQUATION`. That creates an over‑constrained system and typically yields a “singular matrix” error.
+
+---
+
+## 3.  How to fix the situation you described  
+
+You tried to prescribe a displacement with `*EQUATION`. Replace that with the proper keyword:
+
+1. **Delete** the offending `*EQUATION` block (unless you truly need a multi‑point constraint).  
+2. **Add** a correct displacement BC:
+
+   *Permanent (global) BC*
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; +5 mm in Z at node 105 for the whole analysis
+   ```
+
+   *or, step‑specific*
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has **one** correctly‑prescribed displacement on node 105 and **no conflicting constraints**, so the solver will not encounter a singular‑matrix problem.
+
+---
+
+### TL;DR
+
+| Goal | Keyword | Placement |
+|------|---------|-----------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for permanent BC; inside a `*STEP` for step‑specific BC |
+| Tie two or more DOFs, or impose a linear relation | `*EQUATION` (MPC) | Outside all `*STEP` blocks – defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model. |
+
+Apply the appropriate keyword as shown above and the model will behave as intended.

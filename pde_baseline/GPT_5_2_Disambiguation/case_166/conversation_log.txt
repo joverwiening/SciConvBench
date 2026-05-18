@@ -1,0 +1,105 @@
+=== 2026-03-25 13:32:12 ===
+Q: What spatial resolution Nx should I use for the 1D grid on x ∈ [-1, 1]?
+A: Use a uniform finite-volume grid with **Nx = 800 cells** on **x ∈ [-1, 1]** (so **dx = 2/Nx** and cell centers \(x_j = -1 + (j+0.5)\,dx\), \(j=0,\dots,Nx-1\)).
+
+=== 2026-03-25 13:32:15 ===
+Q: What CFL number should I use for the time stepping?
+A: Make a reasonable assumption based on best practices.
+
+Use **CFL = 0.5** for the convective time-step constraint in  
+\(dt_{\text{conv}} = \text{CFL}\, dx / \max_j(|v_j| + c_j)\), and save this CFL value in the NPZ.
+
+=== 2026-03-25 13:32:19 ===
+Q: What numerical flux (Riemann solver) should I use for the inviscid terms (e.g., Rusanov/Lax–Friedrichs, HLL, HLLC, Roe)?
+A: Use the **Rusanov (local Lax–Friedrichs)** numerical flux for the inviscid (Euler) terms.
+
+- Inviscid flux:
+  \[
+  F_{\text{conv}}(U)=\begin{bmatrix}
+  m\\
+  m^2/\rho + p\\
+  (E+p)\,v
+  \end{bmatrix},\quad v=m/\rho,\quad c=\sqrt{\Gamma p/\rho}
+  \]
+- Interface wave speed:
+  \[
+  a=\max\left(|v_L|+c_L,\ |v_R|+c_R\right)
+  \]
+- Numerical flux:
+  \[
+  \hat F=\tfrac12\left(F_{\text{conv}}(U_L)+F_{\text{conv}}(U_R)\right)-\tfrac12\,a\,(U_R-U_L)
+  \]
+
+=== 2026-03-25 13:32:23 ===
+Q: What spatial reconstruction should I use to obtain the left/right interface states for the Rusanov flux (e.g., first-order piecewise constant, or second-order MUSCL with a specific limiter)?
+A: Use **first-order piecewise-constant reconstruction** (no MUSCL/limiter): take the interface states directly from neighboring cell averages,
+- \(U_{j+1/2}^L = U_j\)
+- \(U_{j+1/2}^R = U_{j+1}\).
+
+=== 2026-03-25 13:32:27 ===
+Q: What time-integration method should I use (e.g., forward Euler, SSP-RK2, SSP-RK3)?
+A: Use **2-stage SSP-RK2 (Heun’s method)** for time integration on the semi-discrete finite-volume system.
+
+=== 2026-03-25 13:32:30 ===
+Q: What time-step constraint should I use for the viscous term (i.e., the formula for \(dt_{\text{visc}}\) and how to combine it with \(dt_{\text{conv}}\))?
+A: Use the viscous stability constraint exactly as:
+
+\[
+dt_{\text{visc}} = 0.5\,\frac{dx^2}{\max\!\left(\zeta+\frac{4}{3}\eta,\ 1\times 10^{-30}\right)}.
+\]
+
+Compute the convective constraint
+
+\[
+dt_{\text{conv}} = \text{CFL}\,\frac{dx}{\max_j\left(|v_j|+c_j\right)},
+\quad c_j=\sqrt{\Gamma p_j/\rho_j},
+\]
+
+then take
+
+\[
+dt = \min\left(dt_{\text{conv}},\ dt_{\text{visc}}\right),
+\]
+
+and adjust the last step so you hit \(T\) exactly.
+
+=== 2026-03-25 13:32:34 ===
+Q: What should I use for the initial total energy per cell, i.e., should I set \(E = \frac{p}{\Gamma-1} + \tfrac12 \rho v^2\) from the left/right primitive states at \(t=0\)?
+A: Yes. Initialize the conservative variables from the left/right primitive states at \(t=0\), using exactly
+\[
+E = \frac{p}{\Gamma-1} + \tfrac12\,\rho\,v^2,
+\]
+with \((\rho,v,p)=(\rho_L,v_L,p_L)\) for cells with center \(x_j<0\) and \((\rho_R,v_R,p_R)\) for \(x_j\ge 0\).
+
+=== 2026-03-25 13:32:40 ===
+Q: What specific discretization should I use for the viscous stress term \(\sigma=(\zeta+\tfrac{4}{3}\eta)\,v_x\) at cell interfaces (e.g., compute \(v_x\) with a centered difference using neighboring cell-centered velocities)?
+A: Compute \(v_x\) using a **centered difference on the cell-centered velocities**:
+\[
+(v_x)_j \approx \frac{v_{j+1}-v_{j-1}}{2\,dx},
+\quad v_j=\frac{m_j}{\rho_j}.
+\]
+Then compute the **cell-centered** viscous stress
+\[
+\sigma_j = \left(\zeta+\frac{4}{3}\eta\right)(v_x)_j.
+\]
+Obtain the **interface** stress by **averaging neighboring cell-centered values**:
+\[
+\sigma_{j+1/2}=\tfrac12(\sigma_j+\sigma_{j+1}).
+\]
+Use interface-averaged velocity similarly,
+\[
+v_{j+1/2}=\tfrac12(v_j+v_{j+1}),
+\]
+and add viscous flux at interfaces as
+\[
+F_{\text{visc},\,j+1/2} = \big[0,\ -\sigma_{j+1/2},\ -v_{j+1/2}\sigma_{j+1/2}\big].
+\]
+
+=== 2026-03-25 13:32:45 ===
+Q: For the transmissive/outflow boundary conditions, should I implement them using **one layer of ghost cells with constant extrapolation** (i.e., set each ghost cell’s \(\rho,m,E\) equal to the nearest interior cell value at each RK stage)?
+A: Yes. For **outflow/transmissive (zero-gradient)** BCs, implement them with ghost cells by **constant extrapolation**: at each RK stage, set each ghost cell’s conservative variables \((\rho, m, E)\) equal to the **nearest interior cell** value on that side.
+
+=== 2026-03-25 13:32:48 ===
+Q: How many ghost cells per side should I use for the finite-volume update (e.g., 1 or 2)?
+A: Use **1 ghost cell per side** (one layer). For outflow/transmissive BCs, set that ghost cell’s \((\rho, m, E)\) equal to the nearest interior cell at each RK stage.
+

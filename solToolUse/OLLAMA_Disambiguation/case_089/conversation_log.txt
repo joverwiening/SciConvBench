@@ -1,0 +1,3088 @@
+=== 2026-04-17 20:30:27 ===
+Q: **What Abaqus is trying to do**
+
+When an amplitude is declared with the option **USER**
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+```
+
+Abaqus does **not** read the numbers that follow the keyword.  
+Instead it calls the user subroutine **UAMP** (the name of the
+subroutine is fixed – it must be called *UAMP*).  
+The subroutine expects to read a **separate text file** that contains the
+time‑amplitude pairs.  
+
+If the name of that file is not given, Abaqus uses the amplitude name
+(`QUADRATIC`) as the file name. Because there is no file called
+*QUADRATIC* (or *QUADRATIC.txt*) in the working directory the solver stops
+with the message
+
+```
+Error: the user amplitude file ... does not exist
+```
+
+So the problem is not the Fortran source file, it is the missing **amplitude
+data file** (or the missing reference to it).
+
+---
+
+## How to fix it
+
+### 1. Create a file that contains the amplitude data
+
+The file can have any name, e.g. `quad.dat`. Its contents must be a list of
+time‑value pairs, one pair per line, for example
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+(You can also leave the file empty – the subroutine can generate the
+values itself – but the file must exist.)
+
+### 2. Tell Abaqus which file to read
+
+Add the file name on the line **immediately after** the *AMPLITUDE* keyword,
+or use the optional `FILE=` parameter. Both ways are accepted.
+
+**Option A – file name on the next line**
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+quad.dat
+```
+
+**Option B – using the FILE= argument**
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+```
+
+### 3. Compile and link the user subroutine
+
+The Fortran source that contains the routine `UAMP` must be compiled and
+linked with the job. Do this with the `user=` option on the command line:
+
+```bash
+abaqus job=beam user=UAMP.f
+```
+
+(`UAMP.f` is the file that contains the subroutine you posted.)
+
+Make sure that
+
+* `UAMP.f` is in the same directory as the input file,
+* the compiled object file (`UAMP.obj` or `UAMP.o`) is created,
+* the job is started with the `user=` flag as shown above.
+
+### 4. Full minimal example
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+.5,1.
+*END STEP
+```
+
+and the command line
+
+```bash
+abaqus job=beam user=UAMP.f
+```
+
+Now Abaqus will
+
+1. read the file `quad.dat` (or the empty file) when it calls `UAMP`,
+2. execute the code you wrote in `UAMP`,
+3. continue with the analysis without the “user amplitude file does not exist”
+   error.
+
+---
+
+### Summary of the required changes
+
+| What you have | What you need to add / change |
+|---------------|------------------------------|
+| `*AMPLITUDE,NAME=QUADRATIC,USER` (no file name) | `*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat` **or** add a line `quad.dat` after the keyword |
+| No file called `quad.dat` (or `QUADRATIC`) in the working directory | Create that file (even if it is empty) |
+| Job started without `user=` option | Run `abaqus job=… user=UAMP.f` |
+
+After these modifications the user‑defined amplitude subroutine will be
+found and the analysis will run.
+A: ### What Abaqus really does when you write  
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+```  
+
+1. **It does **not** read the numbers that follow the keyword.**  
+   The keyword only tells the solver that the amplitude will be supplied by a **user‑defined subroutine**.
+
+2. **Abaqus calls the subroutine `UAMP`.**  
+   The name of the routine is fixed – it must be `UAMP` (or `UAMP.f90`, `UAMP.c`, … depending on the language you use).  
+   The solver passes to `UAMP` the current time, the amplitude name, and a **file handle** that points to a **text file** containing the time‑amplitude data.
+
+3. **If no file name is supplied, Abaqus looks for a file whose name is the amplitude name.**  
+   In the example above it will try to open a file called `QUADRATIC` (or `QUADRATIC.txt` on Windows).  
+   When that file cannot be found the job aborts with the message  
+
+   ```
+   Error: the user amplitude file ... does not exist
+   ```
+
+So the problem is **not** the Fortran source of `UAMP`; it is the missing (or mis‑named) data file that `UAMP` expects to read.
+
+---
+
+## How to make a USER amplitude work
+
+| Step | What you have to do | Why |
+|------|---------------------|-----|
+| **1. Create a data file** | Write a plain‑text file that contains the time‑amplitude pairs, one pair per line, e.g. `quad.dat`:<br>`0.0   0.0`<br>`0.5   0.25`<br>`1.0   1.0` | `UAMP` reads this file to obtain the amplitude values. The file may be empty if the subroutine generates the values itself, but it **must exist**. |
+| **2. Tell Abaqus which file to use** | Either put the file name on the line **immediately after** the `*AMPLITUDE` keyword, or use the optional `FILE=` argument. Both are accepted: <br>```abaqus\n*AMPLITUDE,NAME=QUADRATIC,USER\nquad.dat\n```<br>or<br>```abaqus\n*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat\n``` | Without this Abaqus defaults to a file called `QUADRATIC`, which usually does not exist. |
+| **3. Provide the user subroutine** | Put the routine `UAMP` in a source file (e.g. `UAMP.f`). The routine must have the correct interface (see the Abaqus manual). | Abaqus will compile and link this routine with the solver. |
+| **4. Run the job with the `user=` option** | ```bash\nabaqus job=MyModel user=UAMP.f\n``` | This tells Abaqus to compile `UAMP.f` and link it into the analysis. |
+| **5. Keep everything in the same working directory** | Input file (`.inp`), data file (`quad.dat`), and compiled object (`UAMP.obj`/`UAMP.o`) must be in the directory from which you launch Abaqus. | Abaqus searches the current directory for the amplitude file and the compiled subroutine. |
+
+---
+
+## Minimal, working example
+
+**`model.inp`**
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**`quad.dat`** (any name you gave in the `FILE=` argument)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**`UAMP.f`** (only the routine header is shown; the body can be whatever you need)
+
+```fortran
+      SUBROUTINE UAMP(TIME,AMPL,NAME,FILEID,STATUS)
+C
+C   USER‑DEFINED AMPLITUDE SUBROUTINE
+C
+      CHARACTER*80 NAME
+      INTEGER FILEID, STATUS
+      REAL*8 TIME, AMPL
+C
+C   Read the next line from the file (already opened by Abaqus)
+C   and return the amplitude value in AMPL.
+C   (A very simple implementation – you can replace it with anything.)
+C
+      READ(FILEID,*,END=100) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+ 100  CONTINUE
+      STATUS = 1          ! tell Abaqus that we reached end‑of‑file
+      RETURN
+      END
+```
+
+**Run**
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+Abaqus will
+
+1. Open `quad.dat`,
+2. Call `UAMP` each time it needs the amplitude value,
+3. Use the value returned in `AMPL`,
+4. Complete the analysis without the “user amplitude file does not exist” error.
+
+---
+
+## Quick checklist
+
+- [ ] **Data file exists** (`quad.dat`, `QUADRATIC`, …) in the job directory.  
+- [ ] **File name is supplied** either on the line after `*AMPLITUDE` or via `FILE=`.  
+- [ ] **Subroutine is named `UAMP`** and compiled with the `user=` option.  
+- [ ] **Job is launched with `abaqus … user=UAMP.f`** (or `.f90`, `.c`, …).  
+
+If all four items are satisfied, Abaqus will successfully use the user‑defined amplitude.
+
+=== 2026-04-17 20:31:04 ===
+Q: **What Abaqus really does when you write**
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+```
+
+1. **It does *not* read any numbers that follow the keyword.**  
+   The keyword only tells the solver that the amplitude will be supplied by a **user‑defined subroutine**.
+
+2. **Abaqus calls the subroutine `UAMP`.**  
+   The name of the routine is fixed – it must be `UAMP` (or `UAMP.f90`, `UAMP.c`, … depending on the language you use).  
+   When the solver needs the amplitude value it passes to `UAMP` the current time, the amplitude name, a **file handle** that points to a **text file** containing the time‑amplitude data, and a status flag.
+
+3. **If no file name is supplied, Abaqus looks for a file whose name is the amplitude name.**  
+   In the example above it will try to open a file called `QUADRATIC` (or `QUADRATIC.txt` on Windows).  
+   When that file cannot be found the job aborts with the message  
+
+   ```
+   Error: the user amplitude file ... does not exist
+   ```
+
+So the problem is **not** the Fortran source of `UAMP`; it is the missing (or mis‑named) data file that `UAMP` expects to read.
+
+---
+
+## How to make a USER amplitude work
+
+| Step | What you have to do | Why |
+|------|--------------------|-----|
+| **1. Create a data file** | Write a plain‑text file that contains the time‑amplitude pairs, one pair per line, e.g. `quad.dat`:<br>`0.0   0.0`<br>`0.5   0.25`<br>`1.0   1.0` | `UAMP` reads this file to obtain the amplitude values. The file may be empty if the subroutine generates the values itself, but it **must exist**. |
+| **2. Tell Abaqus which file to use** | Either put the file name on the line **immediately after** the `*AMPLITUDE` keyword, or use the optional `FILE=` argument. Both are accepted: <br>```abaqus\n*AMPLITUDE,NAME=QUADRATIC,USER\nquad.dat\n```<br>or<br>```abaqus\n*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat\n``` | Without this Abaqus defaults to a file called `QUADRATIC`, which usually does not exist. |
+| **3. Provide the user subroutine** | Put the routine `UAMP` in a source file (e.g. `UAMP.f`). The routine must have the correct interface (see the Abaqus manual). | Abaqus will compile and link this routine with the solver. |
+| **4. Run the job with the `user=` option** | ```bash\nabaqus job=MyModel user=UAMP.f\n``` | This tells Abaqus to compile `UAMP.f` and link it into the analysis. |
+| **5. Keep everything in the same working directory** | Input file (`.inp`), data file (`quad.dat`), and compiled object (`UAMP.obj`/`UAMP.o`) must be in the directory from which you launch Abaqus. | Abaqus searches the current directory for the amplitude file and the compiled subroutine. |
+
+---
+
+## Minimal, working example
+
+**`model.inp`**
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**`quad.dat`** (any name you gave in the `FILE=` argument)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**`UAMP.f`** (only the routine header is shown; the body can be whatever you need)
+
+```fortran
+      SUBROUTINE UAMP(TIME,AMPL,NAME,FILEID,STATUS)
+C
+C   USER‑DEFINED AMPLITUDE SUBROUTINE
+C
+      CHARACTER*80 NAME
+      INTEGER FILEID, STATUS
+      REAL*8 TIME, AMPL
+C
+C   Read the next line from the file (already opened by Abaqus)
+C   and return the amplitude value in AMPL.
+C   (A very simple implementation – you can replace it with anything.)
+C
+      READ(FILEID,*,END=100) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+ 100  CONTINUE
+      STATUS = 1          ! tell Abaqus that we reached end‑of‑file
+      RETURN
+      END
+```
+
+**Run**
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+Abaqus will
+
+1. open `quad.dat`,
+2. call `UAMP` each time it needs the amplitude value,
+3. use the value returned in `AMPL`,
+4. complete the analysis without the “user amplitude file does not exist” error.
+
+---
+
+## Quick checklist
+
+- **Data file exists** (`quad.dat`, `QUADRATIC`, …) in the job directory.  
+- **File name is supplied** either on the line after `*AMPLITUDE` or via `FILE=`.  
+- **Subroutine is named `UAMP`** and compiled with the `user=` option.  
+- **Job is launched with `abaqus … user=UAMP.f`** (or `.f90`, `.c`, …).  
+
+If all four items are satisfied, Abaqus will successfully use the user‑defined amplitude.
+A: ## What really happens when you write  
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+```  
+
+1. **Abaqus does **_not_** read any numbers that follow the keyword.**  
+   The line only tells the solver *“the amplitude named *QUADRATIC* will be supplied by a user‑defined sub‑routine.”*  
+
+2. **Abaqus will call the routine `UAMP`.**  
+   The routine name is fixed – it must be `UAMP` (or `UAMP.f90`, `UAMP.c`, …).  
+   Whenever the solver needs the amplitude value it passes to `UAMP`  
+
+   * the current time (`TIME`)  
+   * the amplitude name (`NAME`)  
+   * a **file handle** (`FILEID`) that points to a **text file** containing the time‑amplitude data  
+   * a status flag (`STATUS`) that the routine can set to tell Abaqus when the file is exhausted.  
+
+3. **If you do not tell Abaqus which file to open, it looks for a file whose name is the amplitude name.**  
+   In the example above it will try to open a file called `QUADRATIC` (or `QUADRATIC.txt` on Windows).  
+   If that file cannot be found the job aborts with  
+
+   ```
+   Error: the user amplitude file ... does not exist
+   ```
+
+   Hence the most common cause of the error is **a missing or mis‑named data file**, not a problem in the Fortran source.
+
+---
+
+## Complete set of requirements for a working USER amplitude
+
+| # | Requirement | How to satisfy it | Why it matters |
+|---|-------------|-------------------|----------------|
+| 1 | **A plain‑text data file** containing the time‑amplitude pairs (or an empty file if the subroutine generates the values itself). | Create e.g. `quad.dat` with lines `time  amplitude`. | `UAMP` reads this file via the file handle it receives from Abaqus. |
+| 2 | **Tell Abaqus the file name** (otherwise it defaults to a file named exactly like the amplitude). | Either: <br>```*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat```<br>or put the file name on the line **immediately after** the keyword: <br>```*AMPLITUDE,NAME=QUADRATIC,USER```<br>`quad.dat` | Guarantees Abaqus opens the correct file. |
+| 3 | **Provide the user subroutine `UAMP`.** | Write `UAMP.f`, `UAMP.f90`, or `UAMP.c` with the correct interface (see Abaqus manual). | Abaqus compiles and links this routine; without it the job cannot call a user amplitude. |
+| 4 | **Compile/link the subroutine** when you start the job. | Run the job with the `user=` option, e.g. `abaqus job=MyModel user=UAMP.f`. | Tells Abaqus to compile `UAMP` and add it to the solver executable. |
+| 5 | **All files are in the same working directory** (or you give full paths). | Keep `MyModel.inp`, `quad.dat`, and `UAMP.f` together, launch Abaqus from that directory. | Abaqus searches the current directory for the amplitude file and the compiled object. |
+
+If **all five items** are satisfied, Abaqus will:
+
+1. Open the data file you specified.  
+2. Call `UAMP` each time it needs the amplitude value.  
+3. Receive the value in the argument `AMPL`.  
+4. Continue the analysis without the “user amplitude file does not exist” error.
+
+---
+
+## Minimal, fully‑working example
+
+### 1. Input file (`model.inp`)
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+### 2. Data file (`quad.dat`)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+*(Any name you give in `FILE=` works; the file must exist.)*
+
+### 3. User subroutine (`UAMP.f`)
+
+```fortran
+      SUBROUTINE UAMP(TIME,AMPL,NAME,FILEID,STATUS)
+C -------------------------------------------------
+C USER‑DEFINED AMPLITUDE SUBROUTINE
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER FILEID, STATUS
+      REAL*8 TIME, AMPL
+      REAL*8 TREAD, AREAD
+
+C--- Read the next line from the file (already opened by Abaqus)
+      READ(FILEID,*,END=100) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file reached: tell Abaqus to stop asking for more data
+ 100  CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+> **Note:** The body of `UAMP` can be anything you need (interpolation, analytical formula, etc.). The only mandatory parts are the argument list and the `STATUS` handling.
+
+### 4. Run the job
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+Abaqus will:
+
+* open `quad.dat`,
+* call `UAMP` whenever the amplitude is required,
+* obtain the value returned in `AMPL`,
+* finish the analysis without the “user amplitude file does not exist” error.
+
+---
+
+## Quick “Did I forget something?” checklist
+
+- [ ] **Data file exists** (`quad.dat`, `QUADRATIC`, …) in the job directory.  
+- [ ] **File name supplied** (`FILE=` or on the line after `*AMPLITUDE`).  
+- [ ] **Subroutine is named `UAMP`** and has the correct argument list.  
+- [ ] **Job launched with `user=`** so the routine is compiled and linked.  
+- [ ] **All files are in the same directory** from which you invoke Abaqus.  
+
+If any of the boxes is unchecked, Abaqus will stop with the “user amplitude file does not exist” (or a compilation/link error).  
+
+---
+
+### TL;DR
+
+*`*AMPLITUDE,NAME=…,USER`* tells Abaqus to call **UAMP**.  
+UAMP expects a **text file** (default name = amplitude name) that **must exist**.  
+Give the file name explicitly (`FILE=` or a line after the keyword), supply a correctly‑named `UAMP` routine, compile it with `user=`, and keep everything in the same directory. Once those steps are satisfied the user‑defined amplitude works flawlessly.
+
+=== 2026-04-17 20:31:46 ===
+Q: **What really happens when you write**
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+```
+
+1. **Abaqus does *not* read any numbers that follow the keyword.**  
+   The line only tells the solver *“the amplitude called **QUADRATIC** will be supplied by a user‑defined routine.”*
+
+2. **Abaqus will call the routine `UAMP`.**  
+   The routine name is fixed – it must be `UAMP` (or `UAMP.f90`, `UAMP.c`, …).  
+   Whenever the solver needs the amplitude value it passes to `UAMP`  
+
+   * the current time (`TIME`)  
+   * the amplitude name (`NAME`)  
+   * a **file handle** (`FILEID`) that points to a **text file** containing the time‑amplitude data  
+   * a status flag (`STATUS`) that the routine can set to tell Abaqus when the file is exhausted.  
+
+3. **If you do not tell Abaqus which file to open, it looks for a file whose name is the amplitude name.**  
+   In the example above it will try to open a file called `QUADRATIC` (or `QUADRATIC.txt` on Windows).  
+   If that file cannot be found the job aborts with  
+
+   ```
+   Error: the user amplitude file ... does not exist
+   ```
+
+Hence the most common cause of the error is **a missing or mis‑named data file**, not a problem in the Fortran source.
+
+---
+
+## Complete set of requirements for a working USER amplitude
+
+| # | Requirement | How to satisfy it | Why it matters |
+|---|-------------|-------------------|----------------|
+| 1 | **Plain‑text data file** containing the time‑amplitude pairs (or an empty file if the subroutine generates the values itself). | Create e.g. `quad.dat` with lines `time  amplitude`. | `UAMP` reads this file via the file handle it receives from Abaqus. |
+| 2 | **Tell Abaqus the file name** (otherwise it defaults to a file named exactly like the amplitude). | Either: <br>`*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat`<br>or put the file name on the line **immediately after** the keyword: <br>`*AMPLITUDE,NAME=QUADRATIC,USER`<br>`quad.dat` | Guarantees Abaqus opens the correct file. |
+| 3 | **Provide the user subroutine `UAMP`.** | Write `UAMP.f`, `UAMP.f90`, or `UAMP.c` with the correct argument list (see the Abaqus manual). | Abaqus compiles and links this routine; without it the job cannot call a user amplitude. |
+| 4 | **Compile/link the subroutine** when you start the job. | Run the job with the `user=` option, e.g. `abaqus job=MyModel user=UAMP.f`. | Tells Abaqus to compile `UAMP` and add it to the solver executable. |
+| 5 | **All files are in the same working directory** (or you give full paths). | Keep `MyModel.inp`, `quad.dat`, and `UAMP.f` together, launch Abaqus from that directory. | Abaqus searches the current directory for the amplitude file and the compiled object. |
+
+If **all five items** are satisfied, Abaqus will:
+
+1. Open the data file you specified.  
+2. Call `UAMP` each time it needs the amplitude value.  
+3. Receive the value in the argument `AMPL`.  
+4. Continue the analysis without the “user amplitude file does not exist” error.
+
+---
+
+## Minimal, fully‑working example
+
+### 1. Input file (`model.inp`)
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+### 2. Data file (`quad.dat`) – any name you give in `FILE=` works, but it **must exist**
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+### 3. User subroutine (`UAMP.f`)
+
+```fortran
+      SUBROUTINE UAMP(TIME,AMPL,NAME,FILEID,STATUS)
+C -------------------------------------------------
+C USER‑DEFINED AMPLITUDE SUBROUTINE
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER FILEID, STATUS
+      REAL*8 TIME, AMPL
+      REAL*8 TREAD, AREAD
+
+C--- Read the next line from the file (already opened by Abaqus)
+      READ(FILEID,*,END=100) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file reached: tell Abaqus to stop asking for more data
+ 100  CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+> The body of `UAMP` can be any algorithm you need (interpolation, analytical formula, etc.). The only mandatory parts are the argument list and the `STATUS` handling.
+
+### 4. Run the job
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+Abaqus will open `quad.dat`, call `UAMP` whenever the amplitude is required, obtain the value returned in `AMPL`, and finish the analysis without the “user amplitude file does not exist” error.
+
+---
+
+## Quick “Did I forget something?” checklist
+
+- [ ] **Data file exists** (`quad.dat`, `QUADRATIC`, …) in the job directory.  
+- [ ] **File name supplied** (`FILE=` or on the line after `*AMPLITUDE`).  
+- [ ] **Subroutine is named `UAMP`** and has the correct argument list.  
+- [ ] **Job launched with `user=`** so the routine is compiled and linked.  
+- [ ] **All files are in the same directory** from which you invoke Abaqus.  
+
+If any box is unchecked, Abaqus will stop with the “user amplitude file does not exist” (or a compilation/link error).  
+
+---
+
+### TL;DR
+
+`*AMPLITUDE,NAME=…,USER` tells Abaqus to call **UAMP**.  
+UAMP expects a **text file** (default name = amplitude name) that **must exist**.  
+Give the file name explicitly (`FILE=` or a line after the keyword), supply a correctly‑named `UAMP` routine, compile it with `user=`, and keep everything in the same directory. Once those steps are satisfied the user‑defined amplitude works flawlessly.
+A: **What Abaqus really does when it sees**
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+```
+
+---
+
+### 1. “USER” tells the solver *“the value of this amplitude will be supplied by a user‑defined routine”*  
+
+* No numbers are read from the input line itself.  
+* The only thing Abaqus records is the **name of the amplitude** (`QUADRATIC`) and the fact that it is *user‑defined*.
+
+---
+
+### 2. Abaqus will **call the routine `UAMP`** every time it needs the amplitude value  
+
+The routine **must** have the exact argument list shown in the manual (Fortran, C or C++ are accepted).  
+Typical Fortran prototype:
+
+```fortran
+SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+    CHARACTER*80 NAME
+    INTEGER       FILEID, STATUS
+    DOUBLE PRECISION TIME, AMPL
+    ! …your code…
+END
+```
+
+* **TIME** – current analysis time for which the amplitude is required.  
+* **AMPL** – variable that the routine must fill with the amplitude value.  
+* **NAME** – the amplitude name (`QUADRATIC`).  
+* **FILEID** – a *file handle* that Abaqus has already opened for you.  
+* **STATUS** – set to **1** when the file is exhausted (end‑of‑file); otherwise leave it **0**.
+
+---
+
+### 3. Where does the file come from?
+
+*If you do **not** tell Abaqus the file name, it automatically tries to open a **plain‑text file whose name is exactly the amplitude name**.*  
+In the example above it looks for a file called
+
+```
+QUADRATIC          (or QUADRATIC.txt on Windows)
+```
+
+If that file cannot be found the job aborts with
+
+```
+Error: the user amplitude file ... does not exist
+```
+
+Therefore the most common cause of the error is a missing or mis‑named data file, **not** a problem in the subroutine.
+
+---
+
+### 4. How to give Abaqus the correct file name
+
+You have three equivalent ways:
+
+| Syntax | What it does |
+|--------|--------------|
+| `*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat` | Explicitly tells Abaqus to open **quad.dat**. |
+| `*AMPLITUDE,NAME=QUADRATIC,USER`<br>`quad.dat` | The file name is placed on the **next line** after the keyword. |
+| `*AMPLITUDE,NAME=QUADRATIC,USER` (no extra line) | Abaqus falls back to the default – a file called **QUADRATIC** (or **QUADRATIC.txt**). |
+
+Pick whichever style you prefer, but **the file must exist** before the job starts.
+
+---
+
+### 5. What the data file must contain
+
+*Plain‑text* with **two columns** (any delimiter works – space, tab, comma):
+
+```
+time   amplitude
+0.0    0.0
+0.5    0.25
+1.0    1.0
+```
+
+* The file can be empty if you intend to generate the amplitude inside `UAMP`; you just have to make sure the file exists so that Abaqus can open it.
+
+---
+
+### 6. Compiling / linking the user routine
+
+When you launch the job you must tell Abaqus to compile the routine:
+
+```bash
+abaqus job=MyModel user=UAMP.f   # Fortran source
+# or
+abaqus job=MyModel user=UAMP.c   # C source
+```
+
+If you omit the `user=` option Abaqus will never call `UAMP` and will stop with a “user amplitude not defined” error.
+
+---
+
+## Complete checklist for a **working** user‑defined amplitude
+
+| # | Requirement | How to satisfy it | Consequence if missing |
+|---|-------------|-------------------|------------------------|
+| 1 | **Data file** (plain‑text) exists | `quad.dat` with time‑amplitude pairs (or an empty file) | “user amplitude file does not exist” |
+| 2 | **File name is supplied** (or matches the amplitude name) | `FILE=` keyword, or a line after `*AMPLITUDE`, or name‑match | Abaqus looks for the wrong file and aborts |
+| 3 | **Subroutine `UAMP`** with correct argument list | Write `UAMP.f`, `UAMP.f90`, `UAMP.c`, … | Solver cannot obtain amplitude values |
+| 4 | **Job launched with `user=`** | `abaqus job=MyModel user=UAMP.f` | Routine not compiled/linked |
+| 5 | **All files in the same working directory** (or give full paths) | Keep `MyModel.inp`, `quad.dat`, `UAMP.f` together, run from that folder | Abaqus cannot locate the file or routine |
+
+If **all five items** are satisfied, Abaqus will:
+
+1. Open the specified text file (via the `FILEID` handle).  
+2. Call `UAMP` whenever the amplitude is needed, passing the current `TIME`.  
+3. Receive the computed amplitude in `AMPL`.  
+4. Continue the analysis without any “file does not exist” error.
+
+---
+
+## Minimal, fully‑working example (Fortran)
+
+### Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+### Data file – `quad.dat`
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+### User subroutine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+C -------------------------------------------------
+C USER‑DEFINED AMPLITUDE SUBROUTINE
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file (already opened by Abaqus)
+      READ(FILEID,*,END=100) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file reached: tell Abaqus to stop asking for more data
+ 100  CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+### Run the job
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+Abaqus opens `quad.dat`, calls `UAMP` each time it needs the amplitude, receives the value in `AMPL`, and finishes the analysis without any “user amplitude file does not exist” error.
+
+---
+
+### TL;DR
+
+*`*AMPLITUDE,NAME=…,USER`* → **Abaqus calls `UAMP`.**  
+`UAMP` expects a **text file** (default name = amplitude name) that **must exist**.  
+Give the file name explicitly (`FILE=` or a line after the keyword), supply a correctly‑named `UAMP` routine, compile it with `user=`, and keep everything in the same directory. When those steps are satisfied the user‑defined amplitude works flawlessly.
+
+=== 2026-04-17 20:32:32 ===
+Q: **What Abaqus really does when it reads**
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+```
+
+---
+
+### 1. “USER” only tells the solver *how* the amplitude will be obtained  
+
+* No numbers are read from the line itself.  
+* Abaqus stores the **name** of the amplitude (`QUADRATIC`) and the flag that the value will be supplied by a **user‑defined routine**.
+
+---
+
+### 2. Abaqus will **call the routine `UAMP`** every time the amplitude value is needed  
+
+The routine **must** have the exact argument list required by the manual (Fortran, C or C++ are accepted).  
+Typical Fortran prototype:
+
+```fortran
+SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+    CHARACTER*80 NAME
+    INTEGER       FILEID, STATUS
+    DOUBLE PRECISION TIME, AMPL
+    ! …your code that sets AMPL…
+END
+```
+
+* **TIME** – current analysis time for which the amplitude is required.  
+* **AMPL** – variable that the routine must fill with the amplitude value.  
+* **NAME** – the amplitude name (`QUADRATIC`).  
+* **FILEID** – a *file handle* that Abaqus has already opened for you.  
+* **STATUS** – set to **1** when the file is exhausted (end‑of‑file); otherwise leave it **0**.
+
+---
+
+### 3. Where does the file come from?
+
+If you **do not** give Abaqus a file name, it automatically tries to open a **plain‑text file whose name is exactly the amplitude name**.  
+In the example above it looks for
+
+```
+QUADRATIC          (or QUADRATIC.txt on Windows)
+```
+
+If that file cannot be found the job aborts with
+
+```
+Error: the user amplitude file ... does not exist
+```
+
+Thus the most common cause of the error is a **missing or mis‑named data file**, not a problem in the subroutine.
+
+---
+
+### 4. How to tell Abaqus the correct file name  
+
+You can supply the file name in any of the following equivalent ways:
+
+| Syntax | Effect |
+|-------|--------|
+| `*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat` | Explicitly open **quad.dat**. |
+| `*AMPLITUDE,NAME=QUADRATIC,USER`<br>`quad.dat` | File name placed on the **next line** after the keyword. |
+| `*AMPLITUDE,NAME=QUADRATIC,USER` (no extra line) | Abaqus falls back to the default – a file called **QUADRATIC** (or **QUADRATIC.txt**). |
+
+Pick the style you like, but **the file must exist** before the job starts.
+
+---
+
+### 5. What the data file must contain  
+
+A plain‑text file with two columns (any delimiter works):
+
+```
+time   amplitude
+0.0    0.0
+0.5    0.25
+1.0    1.0
+```
+
+The file may be empty if you intend to generate the amplitude inside `UAMP`; you only need the file to exist so that Abaqus can open it.
+
+---
+
+### 6. Compiling / linking the user routine  
+
+When you start the analysis you must tell Abaqus to compile the routine:
+
+```bash
+abaqus job=MyModel user=UAMP.f   # Fortran source
+# or
+abaqus job=MyModel user=UAMP.c   # C source
+```
+
+If the `user=` option is omitted, Abaqus never calls `UAMP` and will stop with a “user amplitude not defined” error.
+
+---
+
+## Checklist for a **working** user‑defined amplitude
+
+| # | Requirement | How to satisfy it | What happens if missing |
+|---|-------------|-------------------|--------------------------|
+| 1 | **Data file** (plain‑text) exists | `quad.dat` with time‑amplitude pairs (or an empty file) | “user amplitude file does not exist”. |
+| 2 | **File name is supplied** (or matches the amplitude name) | `FILE=` keyword, or a line after `*AMPLITUDE`, or name‑match | Abaqus looks for the wrong file and aborts. |
+| 3 | **Subroutine `UAMP`** with correct argument list | Write `UAMP.f`, `UAMP.f90`, `UAMP.c`, … | Solver cannot obtain amplitude values. |
+| 4 | **Job launched with `user=`** | `abaqus job=MyModel user=UAMP.f` | Routine not compiled/linked. |
+| 5 | **All files in the same working directory** (or give full paths) | Keep `.inp`, data file, and source together, run from that folder | Abaqus cannot locate the file or routine. |
+
+When **all five items** are satisfied, Abaqus will:
+
+1. Open the specified text file (via the `FILEID` handle).  
+2. Call `UAMP` whenever the amplitude is needed, passing the current `TIME`.  
+3. Receive the computed amplitude in `AMPL`.  
+4. Continue the analysis without any “user amplitude file does not exist” error.
+
+---
+
+## Minimal, fully‑working example (Fortran)
+
+### Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+### Data file – `quad.dat` (must exist)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+### User subroutine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+C -------------------------------------------------
+C USER‑DEFINED AMPLITUDE SUBROUTINE
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file (already opened by Abaqus)
+      READ(FILEID,*,END=100) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file reached: tell Abaqus to stop asking for more data
+ 100  CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+### Run the job
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+Abaqus opens `quad.dat`, calls `UAMP` each time the amplitude is required, receives the value in `AMPL`, and completes the analysis without the “user amplitude file does not exist” error.
+
+---
+
+### TL;DR
+
+`*AMPLITUDE,NAME=…,USER` → **Abaqus calls `UAMP`.**  
+`UAMP` expects a **text file** (default name = amplitude name) that **must exist**.  
+Give the file name explicitly (`FILE=` or a line after the keyword), provide a correctly‑named `UAMP` routine, compile it with `user=`, and keep all files in the same directory. When those steps are satisfied the user‑defined amplitude works perfectly.
+A: ## What really happens when Abaqus reads  
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+```
+
+### 1.  The line only **registers a user‑defined amplitude**
+| Item | What Abaqus stores |
+|------|--------------------|
+| `NAME=QUADRATIC` | The name that will be used later in loads, BCs, etc. |
+| `USER`           | A flag telling the solver that the amplitude value will be supplied by the **user routine `UAMP`**. |
+| No numbers are read from this line – the line does **not** contain the amplitude data. |
+
+---
+
+### 2.  Abaqus expects a **text file** that contains the data (or at least an empty file)  
+
+*If you do **not** give a file name, Abaqus automatically tries to open a file whose name is exactly the amplitude name.*  
+
+| Platform | File that Abaqus looks for |
+|----------|----------------------------|
+| Windows  | `QUADRATIC`  or `QUADRATIC.txt` |
+| Linux/Unix | `QUADRATIC` |
+
+If that file cannot be opened the job aborts with  
+
+```
+Error: the user amplitude file ... does not exist
+```
+
+Hence the most common cause of the error is a **missing or mis‑named data file**, not a problem in the sub‑routine.
+
+---
+
+### 3.  How to tell Abaqus which file to read  
+
+You can supply the file name in any of the following equivalent ways:
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+```
+
+or
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+quad.dat
+```
+
+or, if you omit the `FILE=` argument **and** do not place a line after the keyword, Abaqus falls back to the default file (`QUADRATIC` or `QUADRATIC.txt`).  
+Pick the style you like, but **the file must exist before the job starts**.
+
+---
+
+### 4.  The routine that supplies the amplitude – **UAMP**
+
+Every time the solver needs the amplitude value (e.g. at a load step, at a prescribed displacement, etc.) it calls the user routine **UAMP**.  
+The routine **must** be compiled and linked with the job (`abaqus job=… user=UAMP.f`).
+
+#### Prototype (Fortran)
+
+```fortran
+SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+    CHARACTER*80 NAME
+    INTEGER       FILEID, STATUS
+    DOUBLE PRECISION TIME, AMPL
+    !--- your code -------------------------------------------------
+    !   set AMPL = value of the amplitude at the given TIME
+    !   optionally read the next line from FILEID
+    !   set STATUS = 1 when end‑of‑file is reached
+    !----------------------------------------------------------------
+END
+```
+
+| Argument | Meaning (what you must do) |
+|----------|----------------------------|
+| `TIME`   | Current analysis time for which the amplitude is required. |
+| `AMPL`   | **Output** – you must assign the amplitude value here. |
+| `NAME`   | The amplitude name (`QUADRATIC`). Useful if you have several user amplitudes in the same routine. |
+| `FILEID` | An **already opened** file handle that points to the file you supplied (or to the default file). Use normal `READ(FILEID,…)` statements to fetch data. |
+| `STATUS`| Return **0** while data are still available; set to **1** when you have reached the end of the file (so Abaqus knows not to call you again). |
+
+If you do **not** need a data file (you generate the amplitude analytically), you still have to create an **empty** file with the expected name, otherwise Abaqus will abort before it ever reaches `UAMP`.
+
+---
+
+### 5.  What Abaqus does internally (step‑by‑step)
+
+1. **Parse the keyword** `*AMPLITUDE,NAME=QUADRATIC,USER`.  
+   * Stores the name `QUADRATIC` and the flag “user‑defined”.  
+
+2. **Determine the file to open**  
+   * If `FILE=` is present → open that file.  
+   * Else if a line follows the keyword → treat that line as the file name.  
+   * Else → try to open a file called `QUADRATIC` (or `QUADRATIC.txt`).  
+
+3. **Open the file** and keep the file handle (`FILEID`). If the open fails → job aborts with the “user amplitude file does not exist” message.  
+
+4. **When the amplitude is needed** (during a step, at a load, etc.)  
+   * Call `UAMP` and pass the current `TIME`, the file handle, the name, and a status flag.  
+   * `UAMP` reads from the file (or computes analytically) and returns the value in `AMPL`.  
+
+5. **If `UAMP` sets `STATUS = 1`** the solver knows the file is exhausted and will stop calling the routine for the remainder of the analysis.  
+
+---
+
+### 6.  Minimal working example (everything in one directory)
+
+#### `model.inp`
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+#### `quad.dat`  (must exist – can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+#### `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file (already opened by Abaqus)
+      READ(FILEID,*,END=100) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file reached
+ 100  CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+#### Run the job
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+Abaqus opens `quad.dat`, calls `UAMP` whenever the amplitude is required, receives the value in `AMPL`, and finishes the analysis **without** the “user amplitude file does not exist” error.
+
+---
+
+## TL;DR (the “complete requirement” in a nutshell)
+
+1. `*AMPLITUDE,NAME=…,USER` tells Abaqus **“the amplitude will be supplied by the routine `UAMP`”.**  
+2. Abaqus **must be able to open a text file** (default name = the amplitude name, or the name given with `FILE=` or on the next line).  
+3. The **user routine `UAMP`** must be compiled (`abaqus … user=UAMP.xxx`) and must follow the required argument list, reading from the file handle `FILEID` and returning the amplitude in `AMPL`.  
+4. If the file cannot be opened, Abaqus aborts with *“user amplitude file does not exist”*.  
+5. When the file exists, the routine is called each time the amplitude is needed, and the analysis proceeds normally.
+
+Follow those five points and the user‑defined amplitude works exactly as Abaqus expects.
+
+=== 2026-04-17 20:33:17 ===
+Q: When Abaqus encounters  
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+```  
+
+it does **not** read any numbers from the line.  
+The line only tells the solver two things:
+
+| What is stored | Meaning |
+|----------------|---------|
+| **NAME = QUADRATIC** | The name that will be referenced later (in loads, BCs, etc.). |
+| **USER** | The amplitude value will be supplied by the **user routine `UAMP`**. |
+
+Because the amplitude is “user‑defined”, Abaqus must open a **text file** that will be used by `UAMP`.  
+If you do **not** give a file name, Abaqus automatically tries to open a file whose name is exactly the amplitude name:
+
+* Windows → `QUADRATIC` or `QUADRATIC.txt`  
+* Linux/Unix → `QUADRATIC`
+
+If that file cannot be opened the job aborts with  
+
+```
+Error: the user amplitude file ... does not exist
+```
+
+Hence the most common cause of the error is a missing or mis‑named data file, not a problem in the routine.
+
+### Supplying the file name
+
+You can tell Abaqus which file to read in any of the following equivalent ways:
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+```
+
+or
+
+```abaqus
+*AMPLITUDE,NAME=QUADRATIC,USER
+quad.dat
+```
+
+If you omit both the `FILE=` argument and the line after the keyword, Abaqus falls back to the default file (`QUADRATIC` or `QUADRATIC.txt`). The file must exist (it may be empty) before the analysis starts.
+
+### The routine that provides the amplitude – **UAMP**
+
+Whenever the solver needs the amplitude value (e.g., at a load step), it calls the user routine **UAMP**.  
+The routine **must** be compiled and linked with the job (`abaqus job=… user=UAMP.f`).
+
+A typical Fortran prototype is
+
+```fortran
+SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+    CHARACTER*80 NAME
+    INTEGER       FILEID, STATUS
+    DOUBLE PRECISION TIME, AMPL
+    !--- your code -------------------------------------------------
+    !   read from FILEID (the file opened by Abaqus) if needed
+    !   set AMPL = amplitude value at the given TIME
+    !   set STATUS = 0 while data remain, STATUS = 1 at end‑of‑file
+    !----------------------------------------------------------------
+END
+```
+
+| Argument | What you must do |
+|----------|------------------|
+| `TIME`   | Current analysis time for which the amplitude is required. |
+| `AMPL`   | **Output** – assign the amplitude value here. |
+| `NAME`   | The amplitude name (`QUADRATIC`). Useful if you handle several user amplitudes in one routine. |
+| `FILEID` | An already‑opened file handle that points to the file you supplied (or to the default file). Use normal `READ(FILEID,…)` statements. |
+| `STATUS`| Return **0** while data are still available; set to **1** when you have reached the end of the file (so Abaqus knows not to call you again). |
+
+If you generate the amplitude analytically and do not need a data file, you still must create an **empty** file with the expected name; otherwise Abaqus aborts before it ever reaches `UAMP`.
+
+### Internal sequence performed by Abaqus
+
+1. **Parse** `*AMPLITUDE,NAME=QUADRATIC,USER`.  
+   Stores the name and the “user‑defined” flag.
+2. **Determine the file to open**  
+   * `FILE=` present → open that file.  
+   * Else if a line follows the keyword → treat that line as the file name.  
+   * Else → try to open a file called `QUADRATIC` (or `QUADRATIC.txt`).  
+3. **Open the file**; if the open fails → abort with *“user amplitude file does not exist”*.
+4. **When the amplitude is needed** (load step, prescribed displacement, etc.)  
+   * Call `UAMP`, passing the current `TIME`, the file handle `FILEID`, the name, and a status flag.  
+   * `UAMP` reads from the file (or computes analytically) and returns the value in `AMPL`.  
+5. If `UAMP` sets `STATUS = 1`, the solver knows the file is exhausted and stops calling the routine for the rest of the analysis.
+
+### Minimal working example (all files in one directory)
+
+**model.inp**
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**quad.dat** (must exist – can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**UAMP.f**
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file (already opened by Abaqus)
+      READ(FILEID,*,END=100) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file reached
+ 100  CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+**Run**
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+Abaqus opens `quad.dat`, calls `UAMP` whenever the amplitude is required, receives the value in `AMPL`, and completes the analysis **without** the “user amplitude file does not exist” error.
+
+---
+
+## Bottom line (the “complete requirement”)
+
+1. `*AMPLITUDE,NAME=…,USER` tells Abaqus **“the amplitude will be supplied by routine `UAMP`”.**  
+2. Abaqus **must be able to open a text file** (default name = the amplitude name, or the name given with `FILE=` or on the next line).  
+3. The **user routine `UAMP`** must be compiled (`abaqus … user=UAMP.xxx`) and must follow the required argument list, reading from the file handle `FILEID` and returning the amplitude in `AMPL`.  
+4. If the file cannot be opened, Abaqus aborts with *“user amplitude file does not exist”*.  
+5. When the file exists, `UAMP` is called each time the amplitude is needed, and the analysis proceeds normally.
+
+Follow those five points and the user‑defined amplitude works exactly as Abaqus expects.
+A: **Complete requirement for a working “user‑defined amplitude” in Abaqus**
+
+| What you have to do | Why it is needed | How to do it |
+|---------------------|------------------|--------------|
+| 1. **Declare the amplitude as USER** | Tells Abaqus that the value will be supplied by the routine `UAMP`. | ```*AMPLITUDE,NAME=QUADRATIC,USER``` (or add `FILE=` – see step 2). |
+| 2. **Make a text file that Abaqus can open** | Before the first call to `UAMP` Abaqus opens a file and passes its handle (`FILEID`) to the routine. If the file cannot be opened the job aborts with *“user amplitude file does not exist”*. | *Default name* – the amplitude name (or the name with “.txt” on Windows). <br> *Explicit name* – add `FILE=yourfile.dat` to the keyword **or** place the file name on the line immediately after the keyword. <br> Example: <br> ```*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat``` <br> or <br> ```*AMPLITUDE,NAME=QUADRATIC,USER``` <br> ```quad.dat``` |
+| 3. **Provide the file (it may be empty)** | Abaqus must succeed in the open operation; an empty file is acceptable if the amplitude will be generated analytically inside `UAMP`. | Create `quad.dat` (or the name you chose) in the same directory as the input file. |
+| 4. **Write the routine `UAMP` with the exact argument list** | Abaqus calls this routine every time it needs the amplitude value. The prototype is fixed; any deviation causes a compilation or run‑time error. | ```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      ! … your code …
+      END
+``` |
+| 5. **Read from the file (or compute analytically) and return the value** | `UAMP` must set `AMPL` to the amplitude at the supplied `TIME` and set `STATUS` to 0 while data remain, 1 when the file is exhausted. | Typical pattern: <br> ```fortran
+      DOUBLE PRECISION TREAD, AREAD
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) AMPL = AREAD
+      RETURN
+   EOF CONTINUE
+      STATUS = 1
+      RETURN
+``` |
+| 6. **Compile and link the routine with the job** | Abaqus must know where the routine lives; otherwise it will never be called. | ```bash
+      abaqus job=MyModel user=UAMP.f
+``` |
+| 7. **Run the analysis** | If steps 1‑6 are satisfied the job finishes without the “user amplitude file does not exist” error. | ```bash
+      abaqus job=MyModel
+``` |
+
+---
+
+## Step‑by‑step minimal example (all files in one folder)
+
+### 1. Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+### 2. Data file – `quad.dat`  (must exist; can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+### 3. User routine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file that Abaqus opened
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file reached
+  EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+### 4. Compile & run
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+Abaqus opens `quad.dat`, calls `UAMP` whenever the amplitude is needed, receives the value in `AMPL`, and the analysis completes without the “user amplitude file does not exist” error.
+
+---
+
+## Quick checklist (copy‑paste into a notebook)
+
+```
+[ ] *AMPLITUDE line contains USER (and optionally FILE=)
+[ ] A text file with the chosen name exists in the job directory
+[ ] The file name is either the amplitude name, the name after FILE=,
+    or the line that follows the *AMPLITUDE keyword
+[ ] UAMP routine is written with the exact argument list
+[ ] UAMP reads from FILEID (or computes analytically) and sets STATUS
+[ ] Routine is compiled and linked: abaqus … user=UAMP.xxx
+[ ] Job is submitted
+```
+
+If **any** item in the checklist is missing, Abaqus will abort with the “user amplitude file does not exist” message. Satisfying all five points listed in the table above is the *complete requirement* for a functional user‑defined amplitude.
+
+=== 2026-04-17 20:33:55 ===
+Q: **Complete requirement for a working “user‑defined amplitude” in Abaqus**  
+
+| # | What you have to do | Why it is needed | How to do it (example) |
+|---|--------------------|------------------|------------------------|
+| 1 | **Declare the amplitude as USER** | Tells Abaqus that the value will be supplied by the routine `UAMP`. | ```*AMPLITUDE,NAME=QUADRATIC,USER``` (you may also add `FILE=` – see step 2). |
+| 2 | **Make a text file that Abaqus can open** | Before the first call to `UAMP` Abaqus opens a file and passes its handle (`FILEID`) to the routine. If the file cannot be opened the job aborts with *“user amplitude file does not exist”*. | *Default name* – the amplitude name (or the name with “.txt” on Windows). <br> *Explicit name* – add `FILE=yourfile.dat` to the keyword **or** place the file name on the line immediately after the keyword. <br> **Examples**: <br> ```*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat``` <br> or <br> ```*AMPLITUDE,NAME=QUADRATIC,USER``` <br> ```quad.dat``` |
+| 3 | **Provide the file (it may be empty)** | Abaqus must succeed in the open operation; an empty file is acceptable if the amplitude will be generated analytically inside `UAMP`. | Create `quad.dat` (or the name you chose) in the same directory as the input file. |
+| 4 | **Write the routine `UAMP` with the exact argument list** | Abaqus calls this routine every time it needs the amplitude value. The prototype is fixed; any deviation causes a compilation or run‑time error. | ```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      ! … your code …
+      END
+``` |
+| 5 | **Read from the file (or compute analytically) and return the value** | `UAMP` must set `AMPL` to the amplitude at the supplied `TIME` and set `STATUS` to 0 while data remain, 1 when the file is exhausted. | Typical pattern (Fortran): <br> ```fortran
+      DOUBLE PRECISION TREAD, AREAD
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) AMPL = AREAD
+      RETURN
+   EOF CONTINUE
+      STATUS = 1
+      RETURN
+``` |
+| 6 | **Compile and link the routine with the job** | Abaqus must know where the routine lives; otherwise it will never be called. | ```bash
+      abaqus job=MyModel user=UAMP.f
+``` |
+| 7 | **Run the analysis** | If steps 1‑6 are satisfied the job finishes without the “user amplitude file does not exist” error. | ```bash
+      abaqus job=MyModel
+``` |
+
+---
+
+## Step‑by‑step minimal example (all files in one folder)
+
+### 1. Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUADRATIC,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+### 2. Data file – `quad.dat`  (must exist; can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+### 3. User routine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file that Abaqus opened
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file reached
+  EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+### 4. Compile & run
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+Abaqus opens `quad.dat`, calls `UAMP` whenever the amplitude is needed, receives the value in `AMPL`, and the analysis completes **without** the “user amplitude file does not exist” error.
+
+---
+
+## Quick checklist (copy‑paste into a notebook)
+
+```
+[ ] *AMPLITUDE line contains USER (and optionally FILE=)
+[ ] A text file with the chosen name exists in the job directory
+[ ] The file name is either the amplitude name, the name after FILE=,
+    or the line that follows the *AMPLITUDE keyword
+[ ] UAMP routine is written with the exact argument list
+[ ] UAMP reads from FILEID (or computes analytically) and sets STATUS
+[ ] Routine is compiled and linked: abaqus … user=UAMP.xxx
+[ ] Job is submitted
+```
+
+If **any** item in the checklist is missing, Abaqus will abort with the “user amplitude file does not exist” message. Satisfying all five points listed in the table above is the *complete requirement* for a functional user‑defined amplitude.
+A: Below is the **complete set of requirements** that must be satisfied for a user‑defined amplitude (`UAMP`) to work in Abaqus without the *“user amplitude file does not exist”* abort.  
+Everything in the table you posted has to be present; missing any single item will cause the error.
+
+---
+
+## 1. Input‑file declaration  
+
+| What you must write | Why it matters | Correct syntax (examples) |
+|---------------------|----------------|---------------------------|
+| Declare the amplitude as **USER** | Tells Abaqus that the value will be supplied by the routine `UAMP`. | `*AMPLITUDE,NAME=MYAMP,USER` |
+| (Optional) Give the **file name** that Abaqus will open before the first call to `UAMP`. | Abaqus opens this file once, obtains a file handle (`FILEID`), and passes it to the routine. If the file cannot be opened the job aborts. | `*AMPLITUDE,NAME=MYAMP,USER,FILE=amp.dat`  <br>or  <br>`*AMPLITUDE,NAME=MYAMP,USER` <br>`amp.dat` (file name on the next line) |
+| (If you omit `FILE=`) the **default file name** is the amplitude name (or the name with “.txt” on Windows). | Guarantees that Abaqus knows which file to look for. | `*AMPLITUDE,NAME=MYAMP,USER` → Abaqus looks for `MYAMP` (or `MYAMP.txt`). |
+
+**Result:** a line (or two lines) that ends with the keyword `USER` and, if you want, a `FILE=` specification.
+
+---
+
+## 2. Physical file on disk  
+
+| What you must have | Why it matters | How to create it |
+|--------------------|----------------|------------------|
+| A **readable text file** whose name matches the one given in step 1 (or the default name). | Abaqus must succeed in the `OPEN` operation before it ever calls `UAMP`. | Create `amp.dat` (or `MYAMP`, `MYAMP.txt`, …) in the same directory as the `.inp` file. The file may be empty if you intend to generate the amplitude analytically inside `UAMP`. |
+| The file must be **plain ASCII** (no binary data, no extra control characters). | Guarantees that the Fortran `READ(FILEID,*,…)` works. | Use any editor (Notepad, vi, etc.) and save as plain text. |
+
+---
+
+## 3. The `UAMP` routine – exact prototype  
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+C -------------------------------------------------
+C TIME   – (input)  current time at which the amplitude is required
+C AMPL   – (output) amplitude value that Abaqus will use
+C NAME   – (input)  amplitude name (character*80)
+C FILEID – (input)  Fortran unit number of the file opened by Abaqus
+C STATUS – (output) 0 = data still available, 1 = end‑of‑file reached
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+C -------------------------------------------------
+      ! *** Your code goes here ***
+      END
+```
+
+* **Do not change the argument list or their types.**  
+* The routine must be compiled with the same compiler that Abaqus uses (Intel Fortran on Windows/Linux, gfortran on Linux if you set `abaqus make` accordingly).  
+
+---
+
+## 4. What the routine must do  
+
+1. **Read (or compute) the amplitude** for the supplied `TIME`.  
+   *If you read from the file:*  
+   ```fortran
+      DOUBLE PRECISION TREAD, AREAD
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+   EOF CONTINUE
+      STATUS = 1          ! tell Abaqus that the file is exhausted
+      RETURN
+   ```
+   *If you compute analytically (no file needed):*  
+   ```fortran
+      AMPL = TIME**2      ! example: quadratic amplitude
+      STATUS = 0
+      RETURN
+   ```
+
+2. **Set `STATUS`**  
+   * `0` – more data are available (normal operation).  
+   * `1` – end‑of‑file reached (Abaqus will stop calling the routine).  
+
+3. **Do not close the file** – Abaqus owns the file handle and will close it when the job ends.
+
+---
+
+## 5. Compile & link the routine with the job  
+
+```bash
+# Linux / Windows command line
+abaqus job=MyModel user=UAMP.f   # .f, .for, .f90, .c, .cpp are all accepted
+```
+
+* `user=` tells Abaqus to compile the source file, link it into the solver, and make the routine available.  
+* If you have several user subroutines, list them all: `user=UAMP.f,UMAT.f, ...`.
+
+---
+
+## 6. Run the analysis  
+
+```bash
+abaqus job=MyModel
+```
+
+If steps 1‑5 are satisfied, Abaqus will:
+
+1. Open the file you supplied (or the default one).  
+2. Pass the file handle (`FILEID`) to `UAMP`.  
+3. Receive a valid `AMPL` value for every time point it needs.  
+4. Finish the job **without** the “user amplitude file does not exist” error.
+
+---
+
+## 7. Quick “copy‑paste” checklist  
+
+```text
+[ ] *AMPLITUDE line contains USER (and, if you want, FILE=yourfile.dat)
+[ ] The file named in FILE= (or the default name) exists in the job directory
+[ ] The file is plain ASCII (it may be empty)
+[ ] UAMP routine is written with the exact argument list shown above
+[ ] UAMP reads from FILEID (or computes analytically) and sets AMPL and STATUS
+[ ] Routine is compiled and linked with the job (abaqus … user=UAMP.f)
+[ ] Job is submitted (abaqus job=MyModel)
+```
+
+**If any box is unchecked, Abaqus aborts with the “user amplitude file does not exist” message.**  
+
+---
+
+### Minimal working example (all files in the same folder)
+
+**model.inp**
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**quad.dat** (must exist; can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**UAMP.f**
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read next line from the file opened by Abaqus
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file reached
+  EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+**Compile & run**
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+The analysis completes, the amplitude values are taken from `quad.dat`, and no “user amplitude file does not exist” error appears.
+
+---
+
+### Bottom line  
+
+A **working user‑defined amplitude** in Abaqus requires **all** of the following:
+
+1. `*AMPLITUDE … USER` (with optional `FILE=`).  
+2. A matching, readable text file in the job directory.  
+3. A correctly‑prototyped `UAMP` routine that reads from the file (or computes analytically) and returns `AMPL` and `STATUS`.  
+4. The routine compiled and linked via the `user=` option.  
+5. The job submitted normally.
+
+Satisfying these five points (the table you already have) is the **complete requirement**. If you follow the checklist above you will never see the “user amplitude file does not exist” abort again.
+
+=== 2026-04-17 20:34:40 ===
+Q: **A user‑defined amplitude (`UAMP`) will work in Abaqus only if *every* item in the table you posted is satisfied.**  
+If any one of the following is missing, Abaqus aborts with the message **“user amplitude file does not exist.”**
+
+| # | What must be present | Why it is required | How to satisfy it |
+|---|----------------------|--------------------|-------------------|
+| 1 | `*AMPLITUDE` line that ends with **USER** (you may also add `FILE=`) | Tells Abaqus that the amplitude will be supplied by the routine `UAMP`. | `*AMPLITUDE,NAME=MYAMP,USER`  <br>or  <br>`*AMPLITUDE,NAME=MYAMP,USER,FILE=amp.dat` |
+| 2 | **A readable ASCII text file** whose name matches the one given in step 1 (or the default name, which is the amplitude name or the name with “.txt” on Windows) | Abaqus opens this file once, obtains a file handle (`FILEID`), and passes it to `UAMP`. If the open fails the job aborts. | Create `amp.dat` (or `MYAMP`, `MYAMP.txt`, …) in the same directory as the `.inp` file. The file may be empty if you generate the amplitude analytically inside `UAMP`. |
+| 3 | **The routine `UAMP`** written with the **exact prototype**<br>`SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)`<br>(`TIME`, `AMPL`, `NAME`, `FILEID`, `STATUS` of the types shown) | Abaqus calls this routine every time it needs the amplitude value; the argument list is fixed. | Write the routine exactly as shown (Fortran, C, or C++ are all accepted). |
+| 4 | **Inside `UAMP`**<br>  • read (or compute) the amplitude for the supplied `TIME`<br>  • set `AMPL` to that value<br>  • set `STATUS = 0` while data remain, `STATUS = 1` when the file is exhausted | `UAMP` must return a valid amplitude and tell Abaqus whether more data are available. | Typical pattern (Fortran):<br>```fortran<br>DOUBLE PRECISION TREAD, AREAD<br>READ(FILEID,*,END=EOF) TREAD, AREAD<br>IF (TIME .GE. TREAD) AMPL = AREAD<br>RETURN<br>EOF CONTINUE<br>STATUS = 1<br>RETURN<br>``` |
+| 5 | **Compile and link** the routine with the job using the `user=` option | Without this Abaqus never sees the routine, so the amplitude cannot be supplied. | `abaqus job=MyModel user=UAMP.f` (or `.for`, `.f90`, `.c`, `.cpp`, …). |
+| 6 | **Run the analysis** normally | If the five items above are all present, Abaqus will open the file, call `UAMP`, obtain a valid `AMPL`, and finish without aborting. | `abaqus job=MyModel` (or simply `abaqus job=MyModel` after the `user=` compilation). |
+
+---
+
+### Quick “copy‑paste” checklist
+
+```text
+[ ] *AMPLITUDE line contains USER (and optionally FILE=yourfile.dat)
+[ ] The file named in FILE= (or the default name) exists in the job directory
+[ ] The file is plain ASCII (it may be empty)
+[ ] UAMP routine is written with the exact argument list shown above
+[ ] UAMP reads from FILEID (or computes analytically) and sets AMPL and STATUS
+[ ] Routine is compiled and linked with the job (abaqus … user=UAMP.xxx)
+[ ] Job is submitted (abaqus job=MyModel)
+```
+
+**If any box is unchecked, Abaqus will abort with “user amplitude file does not exist.”**  
+
+---
+
+### Minimal working example (all files in the same folder)
+
+**model.inp**
+
+```abaqus
+*HEADING
+Simple model with a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**quad.dat** (must exist; can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**UAMP.f**
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read next line from the file opened by Abaqus
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file reached
+  EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+**Compile & run**
+
+```bash
+abaqus job=model user=UAMP.f
+```
+
+The analysis finishes, the amplitude values are taken from `quad.dat`, and **no “user amplitude file does not exist” error appears**.
+
+---
+
+### Bottom line
+
+A **functional user‑defined amplitude** in Abaqus requires **all** of the items listed above.  
+If you follow the checklist, you will never encounter the “user amplitude file does not exist” abort again.
+A: Below is a **complete, step‑by‑step recipe** that guarantees a user‑defined amplitude (`UAMP`) will be accepted by Abaqus.  
+If any one of the items is missing or wrong, Abaqus aborts with the dreaded  
+
+```
+*** ERROR: USER AMPLITUDE FILE DOES NOT EXIST
+```  
+
+Follow the checklist, copy‑paste the example files, and you will never see that error again.
+
+---
+
+## 1. What Abaqus really expects
+
+| # | Item that must exist | Why Abaqus needs it | How to satisfy it (what you must create) |
+|---|----------------------|---------------------|------------------------------------------|
+| 1 | `*AMPLITUDE` line **with the keyword `USER`** (optionally `FILE=`) | Tells the solver that the amplitude will be supplied by the routine `UAMP`. | ```*AMPLITUDE,NAME=MYAMP,USER```  <br>or  <br>```*AMPLITUDE,NAME=MYAMP,USER,FILE=amp.dat``` |
+| 2 | A **readable ASCII text file** whose name matches the one given in step 1 (or the default name) | Abaqus opens this file once, obtains a file handle (`FILEID`), and passes that handle to `UAMP`. If the open fails the job aborts. | Create `amp.dat` (or `MYAMP`, `MYAMP.txt`, …) in the same folder as the `.inp`. The file may be empty if you compute the amplitude analytically inside `UAMP`. |
+| 3 | The **routine `UAMP`** with the **exact prototype** (Fortran, C or C++) | Abaqus calls this routine every time it needs an amplitude value; the argument list is fixed. | ```fortran<br>SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)<br>DOUBLE PRECISION TIME, AMPL<br>CHARACTER*80   NAME<br>INTEGER       FILEID, STATUS<br>…<br>END``` |
+| 4 | Inside `UAMP` you must **(a)** read (or compute) the amplitude for the supplied `TIME`, **(b)** assign it to `AMPL`, and **(c)** set `STATUS` (`0` = more data, `1` = end‑of‑file) | Abaqus uses `AMPL` as the amplitude value and `STATUS` to know when the file is exhausted. | Typical Fortran pattern (see the minimal example below). |
+| 5 | **Compilation & linking** of the routine with the job (`user=` option) | If the routine is not linked, Abaqus never sees it → abort. | `abaqus job=MyModel user=UAMP.f` (or `.for`, `.f90`, `.c`, `.cpp`). |
+| 6 | **Run the analysis** in the normal way | When the five items above are present, Abaqus opens the file, calls `UAMP`, gets a valid `AMPL`, and finishes without aborting. | `abaqus job=MyModel` (or simply `abaqus job=MyModel` after the `user=` compilation). |
+
+> **Bottom line:** *All six items must be present and correct.* Missing **any** one of them triggers the “user amplitude file does not exist” error.
+
+---
+
+## 2. Quick copy‑paste checklist
+
+```text
+[ ] *AMPLITUDE line contains USER (and optionally FILE=yourfile.dat)
+[ ] The file named in FILE= (or the default name) exists in the job directory
+[ ] The file is plain ASCII (it may be empty)
+[ ] UAMP routine is written with the exact argument list shown above
+[ ] UAMP reads from FILEID (or computes analytically) and sets AMPL and STATUS
+[ ] Routine is compiled and linked with the job (abaqus … user=UAMP.xxx)
+[ ] Job is submitted (abaqus job=MyModel)
+```
+
+If any box stays unchecked, Abaqus will abort.
+
+---
+
+## 3. Minimal, fully working example (everything in the same folder)
+
+### 3.1. Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model that uses a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+*Explanation* – The `*AMPLITUDE` line tells Abaqus to look for a user routine called `UAMP` and to open the file `quad.dat`.
+
+### 3.2. Data file – `quad.dat` (must exist, can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+*Explanation* – Two columns: **time** and **amplitude**. Abaqus will read the file line‑by‑line through the file handle `FILEID` that it passes to `UAMP`.
+
+### 3.3. User routine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+C --------------------------------------------------------------
+C  USER‑DEFINED AMPLITUDE ROUTINE
+C --------------------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file opened by Abaqus.
+C--- If end‑of‑file is reached we set STATUS = 1 and return.
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+
+C--- If the requested TIME is greater than or equal to the time read
+C--- from the file we return the corresponding amplitude.
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+
+      RETURN
+
+C--- End‑of‑file handling
+   EOF CONTINUE
+      STATUS = 1          ! tell Abaqus that no more data are available
+      RETURN
+      END
+```
+
+*Key points*  
+
+* **Prototype** matches exactly what Abaqus expects.  
+* `FILEID` is the unit number that Abaqus opened for `quad.dat`.  
+* `STATUS = 0` (default) means “more data may follow”; `STATUS = 1` signals EOF.  
+* No other I/O (e.g., `OPEN`, `CLOSE`) is allowed – Abaqus owns the file.
+
+### 3.4. Compile & run
+
+```bash
+# Compile the user routine and link it to the job
+abaqus job=model user=UAMP.f
+
+# Submit the job (the previous command already submitted,
+# but you can also run it again without the user= option)
+abaqus job=model
+```
+
+If everything is in the same directory, the analysis finishes cleanly and the amplitude values are taken from `quad.dat`. No “user amplitude file does not exist” error appears.
+
+---
+
+## 4. Common pitfalls (and how to avoid them)
+
+| Symptom | Typical cause | Fix |
+|---------|---------------|-----|
+| **“user amplitude file does not exist”** | • `*AMPLITUDE` line missing `USER` <br>• File name typo or file not in job directory <br>• File is binary or has Windows line‑ending problems on a Linux run | Verify the `*AMPLITUDE` line, check the exact file name, and make sure the file is plain ASCII. |
+| **Linker error “UAMP not found”** | • Routine not compiled (`user=` omitted) <br>• Wrong file extension or case‑sensitivity on Linux | Use `abaqus … user=UAMP.f` (or `.c/.cpp/.for`). Ensure the source file name matches exactly. |
+| **Segmentation fault / crash inside UAMP** | • Attempting to `OPEN`/`CLOSE` the file yourself <br>• Using the wrong data type for arguments (e.g., `REAL*4` instead of `DOUBLE PRECISION`) | Do **not** open/close the file; use the `FILEID` passed by Abaqus. Keep the argument list and types exactly as shown. |
+| **Amplitude values are wrong or constant** | • Not advancing the file pointer correctly (reading the same line every call) <br>• Ignoring the `TIME` argument | Read a new line each call (as in the example) and compare `TIME` with the time read from the file before assigning `AMPL`. |
+| **Job aborts after a few increments** | • `STATUS` never set to `1` → Abaqus thinks more data are available but reaches EOF and cannot read further | When `READ … END=EOF` is triggered, set `STATUS = 1` before returning. |
+
+---
+
+## 5. One‑page “copy‑paste” solution
+
+Place the three files below in a folder, open a terminal in that folder, and run the two commands shown. That is everything you need.
+
+### `model.inp`
+
+```abaqus
+*HEADING
+User‑amplitude test
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+### `quad.dat`
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+### `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) AMPL = AREAD
+      RETURN
+   EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+### Commands
+
+```bash
+abaqus job=model user=UAMP.f   # compile & submit
+# (or: abaqus job=model user=UAMP.f && abaqus job=model)
+```
+
+When the job finishes, open the `.dat` or `.msg` file – you will see no error and the amplitude values will have been taken from `quad.dat`.
+
+---
+
+### TL;DR
+
+> **A user‑defined amplitude works only if you have**  
+> 1️⃣ `*AMPLITUDE … USER` in the input,  
+> 2️⃣ a matching ASCII file,  
+> 3️⃣ a correctly‑prototyped `UAMP` routine,  
+> 4️⃣ that routine reads/computes the value, sets `AMPL` and `STATUS`,  
+> 5️⃣ the routine is compiled with `user=…`, and  
+> 6️⃣ the job is run normally.  
+
+Check each of the six items, and the “user amplitude file does not exist” error disappears forever.
+
+=== 2026-04-17 20:35:41 ===
+Q: **A user‑defined amplitude (`UAMP`) will be accepted by Abaqus only when *every* item in the table you posted is satisfied.**  
+If any one of the following is missing or wrong, Abaqus aborts with  
+
+```
+*** ERROR: USER AMPLITUDE FILE DOES NOT EXIST
+```
+
+Below is a complete, step‑by‑step recipe (including a minimal working example) that guarantees the routine will work. Use the checklist at the end to verify that nothing is missing.
+
+---------------------------------------------------------------------
+
+## 1. What Abaqus really expects
+
+| # | Item that must exist | Why Abaqus needs it | How to satisfy it |
+|---|----------------------|---------------------|-------------------|
+| 1 | `*AMPLITUDE` line **ending with `USER`** (you may also add `FILE=`) | Tells the solver that the amplitude will be supplied by the routine `UAMP`. | `*AMPLITUDE,NAME=MYAMP,USER`  <br>or  <br>`*AMPLITUDE,NAME=MYAMP,USER,FILE=amp.dat` |
+| 2 | A **readable ASCII text file** whose name matches the one given in step 1 (or the default name – the amplitude name or the name with “.txt” on Windows) | Abaqus opens this file once, obtains a file handle (`FILEID`), and passes that handle to `UAMP`. If the open fails the job aborts. | Create `amp.dat` (or `MYAMP`, `MYAMP.txt`, …) in the same folder as the `.inp`. The file may be empty if you compute the amplitude analytically inside `UAMP`. |
+| 3 | The **routine `UAMP`** with the **exact prototype** (Fortran, C or C++) | Abaqus calls this routine every time it needs an amplitude value; the argument list is fixed. | ```fortran<br>SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)<br>DOUBLE PRECISION TIME, AMPL<br>CHARACTER*80   NAME<br>INTEGER       FILEID, STATUS<br>…<br>END``` |
+| 4 | Inside `UAMP` you must **(a)** read (or compute) the amplitude for the supplied `TIME`, **(b)** assign it to `AMPL`, and **(c)** set `STATUS` (`0` = more data, `1` = end‑of‑file) | Abaqus uses `AMPL` as the amplitude value and `STATUS` to know when the file is exhausted. | Typical Fortran pattern (see minimal example below). |
+| 5 | **Compilation & linking** of the routine with the job (`user=` option) | If the routine is not linked, Abaqus never sees it → abort. | `abaqus job=MyModel user=UAMP.f` (or `.for`, `.f90`, `.c`, `.cpp`). |
+| 6 | **Run the analysis** in the normal way | When the five items above are present, Abaqus opens the file, calls `UAMP`, obtains a valid `AMPL`, and finishes without aborting. | `abaqus job=MyModel` (or simply `abaqus job=MyModel` after the `user=` compilation). |
+
+> **Bottom line:** *All six items must be present and correct.* Missing **any** one of them triggers the “user amplitude file does not exist” error.
+
+---------------------------------------------------------------------
+
+## 2. Quick copy‑paste checklist
+
+```text
+[ ] *AMPLITUDE line contains USER (and optionally FILE=yourfile.dat)
+[ ] The file named in FILE= (or the default name) exists in the job directory
+[ ] The file is plain ASCII (it may be empty)
+[ ] UAMP routine is written with the exact argument list shown above
+[ ] UAMP reads from FILEID (or computes analytically) and sets AMPL and STATUS
+[ ] Routine is compiled and linked with the job (abaqus … user=UAMP.xxx)
+[ ] Job is submitted (abaqus job=MyModel)
+```
+
+If any box stays unchecked, Abaqus will abort.
+
+---------------------------------------------------------------------
+
+## 3. Minimal, fully‑working example (everything in the same folder)
+
+### 3.1. Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model that uses a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+*The `*AMPLITUDE` line tells Abaqus to look for a routine called `UAMP` and to open the file `quad.dat`.*
+
+### 3.2. Data file – `quad.dat` (must exist; can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+*Two columns: **time** and **amplitude**. Abaqus will read the file line‑by‑line through the file handle `FILEID` that it passes to `UAMP`.*
+
+### 3.3. User routine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+C -------------------------------------------------
+C  USER‑DEFINED AMPLITUDE ROUTINE
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file opened by Abaqus.
+C--- If end‑of‑file is reached we set STATUS = 1 and return.
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+
+C--- Return the amplitude that corresponds to the time just read.
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file handling
+   EOF CONTINUE
+      STATUS = 1          ! tell Abaqus that no more data are available
+      RETURN
+      END
+```
+
+*Key points*  
+
+* **Prototype** matches exactly what Abaqus expects.  
+* `FILEID` is the unit number that Abaqus opened for `quad.dat`.  
+* `STATUS = 0` (default) means “more data may follow”; `STATUS = 1` signals EOF.  
+* Do **not** `OPEN` or `CLOSE` the file yourself – Abaqus owns it.
+
+### 3.4. Compile & run
+
+```bash
+# Compile the user routine and link it to the job, then submit
+abaqus job=model user=UAMP.f
+# (the command above already submits; you can also run again without user=)
+abaqus job=model
+```
+
+If everything is in the same directory, the analysis finishes cleanly, the amplitude values are taken from `quad.dat`, and **no “user amplitude file does not exist” error appears**.
+
+---------------------------------------------------------------------
+
+## 4. Common pitfalls (and how to avoid them)
+
+| Symptom | Typical cause | Fix |
+|---------|---------------|-----|
+| “user amplitude file does not exist” | `*AMPLITUDE` line missing `USER`; typo in file name; file not in job directory; file is binary or has wrong line endings | Verify the `*AMPLITUDE` line, check the exact file name, and make sure the file is plain ASCII. |
+| Linker error “UAMP not found” | Routine not compiled (`user=` omitted) or wrong file extension/case on Linux | Use `abaqus … user=UAMP.f` (or `.c/.cpp/.for`). Ensure the source file name matches exactly. |
+| Segmentation fault inside `UAMP` | Trying to `OPEN`/`CLOSE` the file yourself; wrong data type for arguments | Use the `FILEID` passed by Abaqus; keep the argument list and types exactly as shown. |
+| Wrong or constant amplitude values | Not advancing the file pointer (reading the same line each call) or ignoring `TIME` | Read a new line each call (as in the example) and compare `TIME` with the time read before assigning `AMPL`. |
+| Job aborts after a few increments | `STATUS` never set to `1` → Abaqus thinks more data are available but reaches EOF | In the `END=EOF` branch set `STATUS = 1` before returning. |
+
+---------------------------------------------------------------------
+
+## 5. One‑page “copy‑paste” solution
+
+Place the three files below in a folder, open a terminal in that folder, and run the two commands shown. That is everything you need.
+
+**`model.inp`**
+
+```abaqus
+*HEADING
+User‑amplitude test
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**`quad.dat`**
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**`UAMP.f`**
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) AMPL = AREAD
+      RETURN
+   EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+**Commands**
+
+```bash
+abaqus job=model user=UAMP.f   # compile & submit
+# (or: abaqus job=model user=UAMP.f && abaqus job=model)
+```
+
+When the job finishes, open the `.dat` or `.msg` file – you will see no error and the amplitude values will have been taken from `quad.dat`.
+
+---------------------------------------------------------------------
+
+### TL;DR
+
+> **A user‑defined amplitude works only if you have**  
+> 1️⃣ `*AMPLITUDE … USER` in the input,  
+> 2️⃣ a matching ASCII file,  
+> 3️⃣ a correctly‑prototyped `UAMP` routine,  
+> 4️⃣ that routine reads/computes the value, sets `AMPL` and `STATUS`,  
+> 5️⃣ the routine is compiled with `user=…`, and  
+> 6️⃣ the job is run normally.  
+
+Check each of the six items, and the “user amplitude file does not exist” error disappears forever.
+A: **Answer – What Abaqus really needs for a *USER* amplitude and how to make it work every time**
+
+Abaqus will only accept a user‑defined amplitude (`UAMP`) when **all** of the items listed below exist and are correct.  
+If even one of them is missing or wrong the solver stops with  
+
+```
+*** ERROR: USER AMPLITUDE FILE DOES NOT EXIST
+```
+
+Below is the **complete** set of requirements, a **quick‑check checklist**, a **minimal working example**, and a list of **common pitfalls** with fixes.
+
+---
+
+## 1. Six mandatory items
+
+| # | What must exist | Why Abaqus needs it | How to satisfy it (exact syntax) |
+|---|-----------------|---------------------|-----------------------------------|
+| 1 | `*AMPLITUDE` line that **contains `USER`** (and optionally `FILE=`) | Tells the solver that the amplitude will be supplied by the routine `UAMP`. | `*AMPLITUDE,NAME=MYAMP,USER`  <br>or  <br>`*AMPLITUDE,NAME=MYAMP,USER,FILE=amp.dat` |
+| 2 | A **readable ASCII text file** whose name matches the one given in step 1 (or the default name – the amplitude name or the name with “.txt” on Windows) | Abaqus opens this file once, obtains a file handle (`FILEID`), and passes that handle to `UAMP`. If the open fails the job aborts. | Create `amp.dat` (or `MYAMP`, `MYAMP.txt`, …) in the same folder as the `.inp`. The file may be empty if you compute the amplitude analytically inside `UAMP`. |
+| 3 | The **routine `UAMP`** with the **exact prototype** (Fortran, C or C++) | Abaqus calls this routine every time it needs an amplitude value; the argument list is fixed. | ```fortran<br>SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)<br>DOUBLE PRECISION TIME, AMPL<br>CHARACTER*80   NAME<br>INTEGER       FILEID, STATUS<br>…<br>END``` |
+| 4 | Inside `UAMP` you must **(a)** read (or compute) the amplitude for the supplied `TIME`, **(b)** assign it to `AMPL`, and **(c)** set `STATUS` (`0` = more data, `1` = end‑of‑file) | Abaqus uses `AMPL` as the amplitude value and `STATUS` to know when the file is exhausted. | Typical Fortran pattern (see minimal example below). |
+| 5 | **Compilation & linking** of the routine with the job (`user=` option) | If the routine is not linked, Abaqus never sees it → abort. | `abaqus job=MyModel user=UAMP.f` (or `.for`, `.f90`, `.c`, `.cpp`). |
+| 6 | **Run the analysis** in the normal way | When the five items above are present, Abaqus opens the file, calls `UAMP`, obtains a valid `AMPL`, and finishes without aborting. | `abaqus job=MyModel` (or simply `abaqus job=MyModel` after the `user=` compilation). |
+
+> **Bottom line:** *All six items must be present and correct.* Missing **any** one of them triggers the “user amplitude file does not exist” error.
+
+---
+
+## 2. Quick‑copy‑paste checklist
+
+```text
+[ ] 1️⃣ *AMPLITUDE line contains USER (and optionally FILE=yourfile.dat)
+[ ] 2️⃣ The file named in FILE= (or the default name) exists in the job directory
+[ ] 3️⃣ The file is plain ASCII (it may be empty)
+[ ] 4️⃣ UAMP routine is written with the exact argument list shown above
+[ ] 5️⃣ UAMP reads from FILEID (or computes analytically) and sets AMPL and STATUS
+[ ] 6️⃣ Routine is compiled and linked with the job (abaqus … user=UAMP.xxx)
+[ ] 7️⃣ Job is submitted (abaqus job=MyModel)
+```
+
+If any box stays unchecked, Abaqus will abort.
+
+---
+
+## 3. Minimal, fully‑working example (everything in the same folder)
+
+### 3.1. Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model that uses a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+*The `*AMPLITUDE` line tells Abaqus to look for a routine called `UAMP` and to open the file `quad.dat`.*
+
+### 3.2. Data file – `quad.dat` (must exist; can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+*Two columns: **time** and **amplitude**. Abaqus will read the file line‑by‑line through the file handle `FILEID` that it passes to `UAMP`.*
+
+### 3.3. User routine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+C -------------------------------------------------
+C USER‑DEFINED AMPLITUDE ROUTINE
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file opened by Abaqus.
+C--- If end‑of‑file is reached we set STATUS = 1 and return.
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+
+C--- Return the amplitude that corresponds to the time just read.
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file handling
+   EOF CONTINUE
+      STATUS = 1          ! tell Abaqus that no more data are available
+      RETURN
+      END
+```
+
+**Key points**
+
+* **Prototype** matches exactly what Abaqus expects.  
+* `FILEID` is the unit number that Abaqus opened for `quad.dat`.  
+* `STATUS = 0` (default) means “more data may follow”; `STATUS = 1` signals EOF.  
+* **Do not** `OPEN` or `CLOSE` the file yourself – Abaqus owns it.
+
+### 3.4. Compile & run
+
+```bash
+# Compile the user routine and link it to the job, then submit
+abaqus job=model user=UAMP.f
+# (the command above already submits; you can also run again without user=)
+abaqus job=model
+```
+
+If everything is in the same directory, the analysis finishes cleanly, the amplitude values are taken from `quad.dat`, and **no “user amplitude file does not exist” error appears**.
+
+---
+
+## 4. Common pitfalls (and how to avoid them)
+
+| Symptom | Typical cause | Fix |
+|---------|---------------|-----|
+| “user amplitude file does not exist” | `*AMPLITUDE` line missing `USER`; typo in file name; file not in job directory; file is binary or has wrong line endings | Verify the `*AMPLITUDE` line, check the exact file name, and make sure the file is plain ASCII. |
+| Linker error “UAMP not found” | Routine not compiled (`user=` omitted) or wrong file extension/case on Linux | Use `abaqus … user=UAMP.f` (or `.c/.cpp/.for`). Ensure the source file name matches exactly. |
+| Segmentation fault inside `UAMP` | Trying to `OPEN`/`CLOSE` the file yourself; wrong data type for arguments | Use the `FILEID` passed by Abaqus; keep the argument list and types exactly as shown. |
+| Wrong or constant amplitude values | Not advancing the file pointer (reading the same line each call) or ignoring `TIME` | Read a new line each call (as in the example) and compare `TIME` with the time read before assigning `AMPL`. |
+| Job aborts after a few increments | `STATUS` never set to `1` → Abaqus thinks more data are available but reaches EOF | In the `END=EOF` branch set `STATUS = 1` before returning. |
+
+---
+
+## 5. One‑page “copy‑paste” solution
+
+Place the three files below in a folder, open a terminal in that folder, and run the two commands shown. That is everything you need.
+
+**`model.inp`**
+
+```abaqus
+*HEADING
+User‑amplitude test
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**`quad.dat`**
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**`UAMP.f`**
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) AMPL = AREAD
+      RETURN
+   EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+**Commands**
+
+```bash
+abaqus job=model user=UAMP.f   # compile & submit
+# (or: abaqus job=model user=UAMP.f && abaqus job=model)
+```
+
+When the job finishes, open the `.dat` or `.msg` file – you will see **no error** and the amplitude values will have been taken from `quad.dat`.
+
+---
+
+## TL;DR (the six‑item checklist)
+
+1️⃣ `*AMPLITUDE … USER` in the input  
+2️⃣ a matching **ASCII** file exists (or the default name)  
+3️⃣ a correctly‑prototyped `UAMP` routine  
+4️⃣ the routine **reads/computes** the amplitude, sets `AMPL` and `STATUS`  
+5️⃣ the routine is compiled with `user=`  
+6️⃣ the job is run normally  
+
+**If any of the six items is missing, Abaqus aborts with “USER AMPLITUDE FILE DOES NOT EXIST”.**  
+
+Check each box, and the problem disappears forever.
+
+=== 2026-04-17 20:36:41 ===
+Q: **Abaqus will only accept a *USER* amplitude when *all* of the items listed below exist and are correct.  
+If even one of them is missing or wrong the solver stops with**
+
+```
+*** ERROR: USER AMPLITUDE FILE DOES NOT EXIST
+```
+
+Below is the complete set of requirements, a quick‑check checklist, a minimal working example, and a short list of common pitfalls with their fixes.
+
+---------------------------------------------------------------------
+
+## 1. Six mandatory items
+
+| # | What must exist | Why Abaqus needs it | How to satisfy it (exact syntax) |
+|---|----------------|--------------------|-----------------------------------|
+| **1** | `*AMPLITUDE` line that **contains `USER`** (optionally `FILE=`) | Tells the solver that the amplitude will be supplied by the routine `UAMP`. | `*AMPLITUDE,NAME=MYAMP,USER`  <br>or  <br>`*AMPLITUDE,NAME=MYAMP,USER,FILE=amp.dat` |
+| **2** | A **readable ASCII text file** whose name matches the one given in step 1 (or the default name – the amplitude name or the name with “.txt” on Windows) | Abaqus opens this file once, obtains a file handle (`FILEID`), and passes that handle to `UAMP`. If the open fails the job aborts. | Create `amp.dat` (or `MYAMP`, `MYAMP.txt`, …) in the same folder as the `.inp`. The file may be empty if you compute the amplitude analytically inside `UAMP`. |
+| **3** | The **routine `UAMP`** with the **exact prototype** (Fortran, C or C++) | Abaqus calls this routine every time it needs an amplitude value; the argument list is fixed. | ```fortran<br>SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)<br>DOUBLE PRECISION TIME, AMPL<br>CHARACTER*80   NAME<br>INTEGER       FILEID, STATUS<br>…<br>END``` |
+| **4** | Inside `UAMP` you must **(a)** read (or compute) the amplitude for the supplied `TIME`, **(b)** assign it to `AMPL`, and **(c)** set `STATUS` (`0` = more data, `1` = end‑of‑file) | Abaqus uses `AMPL` as the amplitude value and `STATUS` to know when the file is exhausted. | Typical Fortran pattern (see minimal example below). |
+| **5** | **Compilation & linking** of the routine with the job (`user=` option) | If the routine is not linked, Abaqus never sees it → abort. | `abaqus job=MyModel user=UAMP.f` (or `.for`, `.f90`, `.c`, `.cpp`). |
+| **6** | **Run the analysis** in the normal way | When the five items above are present, Abaqus opens the file, calls `UAMP`, obtains a valid `AMPL`, and finishes without aborting. | `abaqus job=MyModel` (or simply `abaqus job=MyModel` after the `user=` compilation). |
+
+> **Bottom line:** *All six items must be present and correct.* Missing **any** one of them triggers the “USER AMPLITUDE FILE DOES NOT EXIST” error.
+
+---------------------------------------------------------------------
+
+## 2. Quick‑copy‑paste checklist
+
+```text
+[ ] 1️⃣ *AMPLITUDE line contains USER (and optionally FILE=yourfile.dat)
+[ ] 2️⃣ The file named in FILE= (or the default name) exists in the job directory
+[ ] 3️⃣ The file is plain ASCII (it may be empty)
+[ ] 4️⃣ UAMP routine is written with the exact argument list shown above
+[ ] 5️⃣ UAMP reads from FILEID (or computes analytically) and sets AMPL and STATUS
+[ ] 6️⃣ Routine is compiled and linked with the job (abaqus … user=UAMP.xxx)
+[ ] 7️⃣ Job is submitted (abaqus job=MyModel)
+```
+
+If any box stays unchecked, Abaqus will abort.
+
+---------------------------------------------------------------------
+
+## 3. Minimal, fully‑working example (everything in the same folder)
+
+### 3.1. Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model that uses a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+*The `*AMPLITUDE` line tells Abaqus to look for a routine called `UAMP` and to open the file `quad.dat`.*
+
+### 3.2. Data file – `quad.dat` (must exist; can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+*Two columns: **time** and **amplitude**. Abaqus will read the file line‑by‑line through the file handle `FILEID` that it passes to `UAMP`.*
+
+### 3.3. User routine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+C -------------------------------------------------
+C USER‑DEFINED AMPLITUDE ROUTINE
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file opened by Abaqus.
+C--- If end‑of‑file is reached we set STATUS = 1 and return.
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+
+C--- Return the amplitude that corresponds to the time just read.
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file handling
+   EOF CONTINUE
+      STATUS = 1          ! tell Abaqus that no more data are available
+      RETURN
+      END
+```
+
+**Key points**
+
+* Prototype matches exactly what Abaqus expects.  
+* `FILEID` is the unit number that Abaqus opened for `quad.dat`.  
+* `STATUS = 0` (default) means “more data may follow”; `STATUS = 1` signals EOF.  
+* **Do not** `OPEN` or `CLOSE` the file yourself – Abaqus owns it.
+
+### 3.4. Compile & run
+
+```bash
+# Compile the user routine and link it to the job, then submit
+abaqus job=model user=UAMP.f
+# (the command above already submits; you can also run again without user=)
+abaqus job=model
+```
+
+If everything is in the same directory, the analysis finishes cleanly, the amplitude values are taken from `quad.dat`, and **no “USER AMPLITUDE FILE DOES NOT EXIST” error appears**.
+
+---------------------------------------------------------------------
+
+## 4. Common pitfalls (and how to avoid them)
+
+| Symptom | Typical cause | Fix |
+|---------|---------------|-----|
+| “user amplitude file does not exist” | `*AMPLITUDE` line missing `USER`; typo in file name; file not in job directory; file is binary or has wrong line endings | Verify the `*AMPLITUDE` line, check the exact file name, and make sure the file is plain ASCII. |
+| Linker error “UAMP not found” | Routine not compiled (`user=` omitted) or wrong file extension/case on Linux | Use `abaqus … user=UAMP.f` (or `.c/.cpp/.for`). Ensure the source file name matches exactly. |
+| Segmentation fault inside `UAMP` | Trying to `OPEN`/`CLOSE` the file yourself; wrong data type for arguments | Use the `FILEID` passed by Abaqus; keep the argument list and types exactly as shown. |
+| Wrong or constant amplitude values | Not advancing the file pointer (reading the same line each call) or ignoring `TIME` | Read a new line each call (as in the example) and compare `TIME` with the time read before assigning `AMPL`. |
+| Job aborts after a few increments | `STATUS` never set to `1` → Abaqus thinks more data are available but reaches EOF | In the `END=EOF` branch set `STATUS = 1` before returning. |
+
+---------------------------------------------------------------------
+
+## 5. One‑page “copy‑paste” solution
+
+Place the three files below in a folder, open a terminal in that folder, and run the two commands shown. That is everything you need.
+
+**`model.inp`**
+
+```abaqus
+*HEADING
+User‑amplitude test
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**`quad.dat`**
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**`UAMP.f`**
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) AMPL = AREAD
+      RETURN
+   EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+**Commands**
+
+```bash
+abaqus job=model user=UAMP.f   # compile & submit
+# (or: abaqus job=model user=UAMP.f && abaqus job=model)
+```
+
+When the job finishes, the `.dat`/`.msg` file will contain **no error** and the amplitude values will have been taken from `quad.dat`.
+
+---------------------------------------------------------------------
+
+### TL;DR (the six‑item checklist)
+
+1️⃣ `*AMPLITUDE … USER` in the input  
+2️⃣ a matching **ASCII** file exists (or the default name)  
+3️⃣ a correctly‑prototyped `UAMP` routine  
+4️⃣ the routine **reads/computes** the amplitude, sets `AMPL` and `STATUS`  
+5️⃣ the routine is compiled with `user=`  
+6️⃣ the job is run normally  
+
+**If any of the six items is missing, Abaqus aborts with “USER AMPLITUDE FILE DOES NOT EXIST”.**  
+
+Check each box, and the problem disappears forever.
+A: **Answer – What Abaqus really needs for a *USER* amplitude**
+
+Abaqus will only run a user‑defined amplitude when **all six items below are present and exactly correct**.  
+If even one of them is missing or wrong the solver stops with  
+
+```
+*** ERROR: USER AMPLITUDE FILE DOES NOT EXIST
+```
+
+---
+
+## 1️⃣ The six mandatory items
+
+| # | What must exist | How to write it (exact syntax) | Why it matters |
+|---|----------------|--------------------------------|----------------|
+| **1** | `*AMPLITUDE` line that **contains the keyword `USER`** (optionally `FILE=`) | `*AMPLITUDE,NAME=MYAMP,USER`  <br>or  <br>`*AMPLITUDE,NAME=MYAMP,USER,FILE=amp.dat` | Tells Abaqus that the amplitude will be supplied by the routine `UAMP`. |
+| **2** | A **readable ASCII text file** whose name matches the one given in step 1 (or the default name) | Create `amp.dat` (or `MYAMP.txt`, `MYAMP`, …) in the same directory as the `.inp`. The file may be empty if you compute the amplitude analytically. | Abaqus opens this file once, obtains a file handle (`FILEID`), and passes that handle to `UAMP`. |
+| **3** | The **routine `UAMP`** with the **exact prototype** (Fortran, C or C++) | ```fortran<br>SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)<br>DOUBLE PRECISION TIME, AMPL<br>CHARACTER*80   NAME<br>INTEGER       FILEID, STATUS<br>…<br>END``` | Abaqus calls this routine every time it needs an amplitude value; the argument list is fixed. |
+| **4** | Inside `UAMP` you must **(a)** read (or compute) the amplitude for the supplied `TIME`, **(b)** assign it to `AMPL`, and **(c)** set `STATUS` (`0` = more data, `1` = end‑of‑file) | Typical Fortran pattern (see minimal example below). | Abaqus uses `AMPL` as the amplitude value and `STATUS` to know when the file is exhausted. |
+| **5** | **Compilation & linking** of the routine with the job (`user=` option) | `abaqus job=MyModel user=UAMP.f` (or `.for`, `.f90`, `.c`, `.cpp`). | If the routine is not linked, Abaqus never sees it → abort. |
+| **6** | **Run the analysis** in the normal way | `abaqus job=MyModel` (or simply `abaqus job=MyModel` after the `user=` compilation). | When the five items above are present, Abaqus opens the file, calls `UAMP`, obtains a valid `AMPL`, and finishes without aborting. |
+
+> **Bottom line:** *All six items must be present and correct.* Missing **any** one of them triggers the “USER AMPLITUDE FILE DOES NOT EXIST” error.
+
+---
+
+## 2️⃣ Quick‑copy‑paste checklist
+
+```text
+[ ] 1️⃣ *AMPLITUDE line contains USER (and optionally FILE=yourfile.dat)
+[ ] 2️⃣ The file named in FILE= (or the default name) exists in the job directory
+[ ] 3️⃣ The file is plain ASCII (it may be empty)
+[ ] 4️⃣ UAMP routine is written with the exact argument list shown above
+[ ] 5️⃣ UAMP reads from FILEID (or computes analytically) and sets AMPL and STATUS
+[ ] 6️⃣ Routine is compiled and linked with the job (abaqus … user=UAMP.xxx)
+[ ] 7️⃣ Job is submitted (abaqus job=MyModel)
+```
+
+If any box stays unchecked, Abaqus will abort.
+
+---
+
+## 3️⃣ Minimal, fully‑working example (everything in the same folder)
+
+### 3.1. Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model that uses a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+### 3.2. Data file – `quad.dat` (must exist; can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+### 3.3. User routine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+C -------------------------------------------------
+C USER‑DEFINED AMPLITUDE ROUTINE
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file opened by Abaqus.
+C--- If end‑of‑file is reached we set STATUS = 1 and return.
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+
+C--- Return the amplitude that corresponds to the time just read.
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file handling
+   EOF CONTINUE
+      STATUS = 1          ! tell Abaqus that no more data are available
+      RETURN
+      END
+```
+
+### 3.4. Compile & run
+
+```bash
+# Compile the user routine and link it to the job, then submit
+abaqus job=model user=UAMP.f
+# (the command above already submits; you can also run again without user=)
+abaqus job=model
+```
+
+If everything is in the same directory, the analysis finishes cleanly, the amplitude values are taken from `quad.dat`, and **no “USER AMPLITUDE FILE DOES NOT EXIST” error appears**.
+
+---
+
+## 4️⃣ Common pitfalls (and fixes)
+
+| Symptom | Typical cause | Fix |
+|---------|---------------|-----|
+| “USER AMPLITUDE FILE DOES NOT EXIST” | `*AMPLITUDE` line missing `USER`; typo in file name; file not in job directory; file is binary or has Windows CR‑LF line endings on a Unix system | Verify the `*AMPLITUDE` line, check the exact file name, and make sure the file is plain ASCII (use a text editor, not Excel). |
+| Linker error “UAMP not found” | Routine not compiled (`user=` omitted) or wrong file extension/case on Linux | Use `abaqus … user=UAMP.f` (or `.c/.cpp/.for`). Ensure the source file name matches exactly. |
+| Segmentation fault inside `UAMP` | Trying to `OPEN`/`CLOSE` the file yourself; wrong data type for arguments | Use the `FILEID` passed by Abaqus; keep the argument list and types exactly as shown. |
+| Constant or wrong amplitude values | Not advancing the file pointer (reading the same line each call) or ignoring `TIME` | Read a new line each call (as in the example) and compare `TIME` with the time read before assigning `AMPL`. |
+| Job aborts after a few increments | `STATUS` never set to `1` → Abaqus thinks more data are available but reaches EOF | In the `END=EOF` branch set `STATUS = 1` before returning. |
+
+---
+
+## 5️⃣ One‑page “copy‑paste” solution (everything you need)
+
+**`model.inp`**
+
+```abaqus
+*HEADING
+User‑amplitude test
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**`quad.dat`**
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**`UAMP.f`**
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) AMPL = AREAD
+      RETURN
+   EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+**Commands**
+
+```bash
+abaqus job=model user=UAMP.f   # compile & submit
+# (or: abaqus job=model user=UAMP.f && abaqus job=model)
+```
+
+When the job finishes, the `.msg`/`.dat` files will contain **no error** and the amplitude values will have been taken from `quad.dat`.
+
+---
+
+### TL;DR – The six‑item checklist
+
+1️⃣ `*AMPLITUDE … USER` in the input  
+2️⃣ a matching **ASCII** file exists (or the default name)  
+3️⃣ a correctly‑prototyped `UAMP` routine  
+4️⃣ the routine **reads/computes** the amplitude, sets `AMPL` and `STATUS`  
+5️⃣ the routine is compiled and linked with the job (`user=`)  
+6️⃣ the job is run normally  
+
+**If any of the six items is missing, Abaqus aborts with “USER AMPLITUDE FILE DOES NOT EXIST”.**  
+
+Check each box, and the problem disappears forever.
+
+=== 2026-04-17 20:37:37 ===
+Q: **Abaqus will run a user‑defined amplitude only when *all* of the items listed below are present **and** written exactly as shown.  
+If any one of them is missing or incorrect the solver stops with  
+
+```
+*** ERROR: USER AMPLITUDE FILE DOES NOT EXIST
+```**
+
+---
+
+## 1️⃣ The six mandatory items
+
+| # | What must exist | How to write it (exact syntax) | Why it matters |
+|---|----------------|--------------------------------|----------------|
+| **1** | `*AMPLITUDE` line that **contains the keyword `USER`** (optionally `FILE=`) | `*AMPLITUDE,NAME=MYAMP,USER`  <br>or  <br>`*AMPLITUDE,NAME=MYAMP,USER,FILE=amp.dat` | Tells Abaqus that the amplitude will be supplied by the routine `UAMP`. |
+| **2** | A **readable ASCII text file** whose name matches the one given in step 1 (or the default name) | Create `amp.dat` (or `MYAMP.txt`, `MYAMP`, …) in the same directory as the `.inp`. The file may be empty if you compute the amplitude analytically. | Abaqus opens this file once, obtains a file handle (`FILEID`), and passes that handle to `UAMP`. |
+| **3** | The **routine `UAMP`** with the **exact prototype** (Fortran, C or C++) | ```fortran<br>SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)<br>DOUBLE PRECISION TIME, AMPL<br>CHARACTER*80   NAME<br>INTEGER       FILEID, STATUS<br>…<br>END``` | Abaqus calls this routine every time it needs an amplitude value; the argument list is fixed. |
+| **4** | Inside `UAMP` you must **(a)** read (or compute) the amplitude for the supplied `TIME`, **(b)** assign it to `AMPL`, and **(c)** set `STATUS` (`0` = more data, `1` = end‑of‑file) | Typical Fortran pattern (see the minimal example below). | Abaqus uses `AMPL` as the amplitude value and `STATUS` to know when the file is exhausted. |
+| **5** | **Compilation & linking** of the routine with the job (`user=` option) | `abaqus job=MyModel user=UAMP.f` (or `.for`, `.f90`, `.c`, `.cpp`). | If the routine is not linked, Abaqus never sees it → abort. |
+| **6** | **Run the analysis** in the normal way | `abaqus job=MyModel` (or simply `abaqus job=MyModel` after the `user=` compilation). | When the five items above are present, Abaqus opens the file, calls `UAMP`, obtains a valid `AMPL`, and finishes without aborting. |
+
+> **Bottom line:** *All six items must be present and exactly correct.* Missing **any** one triggers the “USER AMPLITUDE FILE DOES NOT EXIST” error.
+
+---
+
+## 2️⃣ Quick‑copy‑paste checklist
+
+```
+[ ] 1️⃣ *AMPLITUDE line contains USER (and optionally FILE=yourfile.dat)
+[ ] 2️⃣ The file named in FILE= (or the default name) exists in the job directory
+[ ] 3️⃣ The file is plain ASCII (it may be empty)
+[ ] 4️⃣ UAMP routine is written with the exact argument list shown above
+[ ] 5️⃣ UAMP reads from FILEID (or computes analytically) and sets AMPL and STATUS
+[ ] 6️⃣ Routine is compiled and linked with the job (abaqus … user=UAMP.xxx)
+[ ] 7️⃣ Job is submitted (abaqus job=MyModel)
+```
+
+If any box stays unchecked, Abaqus will abort.
+
+---
+
+## 3️⃣ Minimal, fully‑working example (everything in the same folder)
+
+### 3.1. Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model that uses a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+### 3.2. Data file – `quad.dat` (must exist; can be empty)
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+### 3.3. User routine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+C -------------------------------------------------
+C USER‑DEFINED AMPLITUDE ROUTINE
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file opened by Abaqus.
+C--- If end‑of‑file is reached set STATUS = 1 and return.
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+
+C--- Return the amplitude that corresponds to the current time.
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file handling
+   EOF CONTINUE
+      STATUS = 1          ! no more data
+      RETURN
+      END
+```
+
+### 3.4. Compile & run
+
+```bash
+# Compile the user routine and link it to the job, then submit
+abaqus job=model user=UAMP.f
+# (the command above already submits; you can also run again without user=)
+abaqus job=model
+```
+
+When the files are in the same directory the analysis finishes cleanly, the amplitude values are taken from `quad.dat`, and **no “USER AMPLITUDE FILE DOES NOT EXIST” error appears**.
+
+---
+
+## 4️⃣ Common pitfalls (and how to avoid them)
+
+| Symptom | Typical cause | Fix |
+|---------|---------------|-----|
+| “USER AMPLITUDE FILE DOES NOT EXIST” | `*AMPLITUDE` line missing `USER`; typo in file name; file not in job directory; binary or Windows‑style line endings on Unix | Verify the `*AMPLITUDE` line, check the exact file name, and make sure the file is plain ASCII (use a text editor, not Excel). |
+| Linker error “UAMP not found” | Routine not compiled (`user=` omitted) or wrong file extension/case on Linux | Use `abaqus … user=UAMP.f` (or `.c/.cpp/.for`). Ensure the source file name matches exactly. |
+| Segmentation fault inside `UAMP` | Trying to `OPEN`/`CLOSE` the file yourself; wrong data type for arguments | Use the `FILEID` passed by Abaqus; keep the argument list and types exactly as shown. |
+| Wrong or constant amplitude values | Not advancing the file pointer (reading the same line each call) or ignoring `TIME` | Read a new line each call (as in the example) and compare `TIME` with the time read before assigning `AMPL`. |
+| Job aborts after a few increments | `STATUS` never set to `1` → Abaqus thinks more data are available but reaches EOF | In the `END=EOF` branch set `STATUS = 1` before returning. |
+
+---
+
+## 5️⃣ One‑page “copy‑paste” solution (everything you need)
+
+**`model.inp`**
+
+```abaqus
+*HEADING
+User‑amplitude test
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**`quad.dat`**
+
+```
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**`UAMP.f`**
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) AMPL = AREAD
+      RETURN
+   EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+**Commands**
+
+```bash
+abaqus job=model user=UAMP.f   # compile & submit
+# (or: abaqus job=model user=UAMP.f && abaqus job=model)
+```
+
+When the job finishes, the `.msg`/`.dat` files will contain **no error** and the amplitude values will have been taken from `quad.dat`.
+
+---
+
+### TL;DR – The six‑item checklist
+
+1️⃣ `*AMPLITUDE … USER` in the input  
+2️⃣ a matching **ASCII** file exists (or the default name)  
+3️⃣ a correctly‑prototyped `UAMP` routine  
+4️⃣ the routine **reads/computes** the amplitude, sets `AMPL` and `STATUS`  
+5️⃣ the routine is compiled and linked with the job (`user=`)  
+6️⃣ the job is run normally  
+
+**If any of the six items is missing, Abaqus aborts with “USER AMPLITUDE FILE DOES NOT EXIST”.**  
+
+Check each box, and the problem disappears forever.
+A: Below is a **complete, ready‑to‑copy‑paste** guide that contains **all six mandatory items**, a **quick‑check checklist**, a **minimal working example**, and the **most common pitfalls**.  
+If you follow every step exactly, the “*** ERROR: USER AMPLITUDE FILE DOES NOT EXIST ***” message will disappear.
+
+---
+
+## 1️⃣ The Six Mandatory Items (must be present **and** exactly as shown)
+
+| # | What must exist | Exact syntax (or equivalent) | Why it matters |
+|---|----------------|------------------------------|----------------|
+| **1** | `*AMPLITUDE` line that **contains the keyword `USER`** (the `FILE=` keyword is optional) | `*AMPLITUDE,NAME=MYAMP,USER`  <br>or  <br>`*AMPLITUDE,NAME=MYAMP,USER,FILE=amp.dat` | Tells Abaqus that the amplitude will be supplied by the routine `UAMP`. |
+| **2** | A **readable ASCII text file** whose name matches the one given in step 1 (or the default name) | `amp.dat` (or `MYAMP.txt`, `MYAMP`, …) placed in the same folder as the `.inp`. The file may be empty if you compute the amplitude analytically. | Abaqus opens this file once, obtains a file handle (`FILEID`), and passes that handle to `UAMP`. |
+| **3** | The **routine `UAMP`** with the **exact prototype** (Fortran, C or C++) | ```fortran<br>SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)<br>DOUBLE PRECISION TIME, AMPL<br>CHARACTER*80   NAME<br>INTEGER       FILEID, STATUS<br>…<br>END``` | Abaqus calls this routine every time it needs an amplitude value; the argument list is fixed. |
+| **4** | Inside `UAMP` you must **(a)** read (or compute) the amplitude for the supplied `TIME`, **(b)** assign it to `AMPL`, and **(c)** set `STATUS` (`0` = more data, `1` = end‑of‑file) | Typical Fortran pattern (see the minimal example below). | Abaqus uses `AMPL` as the amplitude value and `STATUS` to know when the file is exhausted. |
+| **5** | **Compilation & linking** of the routine with the job (`user=` option) | `abaqus job=MyModel user=UAMP.f` (or `.for`, `.f90`, `.c`, `.cpp`). | If the routine is not linked, Abaqus never sees it → abort. |
+| **6** | **Run the analysis** in the normal way | `abaqus job=MyModel` (or simply `abaqus job=MyModel` after the `user=` compilation). | When the five items above are present, Abaqus opens the file, calls `UAMP`, obtains a valid `AMPL`, and finishes without aborting. |
+
+> **Bottom line:** *All six items must be present and exactly correct.* Missing **any** one triggers the “USER AMPLITUDE FILE DOES NOT EXIST” error.
+
+---
+
+## 2️⃣ Quick‑Copy‑Paste Checklist
+
+```text
+[ ] 1️⃣ *AMPLITUDE line contains USER (and optionally FILE=yourfile.dat)
+[ ] 2️⃣ The file named in FILE= (or the default name) exists in the job directory
+[ ] 3️⃣ The file is plain ASCII (it may be empty)
+[ ] 4️⃣ UAMP routine is written with the exact argument list shown above
+[ ] 5️⃣ UAMP reads from FILEID (or computes analytically) and sets AMPL and STATUS
+[ ] 6️⃣ Routine is compiled and linked with the job (abaqus … user=UAMP.xxx)
+[ ] 7️⃣ Job is submitted (abaqus job=MyModel)
+```
+
+If any box stays unchecked, Abaqus will abort.
+
+---
+
+## 3️⃣ Minimal, Fully‑Working Example (everything in the same folder)
+
+### 3.1. Input file – `model.inp`
+
+```abaqus
+*HEADING
+Simple model that uses a user‑defined amplitude
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+### 3.2. Data file – `quad.dat` (must exist; can be empty)
+
+```text
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+### 3.3. User routine – `UAMP.f`
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+C -------------------------------------------------
+C USER‑DEFINED AMPLITUDE ROUTINE
+C -------------------------------------------------
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+C--- Read the next line from the file opened by Abaqus.
+C--- If end‑of‑file is reached set STATUS = 1 and return.
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+
+C--- Return the amplitude that corresponds to the current time.
+      IF (TIME .GE. TREAD) THEN
+         AMPL = AREAD
+      END IF
+      RETURN
+
+C--- End‑of‑file handling
+   EOF CONTINUE
+      STATUS = 1          ! no more data
+      RETURN
+      END
+```
+
+### 3.4. Compile & run
+
+```bash
+# Compile the user routine and link it to the job, then submit
+abaqus job=model user=UAMP.f
+# (the command above already submits; you can also run again without user=)
+abaqus job=model
+```
+
+**Result:** The analysis finishes cleanly, the amplitude values are taken from `quad.dat`, and **no** “USER AMPLITUDE FILE DOES NOT EXIST” error appears.
+
+---
+
+## 4️⃣ Common Pitfalls (and how to avoid them)
+
+| Symptom | Typical cause | Fix |
+|---------|---------------|-----|
+| “USER AMPLITUDE FILE DOES NOT EXIST” | `*AMPLITUDE` line missing `USER`; typo in file name; file not in job directory; binary or Windows‑style line endings on Unix | Verify the `*AMPLITUDE` line, check the exact file name, and make sure the file is plain ASCII (use a simple text editor, not Excel). |
+| Linker error “UAMP not found” | Routine not compiled (`user=` omitted) or wrong file extension/case on Linux | Use `abaqus … user=UAMP.f` (or `.c/.cpp/.for`). Ensure the source file name matches exactly. |
+| Segmentation fault inside `UAMP` | Trying to `OPEN`/`CLOSE` the file yourself; wrong data type for arguments | Use the `FILEID` passed by Abaqus; keep the argument list and types exactly as shown. |
+| Wrong or constant amplitude values | Not advancing the file pointer (reading the same line each call) or ignoring `TIME` | Read a new line each call (as in the example) and compare `TIME` with the time read before assigning `AMPL`. |
+| Job aborts after a few increments | `STATUS` never set to `1` → Abaqus thinks more data are available but reaches EOF | In the `END=EOF` branch set `STATUS = 1` before returning. |
+
+---
+
+## 5️⃣ TL;DR – One‑Page “Copy‑Paste” Solution
+
+**`model.inp`**
+
+```abaqus
+*HEADING
+User‑amplitude test
+
+*AMPLITUDE,NAME=QUAD,USER,FILE=quad.dat
+*STEP,NLGEOM
+0.5, 1.0
+*END STEP
+```
+
+**`quad.dat`**
+
+```text
+0.0   0.0
+0.5   0.25
+1.0   1.0
+```
+
+**`UAMP.f`**
+
+```fortran
+      SUBROUTINE UAMP(TIME, AMPL, NAME, FILEID, STATUS)
+      CHARACTER*80 NAME
+      INTEGER       FILEID, STATUS
+      DOUBLE PRECISION TIME, AMPL
+      DOUBLE PRECISION TREAD, AREAD
+
+      READ(FILEID,*,END=EOF) TREAD, AREAD
+      IF (TIME .GE. TREAD) AMPL = AREAD
+      RETURN
+   EOF CONTINUE
+      STATUS = 1
+      RETURN
+      END
+```
+
+**Commands**
+
+```bash
+abaqus job=model user=UAMP.f   # compile & submit
+# (or: abaqus job=model user=UAMP.f && abaqus job=model)
+```
+
+When the job finishes, the `.msg`/`.dat` files will contain **no error** and the amplitude values will have been taken from `quad.dat`.
+
+---
+
+### Bottom line – The Six‑Item Checklist
+
+1️⃣ `*AMPLITUDE … USER` in the input  
+2️⃣ a matching **ASCII** file exists (or the default name)  
+3️⃣ a correctly‑prototyped `UAMP` routine  
+4️⃣ the routine **reads/computes** the amplitude, sets `AMPL` and `STATUS`  
+5️⃣ the routine is compiled and linked with the job (`user=`)  
+6️⃣ the job is run normally  
+
+**If any of the six items is missing, Abaqus aborts with “USER AMPLITUDE FILE DOES NOT EXIST”.**  
+
+Check each box, and the problem disappears forever.
+

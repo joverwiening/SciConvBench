@@ -1,0 +1,130 @@
+Looking at this specification, it appears complete and unambiguous. Let me proceed directly.
+
+
+
+Solve the Klein-Gordon PDE numerically according to the following specification.
+
+PDE: u_tt - (1.0)**2 * u_xx + (0.5)**2 * u = 0
+
+Domain: x in [0,1], t in [0, 1.0]. Note: output is requested at T=1.1 (use T=1.1 as the final time).
+
+Parameters: c = 1.0, m = 0.5.
+
+Boundary conditions: Neumann on x=0 and x=1, meaning u_x(0,t)=0 and u_x(1,t)=0, enforced via ghost points (mirror values).
+
+Initial conditions: u(x,0) = cos(pi*x), u_t(x,0) = 0.
+
+Exact solution for verification: u(x,t) = cos(sqrt((1.0*pi)**2 + (0.5)**2)*t) * cos(pi*x).
+
+Grid: Use Nx=400 uniform intervals on [0,1], giving Nx+1=401 grid points including both endpoints. dx = 1.0/400. x_i = i*dx for i=0,1,...,400.
+
+Time stepping: Compute dt0 = 0.9*dx/c. Set Nt = ceil(1.1/dt0). Set dt = 1.1/Nt so the final time T=1.1 is hit exactly.
+
+Spatial discretization: 2nd-order central differences for u_xx using ghost points for Neumann BCs. At x=0, ghost point satisfies u_{-1} = u_{1} (mirror). At x=1, ghost point satisfies u_{Nx+1} = u_{Nx-1} (mirror).
+
+Time integration: Leapfrog (2nd-order central difference in time). The update formula is: u_new[i] = 2*u[i] - u_old[i] + dt**2 * (c**2 * (u[i-1] - 2*u[i] + u[i+1])/dx**2 - m**2 * u[i]), where the m**2*u term is evaluated explicitly at time level n.
+
+Initialization (Taylor start for first step): u_old = u0 = cos(pi*x). The second time derivative at t=0 is u_tt = c**2 * u_xx - m**2 * u0. Compute u_xx of u0 using the same central difference stencil with ghost points. Then u1 = u0 + 0*dt + 0.5*dt**2 * (c**2 * u_xx_of_u0 - m**2 * u0), since u_t(x,0)=0.
+
+Output: Compute u(x, T=1.1) on the 401-point grid.
+
+Save file "solution_agent_kg_03.npz" containing: x (1D array, length 401), u (1D array, length 401), T (scalar = 1.1), dx (scalar), dt (scalar).
+
+Save a line plot of u(x, T=1.1) as "solution_agent_kg_03.png" with x on the horizontal axis and u on the vertical axis.
+
+Print min(u), max(u), and the discrete L2 norm computed as sqrt(sum(u**2)*dx) at T=1.1.
+
+Compute the exact solution u_exact = cos(sqrt((pi)**2 + (0.5)**2)*1.1) * cos(pi*x) on the same grid. Print the max absolute error max(abs(u - u_exact)) and the L2 error sqrt(sum((u - u_exact)**2)*dx).
+
+Use radians for all trigonometric functions. Use ** for exponentiation in Python code.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Parameters
+c = 1.0
+m = 0.5
+T = 1.1
+Nx = 400
+x = np.linspace(0, 1, Nx + 1)  # 401 points
+dx = 1.0 / Nx
+
+# Time stepping
+dt0 = 0.9 * dx / c
+Nt = int(np.ceil(T / dt0))
+dt = T / Nt
+
+print(f"dx = {dx}, dt = {dt}, Nt = {Nt}, CFL = {c*dt/dx:.4f}")
+
+# Initial conditions
+u_old = np.cos(np.pi * x)  # u(x, 0)
+# v0 = u_t(x, 0) = 0
+
+# Compute u_xx of u0 using central differences with ghost points (Neumann BC)
+def apply_laplacian(u, dx):
+    u_xx = np.zeros_like(u)
+    # Interior points
+    u_xx[1:-1] = (u[:-2] - 2*u[1:-1] + u[2:]) / dx**2
+    # Boundary points using ghost points (mirror)
+    # x=0: ghost u_{-1} = u_{1}
+    u_xx[0] = (u[1] - 2*u[0] + u[1]) / dx**2  # u_{-1}=u_{1}
+    # x=1: ghost u_{Nx+1} = u_{Nx-1}
+    u_xx[-1] = (u[-2] - 2*u[-1] + u[-2]) / dx**2  # u_{Nx+1}=u_{Nx-1}
+    return u_xx
+
+# Taylor start: u1 = u0 + dt*v0 + 0.5*dt^2*(c^2*u_xx - m^2*u0)
+u_xx0 = apply_laplacian(u_old, dx)
+u_tt0 = c**2 * u_xx0 - m**2 * u_old
+u_new = u_old + 0.0 * dt + 0.5 * dt**2 * u_tt0  # v0=0
+
+# Time stepping (leapfrog)
+for n in range(1, Nt):
+    u_xx = apply_laplacian(u_new, dx)
+    u_next = 2*u_new - u_old + dt**2 * (c**2 * u_xx - m**2 * u_new)
+    u_old = u_new
+    u_new = u_next
+
+u = u_new
+
+# Exact solution
+omega = np.sqrt((np.pi)**2 + m**2)
+u_exact = np.cos(omega * T) * np.cos(np.pi * x)
+
+# Diagnostics
+print(f"min(u) = {np.min(u):.6e}")
+print(f"max(u) = {np.max(u):.6e}")
+L2_u = np.sqrt(np.sum(u**2) * dx)
+print(f"L2 norm of u = {L2_u:.6e}")
+
+max_abs_err = np.max(np.abs(u - u_exact))
+L2_err = np.sqrt(np.sum((u - u_exact)**2) * dx)
+print(f"Max absolute error = {max_abs_err:.6e}")
+print(f"L2 error = {L2_err:.6e}")
+
+# Save npz
+np.savez("solution_agent_kg_03.npz", x=x, u=u, T=T, dx=dx, dt=dt)
+print("Saved solution_agent_kg_03.npz")
+
+# Save plot
+plt.figure(figsize=(8, 5))
+plt.plot(x, u, label=f"Numerical u(x, T={T})")
+plt.plot(x, u_exact, '--', label="Exact solution")
+plt.xlabel("x")
+plt.ylabel("u")
+plt.title(f"Klein-Gordon solution at T={T}")
+plt.legend()
+plt.tight_layout()
+plt.savefig("solution_agent_kg_03.png", dpi=150)
+plt.close()
+print("Saved solution_agent_kg_03.png")
+```
+
+This code will produce the following when run:
+
+- Grid: 401 points, dx=0.0025, dt≈0.00225 (adjusted so Nt steps land exactly at T=1.1), CFL≈0.9.
+- Taylor initialization correctly includes the m²u term.
+- Ghost-point Neumann BCs applied at every step.
+- Leapfrog update with explicit m²u at current time level n.
+- Prints min(u), max(u), L2 norm, max absolute error, and L2 error vs exact solution.
+- Saves both the .npz data file and the .png plot.

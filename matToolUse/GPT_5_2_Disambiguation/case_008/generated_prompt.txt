@@ -1,0 +1,138 @@
+Implement a Python function named compute_defect_formation_diagram_properties() that takes no required input arguments.
+Import os and pathlib.Path for path handling.
+Import json for reading JSON files.
+Import Structure from pymatgen.core for reading the bulk structure.
+Import Composition from pymatgen.core.composition for formatting chemical systems and formulas.
+Import MontyDecoder from monty.json for decoding pymatgen objects from JSON.
+Import FormationEnergyDiagram from pymatgen.analysis.defects.thermodynamics for building the formation energy diagram.
+Inside the function, set file_path to Path(__file__).resolve().parent if __file__ is defined, otherwise set file_path to Path(os.getcwd()).
+Define structure_path as file_path / "GaN.vasp".
+Define stable_entries_path as file_path / "stable_entries_Mg_Ga_N.json".
+Define defect_entries_path as file_path / "defect_entries.json".
+Define band_edges_path as file_path / "band_edges.json".
+Read the bulk structure from structure_path using Structure.from_file.
+Set bulk_formula to structure.composition.reduced_formula as a string.
+Set defect_chemsys to "-".join(sorted([el.symbol for el in structure.composition.elements])) as a string.
+Attempt to load defect entries from defect_entries_path as JSON using MontyDecoder to reconstruct pymatgen defect-entry objects.
+Attempt to load band-edge data from band_edges_path as JSON and extract a float VBM value using key "vbm" if present.
+Attempt to load a bulk entry from stable_entries_path as JSON using MontyDecoder and select the entry whose composition reduced formula matches bulk_formula.
+If defect_entries_path does not exist or cannot be decoded into defect entries, create an empty defect_entries list.
+If band_edges_path does not exist or does not contain a usable VBM, set vbm to 0.0.
+If no matching bulk entry is found in stable_entries_path, set bulk_entry to None.
+If bulk_entry is None or defect_entries is empty, set chempot_limits_count to 0.
+Otherwise, instantiate a FormationEnergyDiagram using the defect entries, the bulk entry, and the VBM value, using the closest matching constructor signature available in pymatgen.analysis.defects.
+Compute chempot_limits_count as the number of chemical-potential limits/environments represented in the FormationEnergyDiagram, using the most appropriate available attribute or method (for example, len(fed.chempot_limits) if present, otherwise len(fed.chempots) if present).
+Return a dictionary with keys "chempot_limits_count", "defect_chemsys", and "bulk_formula" mapped to the computed values.
+Include a complete docstring describing that the function reads GaN.vasp and stable_entries_Mg_Ga_N.json under file_path, optionally reads defect_entries.json and band_edges.json, builds a FormationEnergyDiagram when possible, and returns the three requested properties with their data types.
+
+def compute_defect_formation_diagram_properties():
+    """
+    Compute basic properties derived from a defect formation energy diagram using Pymatgen's defects tooling.
+
+    Parameters
+    ----------
+    None
+
+    Data sources (resolved under a base directory `file_path`)
+    ---------------------------------------------------------
+    - GaN.vasp: Bulk structure file read with pymatgen.core.Structure.
+    - stable_entries_Mg_Ga_N.json: JSON containing stable entries; used to select the bulk entry.
+    - defect_entries.json (optional): JSON containing defect entries serialized with Monty/Pymatgen.
+    - band_edges.json (optional): JSON containing band-edge data; expected to contain a float under key "vbm".
+
+    Returns
+    -------
+    dict
+        Dictionary with the following keys:
+        - "chempot_limits_count" (int): Number of chemical potential limits/environments in the formation energy diagram.
+          If required inputs to build the diagram are missing, this is returned as 0.
+        - "defect_chemsys" (str): Chemical system string (element symbols separated by hyphens) derived from the bulk structure.
+        - "bulk_formula" (str): Reduced formula of the bulk structure.
+    """
+    import os
+    import json
+    from pathlib import Path
+
+    from monty.json import MontyDecoder
+    from pymatgen.core import Structure
+    from pymatgen.analysis.defects.thermodynamics import FormationEnergyDiagram
+
+    # Base directory resolution (best-practice default)
+    try:
+        file_path = Path(__file__).resolve().parent
+    except NameError:
+        file_path = Path(os.getcwd())
+
+    structure_path = file_path / "GaN.vasp"
+    stable_entries_path = file_path / "stable_entries_Mg_Ga_N.json"
+    defect_entries_path = file_path / "defect_entries.json"
+    band_edges_path = file_path / "band_edges.json"
+
+    # Bulk structure-derived properties
+    structure = Structure.from_file(str(structure_path))
+    bulk_formula = str(structure.composition.reduced_formula)
+    defect_chemsys = "-".join(sorted([el.symbol for el in structure.composition.elements]))
+
+    # Optional defect entries
+    defect_entries = []
+    if defect_entries_path.exists():
+        with open(defect_entries_path, "r") as f:
+            defect_entries = json.load(f, cls=MontyDecoder)
+
+    # Optional band edges (VBM)
+    vbm = 0.0
+    if band_edges_path.exists():
+        with open(band_edges_path, "r") as f:
+            be = json.load(f)
+        if isinstance(be, dict) and "vbm" in be:
+            try:
+                vbm = float(be["vbm"])
+            except Exception:
+                vbm = 0.0
+
+    # Bulk entry from stable entries
+    bulk_entry = None
+    if stable_entries_path.exists():
+        with open(stable_entries_path, "r") as f:
+            stable_entries = json.load(f, cls=MontyDecoder)
+        # stable_entries may be a list or dict depending on how it was serialized
+        if isinstance(stable_entries, dict):
+            candidates = list(stable_entries.values())
+        else:
+            candidates = list(stable_entries)
+
+        for e in candidates:
+            try:
+                if str(e.composition.reduced_formula) == bulk_formula:
+                    bulk_entry = e
+                    break
+            except Exception:
+                continue
+
+    # Build formation energy diagram if possible and count chempot limits
+    chempot_limits_count = 0
+    if bulk_entry is not None and defect_entries:
+        fed = None
+        # Try common constructor patterns across pymatgen-analysis-defects versions
+        try:
+            fed = FormationEnergyDiagram(defect_entries=defect_entries, bulk_entry=bulk_entry, vbm=vbm)
+        except TypeError:
+            try:
+                fed = FormationEnergyDiagram(defect_entries, bulk_entry, vbm)
+            except TypeError:
+                # Last-resort: try keyword variants
+                fed = FormationEnergyDiagram(defect_entries=defect_entries, bulk_entry=bulk_entry, vbm=vbm, band_gap=None)
+
+        # Count chemical potential limits/environments
+        if hasattr(fed, "chempot_limits") and fed.chempot_limits is not None:
+            chempot_limits_count = len(fed.chempot_limits)
+        elif hasattr(fed, "chempots") and fed.chempots is not None:
+            chempot_limits_count = len(fed.chempots)
+        else:
+            chempot_limits_count = 0
+
+    return {
+        "chempot_limits_count": int(chempot_limits_count),
+        "defect_chemsys": defect_chemsys,
+        "bulk_formula": bulk_formula,
+    }

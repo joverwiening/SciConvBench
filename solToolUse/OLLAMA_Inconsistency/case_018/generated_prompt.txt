@@ -1,0 +1,79 @@
+Use the legacy FEniCS (dolfin) Python interface.
+
+Define the 2‑D L‑shaped domain as the unit square [0,1]×[0,1] with the lower‑left quarter [0,0.5]×[0,0.5] removed. Create a structured mesh with 64 elements along each outer edge (use `RectangleMesh` and `MeshFunction` to delete cells inside the removed quarter, or generate the mesh directly with `MeshEditor`).
+
+Create a vector‑valued continuous Lagrange function space `V = VectorFunctionSpace(mesh, "Lagrange", 1)` for the displacement field **u** = (u_x, u_y).
+
+Define material constants:
+- Young’s modulus `E = 70e9` Pa
+- Poisson’s ratio `nu = 0.33`
+- Density `rho = 2700` kg/m³
+- Gravitational acceleration `g = 9.81` m/s²
+
+For plane‑stress with unit thickness, compute the Lamé parameters:
+```
+mu = E / (2.0*(1.0 + nu))
+lmbda = E*nu / ((1.0 + nu)*(1.0 - 2.0*nu))
+```
+and form the reduced plane‑stress constitutive matrix
+```
+C = mu*Identity(2) + mu*Identity(2).T + (lmbda - mu)*outer(Identity(2), Identity(2))
+```
+or directly use the plane‑stress strain‑stress relation:
+```
+sigma = (E/(1.0 - nu**2))*((1.0 - nu)*epsilon + nu*tr(epsilon)*Identity(2))
+```
+where `epsilon = sym(grad(u))`.
+
+Define the body force vector `b = Constant((0.0, -rho*g))`.
+
+Form the variational problem:
+```
+v = TestFunction(V)
+a = inner(sigma, sym(grad(v)))*dx
+L = dot(b, v)*dx
+```
+
+Apply boundary conditions:
+- Fix the left vertical edge `x == 0` for both displacement components:
+```
+def left_boundary(x, on_boundary):
+    return on_boundary and near(x[0], 0.0)
+bc_left = DirichletBC(V, Constant((0.0, 0.0)), left_boundary)
+```
+- All other external boundaries remain traction‑free (no Neumann condition).
+
+Apply the vertical concentrated load at the re‑entrant corner point (0.5, 0.5) on the y‑component using a `PointSource`:
+```
+load_value = -2.65e4   # N (negative y‑direction)
+point = Point(0.5, 0.5)
+ps = PointSource(V.sub(1), point, load_value)   # sub(1) selects the y‑component
+```
+
+Assemble the linear system, apply the point source, and solve with a direct solver:
+```
+A = assemble(a)
+b_vec = assemble(L)
+ps.apply(b_vec)
+solve(A, u.vector(), b_vec, "lu")
+```
+
+Post‑process:
+- Compute the Cauchy stress tensor field:
+```
+sigma_expr = sigma
+sigma_proj = project(sigma_expr, TensorFunctionSpace(mesh, "DG", 0))
+```
+- Compute the von Mises stress:
+```
+von_mises = sqrt(sigma_proj[0,0]**2 - sigma_proj[0,0]*sigma_proj[1,1] + sigma_proj[1,1]**2 + 3*sigma_proj[0,1]**2)
+von_mises_proj = project(von_mises, FunctionSpace(mesh, "DG", 0))
+```
+- Save displacement, stress components, and von Mises field to VTK files for visualization:
+```
+File("displacement.pvd") << u
+File("stress.pvd") << sigma_proj
+File("von_mises.pvd") << von_mises_proj
+```
+
+The script thus solves the small‑strain linear elasticity plane‑stress problem for the L‑shaped domain, includes gravity, applies the specified point load, and provides the required stress and displacement results.

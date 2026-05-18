@@ -1,0 +1,139 @@
+Set up a steady-state compressible porous-duct CFD case in OpenFOAM Foundation v10 using the rhoPorousSimpleFoam solver (SIMPLE algorithm) with a Darcy–Forchheimer porous zone defined via fvOptions explicitPorositySource.
+Model air as an ideal gas using the heRhoThermo thermophysical model with Sutherland transport, constant Cp, and sensible enthalpy formulation.
+Use the provided 45-degree angled rectangular duct geometry with total length 350 mm (150 mm inlet + 100 mm porous + 100 mm outlet) and width 50 mm, implemented via convertToMeters 0.001.
+Create the mesh using blockMesh with 55 x 20 x 20 cells (15 inlet, 20 porous, 20 outlet in the streamwise direction; 20 in y; 20 in z).
+Use exactly the following system/blockMeshDict content:
+
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}
+
+
+
+
+convertToMeters 0.001;
+
+angle 45;
+
+width     50;
+lenInlet  150;
+lenPoro   100;
+lenOutlet 100;
+
+yzCells      20;
+nInletCells  15;
+nPoroCells   20;
+nOutletCells 20;
+
+vertices #codeStream
+{
+    codeInclude
+    #{
+        #include "pointField.H"
+        #include "transformField.H"
+    #};
+
+    code
+    #{
+        const scalar halfWidth = ($width)/2.0;
+
+        
+        const scalar distOutlet = $lenPoro + $lenOutlet;
+
+        pointField points
+        ({
+            point(0,          0,      -halfWidth), 
+            point($lenPoro,   0,      -halfWidth), 
+            point(distOutlet, 0,      -halfWidth), 
+            point(0,          $width, -halfWidth), 
+            point($lenPoro,   $width, -halfWidth), 
+            point(distOutlet, $width, -halfWidth)  
+        });
+
+        
+        points = transform(Rz(degToRad($angle)), points);
+
+        
+        points.append(point(-$lenInlet, points[0].y(), points[0].z()));  
+        points.append(point(-$lenInlet, points[3].y(), points[3].z()));  
+
+        
+        points.append(cmptMultiply(points, vector(1, 1, -1)));
+
+        os  << points;
+    #};
+};
+
+blocks
+(
+    
+    hex (6 0 3 7 14 8 11 15)
+    inlet  ($nInletCells $yzCells $yzCells) simpleGrading (1 1 1)
+
+    
+    hex (0 1 4 3 8 9 12 11)
+    porosity ($nPoroCells $yzCells $yzCells) simpleGrading (1 1 1)
+
+    
+    hex (1 2 5 4 9 10 13 12)
+    outlet ($nOutletCells $yzCells $yzCells)  simpleGrading (1 1 1)
+);
+
+defaultPatch
+{
+    name walls;
+    type wall;
+}
+
+boundary
+(
+    porosityWall
+    {
+        type wall;
+        faces
+        (
+            (8 9 12 11)
+            (0 3 4 1)
+            (0 1 9 8)
+            (3 11 12 4)
+        );
+    }
+
+    inlet
+    {
+        type patch;
+        faces
+        (
+            (14 15 7 6)
+        );
+    }
+
+    outlet
+    {
+        type patch;
+        faces
+        (
+            (2 5 13 10)
+        );
+    }
+);
+
+Use patch type for inlet and outlet, wall type for porosityWall, and wall type for the defaultPatch named walls.
+Apply no-slip velocity on all wall patches (porosityWall and walls).
+Use inlet boundary conditions based on total conditions: totalPressure at inlet p0 = 110000 Pa and totalTemperature at inlet T0 = 300 K.
+Use outlet boundary condition as fixed static pressure p = 100000 Pa.
+Use k-epsilon turbulence model with standard wall functions on walls.
+Set inlet turbulence intensity to 5% and compute inlet k and epsilon from intensity and a hydraulic-diameter-based length scale (use Dh = 0.05 m and Lt = 0.07*Dh).
+Define the porous region as the middle block (the “porosity” block) using a cellZone created from the block name and referenced by fvOptions.
+Implement the porous resistance using explicitPorositySource with Darcy–Forchheimer coefficients set to D = 1e7 (1/m2) and F = 1e3 (1/m) applied in the local streamwise direction of the duct.
+Run the case as steady-state with startTime 0, endTime 1000, deltaT 1, and writeInterval 100.
+Use GAMG for pressure with tolerance 1e-08 and relTol 0.05.
+Use smoothSolver with GaussSeidel smoother for U, k, and epsilon with tolerances: U 1e-06, k 1e-07, epsilon 1e-07.
+Use relaxationFactors: p 0.3, U 0.7, k 0.9, epsilon 0.9.
+Use bounded Gauss upwind schemes for convective terms and Gauss linear corrected for diffusive terms.
+Initialize fields with uniform values consistent with near-ambient conditions (p 100000 Pa, T 300 K, U aligned with duct axis with small magnitude such as 1 m/s) and allow SIMPLE to converge to the driven solution.
+Include standard functionObjects to report residuals and mass flow at inlet and outlet each write interval.
+Provide an Allrun script that executes blockMesh, creates the porosity cellZone, and runs rhoPorousSimpleFoam.

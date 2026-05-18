@@ -1,0 +1,122 @@
+Solve the 1D Cahn-Hilliard PDE numerically using a Fourier pseudo-spectral method with semi-implicit time integration.
+
+The PDE is u_t = -(0.01)**2 * u_xxxx + d^2/dx^2(u**3 - u), which is the 1D Cahn-Hilliard equation with periodic boundary conditions.
+
+The spatial domain is x in [0,1), periodic. The time domain is t in [0, 0.05].
+
+Use Nx=512 equally spaced grid points with x_j = j/Nx for j=0..511. dx = 1/512.
+
+Use dt=1e-5 and take 5000 time steps to reach T=0.05.
+
+Set epsilon=0.01.
+
+The initial condition is u(x,0) = 0.1*cos(2*pi*x) + 0.01*cos(6*pi*x).
+
+Compute the wavenumbers k for the FFT as the standard integer wavenumbers for a periodic grid of size Nx: k = [0,1,...,Nx/2-1, -Nx/2,...,-1] (using numpy.fft.fftfreq(Nx)*Nx or equivalently numpy.fft.fftfreq(Nx, d=1/Nx)).
+
+Define the linear operator in Fourier space as L(k) = -epsilon**2 * k**4 + k**2, where k are the integer wavenumbers scaled by 2*pi/L with L=1, so k_phys = 2*pi*k_int.
+
+Redefine: the physical wavenumber is k_phys = 2*pi*k_int where k_int are the integer wavenumbers from fftfreq. Then L(k_phys) = -epsilon**2 * k_phys**4 + k_phys**2.
+
+At each time step, apply 2/3 dealiasing to the nonlinear term: compute FFT(u**3), then zero out all Fourier modes with |k_int| > (2/3)*(Nx/2), then compute the dealiased nonlinear term in physical space, then take FFT of that.
+
+The nonlinear contribution in Fourier space is N_hat = (-k_phys**2) * FFT_dealiased(u**3).
+
+The semi-implicit update is: u_hat_new = (u_hat + dt * N_hat) / (1 - dt * L(k_phys)).
+
+After all time steps, compute u in physical space via IFFT and take the real part.
+
+Save the output file "solution_agent_other_02_cahn_hilliard.npz" containing: x (1D array of length 512), u (1D array of length 512), T (scalar = 0.05), dx (scalar = 1/512), dt (scalar = 1e-5).
+
+Save a line plot of u(x, T=0.05) versus x as "solution_agent_other_02_cahn_hilliard.png" with labeled axes.
+
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2)*dx) at T=0.05.
+
+Here is the complete Python code to implement this:
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Parameters
+Nx = 512
+L = 1.0
+dx = L / Nx
+dt = 1e-5
+T = 0.05
+Nsteps = int(round(T / dt))  # 5000
+epsilon = 0.01
+
+# Grid
+x = np.arange(Nx) * dx  # x_j = j/Nx, j=0..511
+
+# Wavenumbers (integer)
+k_int = np.fft.fftfreq(Nx, d=1.0/Nx)  # gives integers: 0,1,...,255,-256,...,-1
+k_phys = 2.0 * np.pi * k_int / L      # physical wavenumbers
+
+# Linear operator in Fourier space
+L_k = -epsilon**2 * k_phys**4 + k_phys**2
+
+# Dealiasing mask: zero out |k_int| > (2/3)*(Nx/2)
+k_max = Nx / 2  # = 256
+dealias_mask = (np.abs(k_int) <= (2.0/3.0) * k_max).astype(float)
+
+# Initial condition
+u = 0.1 * np.cos(2.0 * np.pi * x) + 0.01 * np.cos(6.0 * np.pi * x)
+
+# Transform to Fourier space
+u_hat = np.fft.fft(u)
+
+# Time integration: semi-implicit spectral method
+denominator = 1.0 - dt * L_k  # precompute, constant each step
+
+for step in range(Nsteps):
+    # Compute nonlinear term: d^2/dx^2(u^3)
+    # Step 1: compute u^3 in physical space
+    u_phys = np.fft.ifft(u_hat).real
+    u_cubed = u_phys**3
+
+    # Step 2: FFT of u^3
+    u_cubed_hat = np.fft.fft(u_cubed)
+
+    # Step 3: Apply 2/3 dealiasing
+    u_cubed_hat_dealiased = u_cubed_hat * dealias_mask
+
+    # Step 4: Multiply by -k_phys^2 to get FFT of d^2/dx^2(u^3)
+    N_hat = (-k_phys**2) * u_cubed_hat_dealiased
+
+    # Semi-implicit update
+    u_hat = (u_hat + dt * N_hat) / denominator
+
+# Final solution in physical space
+u_final = np.fft.ifft(u_hat).real
+
+# Diagnostics
+u_min = np.min(u_final)
+u_max = np.max(u_final)
+l2_norm = np.sqrt(np.sum(u_final**2) * dx)
+print(f"min(u) = {u_min:.6f}")
+print(f"max(u) = {u_max:.6f}")
+print(f"L2 norm = {l2_norm:.6f}")
+
+# Save npz
+np.savez("solution_agent_other_02_cahn_hilliard.npz",
+         x=x,
+         u=u_final,
+         T=T,
+         dx=dx,
+         dt=dt)
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u_final, linewidth=1.0)
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T)")
+ax.set_title(f"Cahn-Hilliard solution at T={T}")
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("solution_agent_other_02_cahn_hilliard.png", dpi=150)
+plt.close()
+
+print("Files saved: solution_agent_other_02_cahn_hilliard.npz and solution_agent_other_02_cahn_hilliard.png")
+```

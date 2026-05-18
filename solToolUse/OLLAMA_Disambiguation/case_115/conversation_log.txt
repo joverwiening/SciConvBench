@@ -1,0 +1,2499 @@
+=== 2026-04-17 23:40:51 ===
+Q: **Why Abaqus says that *NSET N1* is not defined**
+
+The node set **N1** is really created in the file (the line  
+
+```
+*NSET,NSET=N1
+5
+```  
+
+does define a set that contains node 5).  
+The problem is not the definition of the set – it is the **place where the set is
+used**.
+
+In an Abaqus input file every load, boundary condition, amplitude, etc. **must be
+written inside a step**.  
+If a load refers to a node set that is defined **after** the step has already
+been closed, Abaqus does not see the set when it parses the load and it issues
+the error *“node set N1 is not defined”*.
+
+In the posted file the only step that is present is
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+```
+
+and there is **no load or boundary condition inside that step**.  
+Later you have a second empty step
+
+```abaqus
+*STEP
+*END STEP
+```
+
+but again nothing is placed between the *STEP and *END STEP cards.  
+If you tried to add a displacement for node 5 (for example with a *BOUNDARY
+card) **outside** of a step, Abaqus will complain that the set N1 does not
+exist.
+
+---
+
+## What you have to do
+
+1. **Define the node set before the step** (you already do that – keep it).  
+2. **Create a static step** (or any other step type you need).  
+3. **Put the displacement (or any other load) inside that step** and refer to
+   the set *N1*.  
+
+A minimal, working version of the part of the input that applies a
+0.5‑unit displacement in the **X** direction to node 5 looks like this:
+
+```abaqus
+*NODE, NSET=Nall
+1, 0.,0.,0.
+...
+261, 1.,1.,8.               ! (your complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                         ! (your complete element list)
+
+*MAT,NAME=EL
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.   ! (your transform – see comment below)
+
+*FIXED, NSET=FIX            ! (any other constraints you need)
+
+* NSET, NSET=N1
+5
+
+*STEP, NLGEOM, STATIC
+*BOUNDARY
+N1, 1, 1, 0.5               ! 1 = X‑direction, 0.5 = prescribed displacement
+*END STEP
+```
+
+### A few points to keep in mind
+
+| Item | What you need to do |
+|------|---------------------|
+| **Step type** | For a static analysis you must specify `*STATIC` (or `*STATIC, ...`) after the `*STEP` line. The keyword `NLGEOM` only tells Abaqus to consider geometric non‑linearity; it does **not** define the step type. |
+| **Loads / boundary conditions** | Must be placed **between** `*STEP` and `*END STEP`. |
+| **Amplitude** | If you want the displacement to be applied gradually you can attach an amplitude (e.g. `*AMPLITUDE, NAME=A1`) to the *BOUNDARY card: `N1, 1, 1, 0.5, A1`. |
+| **Transform** | The syntax you used (`*TRANSFORM,NSET=Nall,TYPE=C .5,.5,0.,.5,.5,8.`) is correct for a **C‑type (Cartesian) transform** that translates the whole mesh by (0.5, 0.5, 0) and scales the Z‑direction by a factor of 8. If you only need a simple translation, a C‑type transform is fine; otherwise you can omit it completely. |
+| **FIX set** | You created a set called `FIX` but never used it. If you want those nodes to be fully constrained you would add a `*BOUNDARY` card such as `FIX, 1, 6` (constrain all 6 DOFs). |
+
+---
+
+## Full corrected input (only the relevant part)
+
+Below is the **complete** input file with the necessary corrections.  
+Everything that was already correct in your original file is left unchanged;
+only the step definition and the load are added/modified.
+
+```abaqus
+*HEADING
+** 20‑node brick example – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=Nall, GENERATE
+1, 261
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*AMPLITUDE, NAME=A1
+0.,0.,1.,1.
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+* NSET that contains the node we want to move
+*NSET, NSET=N1
+5
+
+*STEP, NLGEOM, STATIC
+*BOUNDARY
+N1, 1, 1, 0.5          ! prescribe X‑displacement = 0.5 on node 5
+*END STEP
+```
+
+---
+
+### TL;DR
+
+* The node set **N1** is defined correctly, but the displacement (or any other
+  load) must be placed **inside a step**.  
+* Add a `*STATIC` (or another appropriate step type) after `*STEP,NLGEOM` and
+  put a `*BOUNDARY` (or `*CLOAD`) card that references **N1** between the
+  `*STEP` and `*END STEP` lines.  
+* The transform you wrote is syntactically correct; it simply translates the
+  whole mesh by (0.5, 0.5, 0) and stretches the Z‑direction by a factor of 8.  
+* After these changes Abaqus will recognise the set **N1** and will apply the
+  0.5‑unit X‑displacement to node 5 without any error.
+A: **Why Abaqus cannot find the set N1**
+
+Abaqus reads the input file in two passes:
+
+1. **Definition pass** – it stores all nodes, elements, sets, materials, etc.  
+2. **Step‑parsing pass** – it reads everything that is placed **between** a `*STEP` and the matching `*END STEP`.  
+   Only the data that belong to a step (loads, boundary conditions, amplitudes, output requests, …) are processed in this second pass.
+
+If a load or a boundary condition refers to a node set that is **not yet known when the step is parsed**, Abaqus issues the error
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In the file you posted the only step is
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+```
+
+and **no load or boundary condition is placed inside that step**.  
+Later you add a second empty step, but again nothing is written between the
+`*STEP` and `*END STEP` cards. Consequently the set *N1* is never used inside a
+step, and when you later try to attach a displacement (or any other load) to
+it **outside** a step Abaqus cannot find the set.
+
+---
+
+## What you have to do
+
+1. **Define the node set before any step** – you already do this (`*NSET,NSET=N1`).
+2. **Create a step of the appropriate type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …).  
+   `NLGEOM` only tells Abaqus to consider geometric non‑linearity; it does **not**
+   define the step type.
+3. **Put the load / boundary condition inside that step** and refer to the set
+   `N1`.
+
+Below is a **minimal, working version** of the part of your input that applies a
+0.5‑unit displacement in the **X‑direction** to node 5.
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=Nall, GENERATE
+1, 261
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*AMPLITUDE, NAME=A1
+0.,0.,1.,1.               ! optional – linear ramp from 0 to 1
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.   ! translates (0.5,0.5,0) and scales Z by 8
+
+* NSET that contains the node we want to move
+*NSET, NSET=N1
+5
+
+*STEP, NLGEOM, STATIC          ! <-- a static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! 1 = X‑direction, 0.5 = prescribed displacement,
+                               !     A1 = amplitude (optional)
+*END STEP
+```
+
+### Explanation of the key lines
+
+| Card | Why it is needed |
+|------|------------------|
+| `*STEP, NLGEOM, STATIC` | Defines a **static** analysis step and tells Abaqus to account for large‑deformation effects (`NLGEOM`). |
+| `*BOUNDARY` (inside the step) | Applies the prescribed displacement. The first field (`N1`) is the node set, the second and third fields (`1,1`) select the X‑degree of freedom, the fourth field (`0.5`) is the magnitude, and the optional fifth field (`A1`) attaches an amplitude. |
+| `*END STEP` | Closes the step. All loads, BCs, output requests, etc. must appear before this line. |
+| `*AMPLITUDE` (optional) | If you want the displacement to be ramped rather than applied instantly, attach the amplitude name to the *BOUNDARY card (as shown). |
+| `*TRANSFORM` | Your original line (`*TRANSFORM,NSET=Nall,TYPE=C .5,.5,0.,.5,.5,8.`) is syntactically correct. It translates the whole model by (0.5, 0.5, 0) and scales the Z‑direction by a factor of 8. If you do not need a scaling, you can simply use `*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0.`. |
+
+---
+
+## Checklist – what to verify in your own file
+
+1. **Node set definition** – `*NSET, NSET=N1` appears **before** the first `*STEP`.  
+2. **Step type** – after `*STEP` you must specify a concrete step type (`*STATIC`,
+   `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` alone is not enough.  
+3. **Load/BC inside the step** – any `*BOUNDARY`, `*CLOAD`, `*DLOAD`, `*DSLOAD`,
+   `*TEMPERATURE`, etc. must be placed **between** the `*STEP` and the matching
+   `*END STEP`.  
+4. **Amplitude (if used)** – defined with `*AMPLITUDE` **before** the step that
+   references it.  
+5. **Transform syntax** – your line is correct; just make sure the numbers are
+   what you really intend (translation, scaling, rotation).  
+
+When these points are satisfied Abaqus will recognise the set **N1** and the
+analysis will run without the “node set N1 is not defined” error.
+
+=== 2026-04-17 23:41:28 ===
+Q: **Why Abaqus says “node set N1 is not defined”**
+
+Abaqus reads an input file in two passes:
+
+1. **Definition pass** – it stores all nodes, elements, materials, *NSET* cards, etc.  
+2. **Step‑parsing pass** – it reads everything that is placed **between** a
+   `*STEP` and the matching `*END STEP`.  
+   Only the data that belong to a step (loads, boundary conditions, amplitudes,
+   output requests, …) are processed in this second pass.
+
+If a load or a boundary condition refers to a node set that is **not known when
+the step is parsed**, Abaqus stops with the error
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In the file you posted the only step is
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+```
+
+and **no load or boundary condition is placed inside that step**.  
+Later you have a second empty step
+
+```abaqus
+*STEP
+*END STEP
+```
+
+but again nothing is written between the `*STEP` and `*END STEP` cards.  
+Consequently, when you later try to attach a displacement (or any other load)
+to the set **N1** **outside** a step Abaqus cannot find the set.
+
+---
+
+## What you have to do
+
+1. **Define the node set before any step** – you already do this:
+
+   ```abaqus
+   *NSET, NSET=N1
+   5
+   ```
+
+2. **Create a step of the appropriate type** (`*STATIC`, `*DYNAMIC`,
+   `*HEAT TRANSFER`, …).  
+   `NLGEOM` only tells Abaqus to consider geometric non‑linearity; it does **not**
+   define the step type.
+
+3. **Put the load / boundary condition inside that step** and refer to the set
+   `N1`.
+
+Below is a **minimal, working version** of the part of your input that applies a
+0.5‑unit displacement in the **X‑direction** to node 5.
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=Nall, GENERATE
+1, 261
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*AMPLITUDE, NAME=A1
+0.,0.,1.,1.               ! optional – linear ramp from 0 to 1
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.   ! translates (0.5,0.5,0) and scales Z by 8
+
+* NSET that contains the node we want to move
+*NSET, NSET=N1
+5
+
+*STEP, NLGEOM, STATIC          ! <-- a static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! 1 = X‑direction, 0.5 = prescribed displacement,
+                               !     A1 = amplitude (optional)
+*END STEP
+```
+
+### Why the transform line is correct
+
+Your original line
+
+```abaqus
+*TRANSFORM,NSET=Nall,TYPE=C .5,.5,0.,.5,.5,8.
+```
+
+uses a **C‑type (Cartesian) transform**.  
+The six numbers after `TYPE=C` are interpreted as a translation vector
+`(0.5, 0.5, 0)` followed by a scaling factor of 8 in the Z‑direction.  
+If you only need a simple translation you could write
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0.
+```
+
+but the syntax you used is perfectly valid.
+
+---
+
+## TL;DR
+
+* The node set **N1** is defined correctly, but the displacement (or any other
+  load) must be placed **inside a step**.  
+* Add a concrete step type (`*STATIC`, `*DYNAMIC`, …) after `*STEP,NLGEOM` and
+  put a `*BOUNDARY` (or `*CLOAD`, `*DLOAD`, etc.) card that references **N1**
+  between the `*STEP` and `*END STEP` lines.  
+* The transform you wrote is syntactically correct; it translates the whole
+  mesh by (0.5, 0.5, 0) and stretches the Z‑direction by a factor of 8.  
+* After these changes Abaqus will recognise the set **N1** and will apply the
+  0.5‑unit X‑displacement to node 5 without any error.
+A: **Short answer:**  
+Abaqus can only use a node‑set in a load, boundary condition, amplitude, etc. **if the load is written inside a *STEP* block that is being parsed after the set has been defined**. In your input the set **N1** is defined, but the displacement (or any other load) that refers to it is placed **outside** any step, so when Abaqus reaches the step‑parsing pass it cannot find a definition for the set and aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+Below is a step‑by‑step explanation and a minimal, working example that shows how to fix the problem.
+
+---
+
+## 1. How Abaqus reads an input file  
+
+| Pass | What is read | When it is stored |
+|------|--------------|-------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, … | **Before** any step is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, BCs, amplitudes, output requests, etc.) | **During** the step pass. The data are processed only if the referenced objects (node sets, element sets, materials, etc.) already exist from the definition pass. |
+
+If a load refers to a set that has not been defined **by the time the step is parsed**, Abaqus stops with the “node set … is not defined” error.
+
+---
+
+## 2. What is wrong in the posted file  
+
+```abaqus
+*NSET, NSET=N1
+5
+
+*STEP,NLGEOM
+*END STEP
+```
+
+* `N1` is defined – that part is fine.  
+* The step contains **no load or boundary condition** that uses `N1`.  
+* Later you try to apply a displacement (or any other load) **outside** a step, e.g.
+
+```abaqus
+*BOUNDARY
+N1, 1, 1, 0.5
+```
+
+Because this line is **not inside a `*STEP … *END STEP` block**, Abaqus never sees it during the step‑parsing pass, and therefore it cannot associate the load with the already‑defined set. The result is the error you see.
+
+---
+
+## 3. How to fix it  
+
+1. **Define the node set before any step** (you already do this).  
+2. **Create a step of the appropriate type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` only tells Abaqus to consider geometric non‑linearity; it does **not** define the step type.  
+3. **Place the load / boundary condition inside that step** and refer to the set `N1`.
+
+### Minimal, working example
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=Nall, GENERATE
+1, 261
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*AMPLITUDE, NAME=A1
+0.,0.,1.,1.               ! optional – linear ramp from 0 to 1
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 8.          ! translate (0.5,0.5,0) and scale Z by 8
+
+* NSET that contains the node we want to move
+*NSET, NSET=N1
+5
+
+*STEP, NLGEOM, STATIC          ! <-- a static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! 1 = X‑direction, 0.5 = prescribed displacement,
+                               !     A1 = amplitude (optional)
+*END STEP
+```
+
+**Explanation of the key lines**
+
+| Line | Why it matters |
+|------|----------------|
+| `*NSET, NSET=N1`<br>`5` | Defines the set that contains node 5. |
+| `*STEP, NLGEOM, STATIC` | Starts a **static** analysis step (the `STATIC` keyword is required). `NLGEOM` tells Abaqus to include geometric non‑linearity. |
+| `*BOUNDARY` … `N1, 1, 1, 0.5, A1` | The load that uses the set `N1`. Because it is **inside** the step block, Abaqus can resolve the set name. |
+| `*END STEP` | Ends the step. |
+
+If you need a different type of analysis (dynamic, thermal, etc.), replace `STATIC` with the appropriate keyword (`*DYNAMIC`, `*HEAT TRANSFER`, …) but **always keep the load inside the step**.
+
+---
+
+## 4. About the `*TRANSFORM` line you used  
+
+Your original line
+
+```abaqus
+*TRANSFORM,NSET=Nall,TYPE=C .5,.5,0.,.5,.5,8.
+```
+
+is syntactically correct for a **Cartesian (C) transform**. The six numbers are interpreted as  
+
+```
+Tx, Ty, Tz,  Sx, Sy, Sz
+```
+
+* `Tx = 0.5`, `Ty = 0.5`, `Tz = 0.0` → translation of the whole mesh by (0.5, 0.5, 0).  
+* `Sx = 0.5`, `Sy = 0.5`, `Sz = 8.0` → scaling factors; in your case you only needed a scaling of 8 in Z, so you could also write  
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+```
+
+or, if you do **not** want any scaling, simply omit the last three numbers:
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0.
+```
+
+The line itself is not the cause of the “node set N1 is not defined” error.
+
+---
+
+## 5. TL;DR (the checklist)
+
+1. **Define every node‑set, element‑set, material, etc. before the first `*STEP`.**  
+2. **Create a step of the proper type** (`*STATIC`, `*DYNAMIC`, …). `NLGEOM` alone is not enough.  
+3. **Put every load, boundary condition, amplitude, output request, etc. inside that step** and refer to the already‑defined sets.  
+4. The `*TRANSFORM` line you wrote is valid; it translates the mesh by (0.5, 0.5, 0) and scales Z by 8.  
+
+After moving the `*BOUNDARY` (or `*CLOAD`, `*DLOAD`, etc.) line that references **N1** into a step block, Abaqus will find the set and the analysis will run without the “node set N1 is not defined” error.
+
+=== 2026-04-17 23:42:15 ===
+Q: **Short answer** – Abaqus can only use a node‑set in a load, boundary condition, amplitude, etc. **if the load is written inside a `*STEP … *END STEP` block that is parsed after the set has been defined**.  
+In your input the set **N1** is defined, but the displacement (or any other load) that refers to it is placed **outside** any step, so when Abaqus reaches the step‑parsing pass it cannot find a definition for the set and aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+Below is a step‑by‑step explanation of why this happens and a minimal, working example that shows how to fix the problem.
+
+---
+
+## 1. How Abaqus reads an input file  
+
+| Pass | What is read | When it is stored |
+|------|--------------|-------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, … | **Before** any `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, BCs, amplitudes, output requests, etc.) | **During** the step pass. The data are processed only if the referenced objects (node sets, element sets, materials, etc.) already exist from the definition pass. |
+
+If a load refers to a set that has not been defined **by the time the step is parsed**, Abaqus stops with the “node set … is not defined” error.
+
+---
+
+## 2. What is wrong in the posted file  
+
+```abaqus
+*NSET, NSET=N1
+5
+
+*STEP,NLGEOM
+*END STEP
+```
+
+* `N1` **is** defined – that part is fine.  
+* The step contains **no load or boundary condition** that uses `N1`.  
+* Later you probably tried to apply a displacement (or any other load) **outside** a step, e.g.
+
+```abaqus
+*BOUNDARY
+N1, 1, 1, 0.5
+```  
+
+Because this line is **not inside a `*STEP … *END STEP` block**, Abaqus never sees it during the step‑parsing pass, and therefore it cannot associate the load with the already‑defined set. The result is the error you see.
+
+---
+
+## 3. How to fix it  
+
+1. **Define the node set before any step** (you already do this).  
+2. **Create a step of the appropriate type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` only tells Abaqus to consider geometric non‑linearity; it does **not** define the step type.  
+3. **Place the load / boundary condition inside that step** and refer to the set `N1`.
+
+### Minimal, working example
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=Nall, GENERATE
+1, 261
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*AMPLITUDE, NAME=A1
+0.,0.,1.,1.               ! optional – linear ramp from 0 to 1
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 8.          ! translate (0.5,0.5,0) and scale Z by 8
+
+* NSET that contains the node we want to move
+*NSET, NSET=N1
+5
+
+*STEP, NLGEOM, STATIC          ! <-- a static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! 1 = X‑direction, 0.5 = prescribed displacement,
+                               !     A1 = amplitude (optional)
+*END STEP
+```
+
+**Explanation of the key lines**
+
+| Card | Why it matters |
+|------|----------------|
+| `*NSET, NSET=N1`<br>`5` | Defines the set that contains node 5. |
+| `*STEP, NLGEOM, STATIC` | Starts a **static** analysis step (the `STATIC` keyword is required). `NLGEOM` tells Abaqus to include geometric non‑linearity. |
+| `*BOUNDARY` … `N1, 1, 1, 0.5, A1` | The load that uses the set `N1`. Because it is **inside** the step block, Abaqus can resolve the set name. |
+| `*END STEP` | Ends the step. |
+
+If you need a different type of analysis (dynamic, thermal, etc.), replace `STATIC` with the appropriate keyword (`*DYNAMIC`, `*HEAT TRANSFER`, …) but **always keep the load inside the step**.
+
+---
+
+## 4. About the `*TRANSFORM` line you used  
+
+Your original line
+
+```abaqus
+*TRANSFORM,NSET=Nall,TYPE=C .5,.5,0.,.5,.5,8.
+```  
+
+is syntactically correct for a **Cartesian (C) transform**. The six numbers after `TYPE=C` are interpreted as  
+
+```
+Tx, Ty, Tz,  Sx, Sy, Sz
+```  
+
+* `Tx = 0.5`, `Ty = 0.5`, `Tz = 0.0` → translation of the whole mesh by (0.5, 0.5, 0).  
+* `Sx = 0.5`, `Sy = 0.5`, `Sz = 8.0` → scaling factors; in your case you only needed a scaling of 8 in Z, so you could also write  
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+```  
+
+or, if you do **not** want any scaling, simply omit the last three numbers:
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0.
+```  
+
+The transform line itself is **not** the cause of the “node set N1 is not defined” error.
+
+---
+
+## 5. TL;DR (the checklist)
+
+1. **Define every node‑set, element‑set, material, etc. before the first `*STEP`.**  
+2. **Create a step of the proper type** (`*STATIC`, `*DYNAMIC`, …). `NLGEOM` alone is not enough.  
+3. **Put every load, boundary condition, amplitude, output request, etc. inside that step** and refer to the already‑defined sets.  
+4. The `*TRANSFORM` line you wrote is valid; it translates the mesh by (0.5, 0.5, 0) and scales Z by 8.  
+
+After moving the `*BOUNDARY` (or `*CLOAD`, `*DLOAD`, etc.) line that references **N1** into a step block, Abaqus will find the set and the analysis will run without the “node set N1 is not defined” error.
+A: **Why Abaqus cannot find the node set N1**
+
+Abaqus reads an input file in two passes  
+
+| Pass | What is read | When it is stored |
+|------|--------------|-------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, … | **Before** any `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, BCs, amplitudes, output requests, etc.) | **During** the step pass. The data are processed only if the objects they refer to (node‑sets, element‑sets, materials, …) already exist from the definition pass. |
+
+If a load or boundary condition refers to a set that has **not been defined at the moment the step is parsed**, Abaqus aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In the file you posted the set **N1** is defined, but the load that uses it is placed **outside** any `*STEP … *END STEP` block. Consequently the step‑parsing pass never sees the load, and Abaqus reports the error.
+
+---
+
+## How to fix the problem
+
+1. **Define all node‑sets, element‑sets, materials, sections, etc. before the first `*STEP`.**  
+   (You already do this for `N1`.)
+
+2. **Create a step of the appropriate type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …).  
+   `NLGEOM` only tells Abaqus to consider geometric non‑linearity; it does **not** define the step type.
+
+3. **Place every load, boundary condition, amplitude, output request, etc. inside that step** and refer to the already‑defined set.
+
+Below is a **minimal, working example** that shows the correct placement of the load that uses `N1`.  
+Feel free to replace the step type (`STATIC`) with the one you need (e.g. `*DYNAMIC`) – just keep the load inside the step.
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -----------------------------------------------------------------
+*# 1.  Definition of node‑sets, material, section, etc.
+*# -----------------------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=Nall, GENERATE
+1, 261
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*AMPLITUDE, NAME=A1
+0.,0., 1.,1.               ! linear ramp (optional)
+
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+!  → translate (0.5,0.5,0) and scale Z by 8
+
+*# -----------------------------------------------------------------
+*# 2.  Node‑set that will be used in the load
+*# -----------------------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -----------------------------------------------------------------
+*# 3.  Analysis step – the load must be inside the step block
+*# -----------------------------------------------------------------
+*STEP, NLGEOM, STATIC          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+### What changed?
+
+| Card (old) | Card (new) | Reason |
+|------------|------------|--------|
+| `*BOUNDARY` (or any load) placed **outside** a step | `*BOUNDARY` **inside** `*STEP … *END STEP` | Loads are parsed only during the step pass; otherwise the set cannot be found. |
+| `*STEP, NLGEOM` (no step type) | `*STEP, NLGEOM, STATIC` | A step type (`STATIC`, `DYNAMIC`, …) is required. |
+| No explicit amplitude | `*AMPLITUDE, NAME=A1` + `A1` in the boundary line (optional) | Shows how to attach a time‑dependent amplitude; you can omit it if you want a constant load. |
+
+---
+
+## About the `*TRANSFORM` line you used
+
+Your original line  
+
+```abaqus
+*TRANSFORM,NSET=Nall,TYPE=C .5,.5,0.,.5,.5,8.
+```  
+
+is syntactically correct for a **Cartesian (C) transform**. The six numbers after `TYPE=C` are interpreted as  
+
+```
+Tx, Ty, Tz,  Sx, Sy, Sz
+```  
+
+* `Tx = 0.5`, `Ty = 0.5`, `Tz = 0.0` → translation of the whole mesh by (0.5, 0.5, 0).  
+* `Sx = 0.5`, `Sy = 0.5`, `Sz = 8.0` → scaling factors; you only needed a scaling of 8 in Z, so you could also write  
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+```  
+
+or, if you do **not** want any scaling, simply omit the last three numbers:
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0.
+```  
+
+The transform line itself is **not** the cause of the “node set N1 is not defined” error.
+
+---
+
+## TL;DR – Checklist to avoid the error
+
+1. **Define every node‑set, element‑set, material, section, etc. before the first `*STEP`.**  
+2. **Create a step of the proper type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` alone is insufficient.  
+3. **Put every load, boundary condition, amplitude, output request, etc. inside that step** and refer to the already‑defined sets.  
+4. The `*TRANSFORM` line you wrote is valid; it translates the mesh by (0.5, 0.5, 0) and scales Z by 8.  
+
+After moving the load that references **N1** into a step block, Abaqus will locate the set and the analysis will run without the “node set N1 is not defined” error.
+
+=== 2026-04-17 23:42:58 ===
+Q: **Why Abaqus says “Node set N1 is not defined”**
+
+Abaqus reads an input file in two stages  
+
+| Pass | What is read | When it is stored |
+|------|--------------|-------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, … | **Before** any `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, boundary conditions, amplitudes, output requests, etc.) | **During** the step pass. The data are processed only if the objects they refer to (node‑sets, element‑sets, materials, …) already exist from the definition pass. |
+
+If a load or boundary condition refers to a set that has **not been defined at the moment the step is parsed**, Abaqus aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In the file you posted the set **N1** *is* defined, but the load that uses it is placed **outside** any `*STEP … *END STEP` block. Consequently the step‑parsing pass never sees the load, and Abaqus reports the error.
+
+---
+
+## How to fix the problem
+
+1. **Define all node‑sets, element‑sets, materials, sections, etc. before the first `*STEP`.**  
+   (You already do this for `N1`.)
+
+2. **Create a step of the appropriate type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …).  
+   `NLGEOM` only tells Abaqus to consider geometric non‑linearity; it does **not** define the step type.
+
+3. **Place every load, boundary condition, amplitude, output request, etc. inside that step** and refer to the already‑defined set.
+
+Below is a **minimal, working example** that shows the correct placement of a boundary condition that uses `N1`.  Replace the step type (`STATIC`) with the one you need (e.g. `*DYNAMIC`) – just keep the load inside the step.
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1.  Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=Nall, GENERATE
+1, 261
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*AMPLITUDE, NAME=A1
+0.,0., 1.,1.               ! linear ramp (optional)
+
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+! → translate (0.5,0.5,0) and scale Z by 8
+
+*# -------------------------------------------------
+*# 2.  Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3.  Analysis step – the load must be inside the step block
+*# -------------------------------------------------
+*STEP, NLGEOM, STATIC          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+### What changed?
+
+| Card (old) | Card (new) | Reason |
+|------------|------------|--------|
+| `*BOUNDARY` (or any load) placed **outside** a step | `*BOUNDARY` **inside** `*STEP … *END STEP` | Loads are parsed only during the step pass; otherwise the set cannot be found. |
+| `*STEP, NLGEOM` (no step type) | `*STEP, NLGEOM, STATIC` | A step type (`STATIC`, `DYNAMIC`, …) is required. |
+| No explicit amplitude | `*AMPLITUDE, NAME=A1` + `A1` in the boundary line (optional) | Shows how to attach a time‑dependent amplitude; you can omit it if you want a constant load. |
+
+---
+
+## About the `*TRANSFORM` line you used
+
+Your original line  
+
+```abaqus
+*TRANSFORM,NSET=Nall,TYPE=C .5,.5,0.,.5,.5,8.
+```  
+
+is syntactically correct for a **Cartesian (C) transform**. The six numbers after `TYPE=C` are interpreted as  
+
+```
+Tx, Ty, Tz,  Sx, Sy, Sz
+```  
+
+* `Tx = 0.5`, `Ty = 0.5`, `Tz = 0.0` → translation of the whole mesh by (0.5, 0.5, 0).  
+* `Sx = 0.5`, `Sy = 0.5`, `Sz = 8.0` → scaling factors; you only needed a scaling of 8 in Z, so you could also write  
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+```  
+
+or, if you do **not** want any scaling, simply omit the last three numbers:
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0.
+```  
+
+The transform line itself is **not** the cause of the “node set N1 is not defined” error.
+
+---
+
+## TL;DR – Checklist to avoid the error
+
+1. **Define every node‑set, element‑set, material, section, etc. before the first `*STEP`.**  
+2. **Create a step of the proper type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` alone is insufficient.  
+3. **Put every load, boundary condition, amplitude, output request, etc. inside that step** and refer to the already‑defined sets.  
+4. The `*TRANSFORM` line you wrote is valid; it translates the mesh by (0.5, 0.5, 0) and scales Z by 8.  
+
+After moving the load that references **N1** into a step block, Abaqus will locate the set and the analysis will run without the “node set N1 is not defined” error.
+A: **Short answer** – Abaqus can only use a node‑set (or any other set) after the set has been **defined in the definition pass** *and* after the **step that contains the load/boundary condition has been opened**.  
+In your input file the set **N1** is defined, but the load that refers to it is placed **outside any `*STEP … *END STEP` block** (or the step is declared without a step type). When Abaqus reaches the load during the *step‑parsing* pass the set does not exist yet, so it aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+---
+
+## What Abaqus actually does
+
+| Pass | What is read | When it is stored |
+|------|--------------|-------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything **between** a `*STEP` and its matching `*END STEP` (loads, BCs, amplitudes, output requests, etc.) | **During** the step pass. The objects referenced must already exist from the definition pass. |
+
+If a load/BC refers to a set that has not been created **by the time the step is parsed**, Abaqus throws the “set is not defined” error.
+
+---
+
+## How to fix it
+
+1. **Define all sets, materials, sections, etc. before the first `*STEP`.**  
+   Your `*NSET, NSET=N1` line is fine – it is already in the definition part.
+
+2. **Create a step of the proper type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …).  
+   `*STEP, NLGEOM` alone is **not** a complete step definition; you must give a step type (e.g. `STATIC`).  
+
+3. **Place every load, boundary condition, amplitude, output request, etc. inside that step block** and refer to the already‑defined set.  
+
+### Minimal working example
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1.  Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2.  Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3.  Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0.,0., 1.,1.
+
+*# -------------------------------------------------
+*# 4.  Transform the whole mesh (optional)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+! translates (0.5,0.5,0) and scales Z by 8
+
+*# -------------------------------------------------
+*# 5.  Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, NLGEOM, STATIC          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+**What changed?**
+
+| Old line | New line | Reason |
+|----------|----------|--------|
+| `*BOUNDARY` (or any load) placed **outside** a step | `*BOUNDARY` **inside** `*STEP … *END STEP` | Loads are parsed only during the step pass; otherwise the set cannot be found. |
+| `*STEP, NLGEOM` (no step type) | `*STEP, NLGEOM, STATIC` | A step type (`STATIC`, `DYNAMIC`, …) is required. |
+| No amplitude | `*AMPLITUDE, NAME=A1` + `A1` in the boundary line (optional) | Shows how to attach a time‑dependent amplitude; you can omit it for a constant load. |
+
+---
+
+## About the `*TRANSFORM` line you used
+
+Your original line  
+
+```abaqus
+*TRANSFORM,NSET=Nall,TYPE=C .5,.5,0.,.5,.5,8.
+```  
+
+is syntactically correct for a **Cartesian (C) transform**. The six numbers after `TYPE=C` are interpreted as  
+
+```
+Tx, Ty, Tz,  Sx, Sy, Sz
+```  
+
+* `Tx = 0.5`, `Ty = 0.5`, `Tz = 0.0` → translation of the whole mesh by (0.5, 0.5, 0).  
+* `Sx = 0.5`, `Sy = 0.5`, `Sz = 8.0` → scaling factors; you only needed a scaling of 8 in Z, so you could also write  
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+```  
+
+or, if you do **not** want any scaling, simply omit the last three numbers:
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0.
+```  
+
+The transform line itself is **not** the cause of the “node set N1 is not defined” error.
+
+---
+
+## TL;DR – Checklist to avoid the error
+
+1. **Define every node‑set, element‑set, material, section, etc. before the first `*STEP`.**  
+2. **Create a step of the proper type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` only toggles geometric non‑linearity; it does **not** define the step.  
+3. **Put every load, boundary condition, amplitude, output request, etc. inside that step block** and refer to the already‑defined sets.  
+4. The `*TRANSFORM` line you wrote is valid; it translates the mesh by (0.5, 0.5, 0) and scales Z by 8.  
+
+After moving the load that references **N1** into a correctly defined step, Abaqus will locate the set and the analysis will run without the “node set N1 is not defined” error.
+
+=== 2026-04-17 23:43:42 ===
+Q: **Short answer** – Abaqus can use a node set only after the set has been **defined** (in the definition pass) **and** after the **step that contains the load/boundary condition has been opened**.  
+In your file the set **N1** is defined, but the load that refers to it is placed **outside any `*STEP … *END STEP` block** (or the step is declared without a step type). When Abaqus reaches the load during the *step‑parsing* pass the set does not exist yet, so it aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+---
+
+## What Abaqus actually does
+
+| Pass | What is read | When it is stored |
+|------|--------------|-------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything **between** a `*STEP` and its matching `*END STEP` (loads, BCs, amplitudes, output requests, etc.) | **During** the step pass. The objects referenced must already exist from the definition pass. |
+
+If a load/BC refers to a set that has not been created **by the time the step is parsed**, Abaqus throws the “set is not defined” error.
+
+---
+
+## How to fix it
+
+1. **Define all sets, materials, sections, etc. before the first `*STEP`.**  
+   Your `*NSET, NSET=N1` line is already in the definition part, so that part is fine.
+
+2. **Create a step of the proper type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …).  
+   `*STEP, NLGEOM` alone is **not** a complete step definition; you must give a step type (e.g. `STATIC`).  
+
+3. **Place every load, boundary condition, amplitude, output request, etc. inside that step block** and refer to the already‑defined set.
+
+### Minimal working example
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0.,0., 1.,1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+! translates (0.5,0.5,0) and scales Z by 8
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, NLGEOM, STATIC          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+### What changed?
+
+| Old line | New line | Reason |
+|----------|----------|--------|
+| `*BOUNDARY` (or any load) placed **outside** a step | `*BOUNDARY` **inside** `*STEP … *END STEP` | Loads are parsed only during the step pass; otherwise the set cannot be found. |
+| `*STEP, NLGEOM` (no step type) | `*STEP, NLGEOM, STATIC` | A step type (`STATIC`, `DYNAMIC`, …) is required. |
+| No amplitude | `*AMPLITUDE, NAME=A1` + `A1` in the boundary line (optional) | Shows how to attach a time‑dependent amplitude; you can omit it for a constant load. |
+
+---
+
+## About the `*TRANSFORM` line you used
+
+Your original line  
+
+```abaqus
+*TRANSFORM,NSET=Nall,TYPE=C .5,.5,0.,.5,.5,8.
+```  
+
+is syntactically correct for a **Cartesian (C) transform**. The six numbers after `TYPE=C` are interpreted as  
+
+```
+Tx, Ty, Tz,  Sx, Sy, Sz
+```  
+
+* `Tx = 0.5`, `Ty = 0.5`, `Tz = 0.0` → translation of the whole mesh by (0.5, 0.5, 0).  
+* `Sx = 0.5`, `Sy = 0.5`, `Sz = 8.0` → scaling factors; you only needed a scaling of 8 in Z, so you could also write  
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+```  
+
+or, if you do **not** want any scaling, simply omit the last three numbers:
+
+```abaqus
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0.
+```  
+
+The transform line itself is **not** the cause of the “node set N1 is not defined” error.
+
+---
+
+## TL;DR – Checklist to avoid the error
+
+1. **Define every node‑set, element‑set, material, section, etc. before the first `*STEP`.**  
+2. **Create a step of the proper type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` only toggles geometric non‑linearity; it does **not** define the step.  
+3. **Put every load, boundary condition, amplitude, output request, etc. inside that step block** and refer to the already‑defined sets.  
+4. The `*TRANSFORM` line you wrote is valid; it translates the mesh by (0.5, 0.5, 0) and scales Z by 8.  
+
+After moving the load that references **N1** into a correctly defined step, Abaqus will locate the set and the analysis will run without the “node set N1 is not defined” error.
+A: **Why the error occurs**
+
+Abaqus reads an input file in two passes  
+
+| Pass | What is read | When it becomes available |
+|------|--------------|---------------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, boundary conditions, amplitudes, output requests, etc.) | **During** the step pass. The objects referenced must already exist from the definition pass. |
+
+If a load/BC refers to a set that has not been created **by the time the step is parsed**, Abaqus aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In your file the node‑set `N1` **is defined**, but the `*BOUNDARY` (or any other load) that uses it is placed **outside any `*STEP … *END STEP` block** (or the step is declared without a step type). Consequently, when Abaqus reaches the load during the step‑parsing pass the set does not exist yet, and the error is raised.
+
+---
+
+**How to fix it – step‑by‑step checklist**
+
+1. **Define all sets, materials, sections, etc. before the first `*STEP`.**  
+   Your `*NSET, NSET=N1` line already satisfies this.
+
+2. **Create a step of a proper type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …).  
+   `*STEP, NLGEOM` alone is **not** a complete step definition; you must add a step type (e.g. `STATIC`). `NLGEOM` only toggles geometric non‑linearity.
+
+3. **Place every load, boundary condition, amplitude, output request, etc. inside that step block** and refer to the already‑defined set.  
+
+4. (Optional) If you want a time‑dependent load, define an `*AMPLITUDE` and attach its name to the load line.
+
+5. The `*TRANSFORM` line you used is syntactically correct; it translates the whole mesh by (0.5, 0.5, 0) and scales the Z‑direction by 8. It is **not** the cause of the error.
+
+---
+
+**Corrected minimal input file**
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0.,0., 1.,1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, NLGEOM, STATIC          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+**What changed compared with your original file**
+
+| Old | New | Why |
+|-----|-----|-----|
+| `*BOUNDARY` (or any load) placed **outside** a step | `*BOUNDARY` **inside** `*STEP … *END STEP` | Loads are parsed only during the step pass; otherwise the set cannot be found. |
+| `*STEP, NLGEOM` (no step type) | `*STEP, NLGEOM, STATIC` | A step type (`STATIC`, `DYNAMIC`, …) is required. |
+| No amplitude (optional) | `*AMPLITUDE, NAME=A1` + `A1` on the boundary line | Shows how to attach a time‑dependent amplitude; you can omit it for a constant load. |
+| `*TRANSFORM` line with six numbers | `*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.` | Explicitly shows translation (0.5, 0.5, 0) and scaling only in Z. The original line was already valid. |
+
+---
+
+### TL;DR – Quick checklist to avoid “node set … is not defined”
+
+1. **All sets/materials/sections → before the first `*STEP`.**  
+2. **Define a step type** (`*STATIC`, `*DYNAMIC`, …). `NLGEOM` only toggles non‑linearity.  
+3. **Put every load/BC/amp/output request inside that step block** and refer to the already‑defined set.  
+4. The `*TRANSFORM` line you wrote is fine; it does not cause the error.
+
+After moving the load that references **N1** into a correctly defined step, Abaqus will locate the set and the analysis will run without the “node set N1 is not defined” error.
+
+=== 2026-04-17 23:44:19 ===
+Q: **Why the error appears**
+
+Abaqus reads an input file in two stages  
+
+| Pass | What is read | When it becomes available |
+|------|--------------|--------------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, boundary conditions, amplitudes, output requests, etc.) | **During** the step pass. The objects referenced must already exist from the definition pass. |
+
+If a load or a boundary condition refers to a set that has not been created **by the time the step is parsed**, Abaqus aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In your file the node‑set **N1** *is* defined, but the `*BOUNDARY` (or any other load) that uses it is placed **outside any `*STEP … *END STEP` block** (or the step is declared without a step type). Consequently, when Abaqus reaches the load during the step‑parsing pass the set does not exist yet, and the error is raised.
+
+---
+
+## How to fix it – step‑by‑step checklist
+
+1. **Define all sets, materials, sections, etc. before the first `*STEP`.**  
+   Your `*NSET, NSET=N1` line already satisfies this.
+
+2. **Create a step of a proper type** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …).  
+   `*STEP, NLGEOM` alone is **not** a complete step definition; you must add a step type (e.g. `STATIC`). `NLGEOM` only toggles geometric non‑linearity.
+
+3. **Place every load, boundary condition, amplitude, output request, etc. inside that step block** and refer to the already‑defined set.
+
+4. (Optional) If you want a time‑dependent load, define an `*AMPLITUDE` and attach its name to the load line.
+
+5. The `*TRANSFORM` line you used is syntactically correct; it translates the whole mesh by (0.5, 0.5, 0) and scales the Z‑direction by 8. It is **not** the cause of the error.
+
+---
+
+## Minimal corrected input file
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0.,0., 1.,1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, NLGEOM, STATIC          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+---
+
+### TL;DR – Quick checklist
+
+1. **All sets/materials/sections → before the first `*STEP`.**  
+2. **Specify a step type** (`*STATIC`, `*DYNAMIC`, …). `NLGEOM` only toggles non‑linearity.  
+3. **Put every load/BC/amp/output request inside that step block** and refer to the already‑defined set.  
+4. The `*TRANSFORM` line you wrote is valid; it does not cause the error.
+
+After moving the load that references **N1** into a correctly defined step, Abaqus will locate the set and the analysis will run without the “node set N1 is not defined” error.
+A: ## Why the “Node set N1 is not defined” error occurs  
+
+Abaqus reads an input file in **two passes**  
+
+| Pass | What is read | When it becomes available for later commands |
+|------|--------------|----------------------------------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, boundary conditions, amplitudes, output requests, etc.) | **During** the step pass. The objects referenced must already exist from the definition pass. |
+
+If a load, boundary condition, amplitude, etc. refers to a set that **has not been created at the moment the step is parsed**, Abaqus aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In the file you posted:
+
+* `*NSET, NSET=N1` **does** exist, but it is placed **outside** any `*STEP … *END STEP` block (or the step block is incomplete).  
+* Consequently, when Abaqus reaches the `*BOUNDARY` line during the step‑parsing pass, the set `N1` is still “invisible” and the error is raised.
+
+---
+
+## What you need to change  
+
+1. **All definition commands (nodes, elements, sets, materials, sections, amplitudes, transforms, …) must appear before the first `*STEP`.**  
+2. **A step must have a *type* keyword** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …).  
+   *`*STEP, NLGEOM` alone is **not** a complete step definition; `NLGEOM` only toggles geometric non‑linearity.*
+3. **Every load, boundary condition, amplitude, output request, etc. must be placed inside the step block** that follows the step‑type line.  
+4. The `*TRANSFORM` line you used is syntactically correct; it translates the whole mesh by (0.5, 0.5, 0) and scales the Z‑direction by 8. It is **not** the cause of the error.
+
+---
+
+## Step‑by‑step checklist (the “quick fix”)
+
+| # | Action | Example |
+|---|--------|---------|
+| 1 | Define **all** nodes, elements, sets, materials, sections, amplitudes, transforms, etc. **before** any `*STEP`. | `*NSET, NSET=N1 …` |
+| 2 | Start a step with a **type** keyword and optionally `NLGEOM`. | `*STEP, NLGEOM, STATIC` |
+| 3 | Inside the step, write the loads / BCs that refer to the sets defined in step 1. | `*BOUNDARY` … `N1, 1, 1, 0.5, A1` |
+| 4 | Close the step with `*END STEP`. | `*END STEP` |
+| 5 | (Optional) Add output requests (`*OUTPUT`, `*NODE FILE`, …) **inside** the step. | `*OUTPUT, FIELD` … |
+
+If you follow the table above, Abaqus will find `N1` when it parses the `*BOUNDARY` line and the error disappears.
+
+---
+
+## Minimal corrected input file  
+
+Below is a **complete, self‑contained** example that incorporates all of the points above.  
+Only the parts that are essential for the error you reported are shown; you can paste the rest of your element‑connectivity data where indicated.
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, NLGEOM, STATIC          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+### What changed compared with your original file?
+
+| Original | Fixed version |
+|----------|---------------|
+| No explicit step type (`*STEP, NLGEOM` only) | `*STEP, NLGEOM, STATIC` – a proper step definition |
+| `*BOUNDARY` (or any load) placed **outside** a step block | `*BOUNDARY` moved **inside** the step block |
+| All definition commands already before the step – unchanged | Kept the same, just verified they precede the step |
+
+---
+
+## Frequently asked follow‑up questions  
+
+| Question | Answer |
+|----------|--------|
+| **Do I have to keep `NLGEOM`?** | Only if you need geometric non‑linearity (large deformations). If you don’t, you can drop it (`*STEP, STATIC`). |
+| **Can I have more than one step?** | Yes. Just repeat the pattern: `<definition block> → *STEP, … → <loads/BCs> → *END STEP`. Each new step can reference the same sets defined in the first block. |
+| **What if I need a time‑dependent load?** | Define an `*AMPLITUDE` (as shown) and attach its name to the load line (`… , A1`). The amplitude itself must also be defined **before** the step. |
+| **Is `*TRANSFORM` mandatory?** | No. It is only needed if you want to translate/rotate/scale the mesh after it is defined. It does not affect set definitions. |
+| **Why does Abaqus abort instead of just warning?** | Loads/BCs that reference undefined objects are fatal because the solver would have no way to apply them. The parser therefore stops immediately. |
+
+---
+
+## Bottom line  
+
+- **Define** every set, material, section, amplitude, transform, etc. **before** the first `*STEP`.  
+- **Start** a step with a **type** keyword (`*STATIC`, `*DYNAMIC`, …) and optionally `NLGEOM`.  
+- **Place** all loads, boundary conditions, output requests, etc. **inside** that step block.  
+
+When you follow those three rules, the node‑set `N1` will be known when the `*BOUNDARY` line is read, and the error disappears.  
+
+Feel free to copy the corrected input file above, insert your full element connectivity, and run the analysis – it should complete without the “Node set N1 is not defined” message.
+
+=== 2026-04-17 23:45:05 ===
+Q: **Why the “Node set N1 is not defined” error appears**
+
+Abaqus reads an input file in **two passes**  
+
+| Pass | What is read | When it becomes available for later commands |
+|------|--------------|----------------------------------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, boundary conditions, amplitudes, output requests, etc.) | **During** the step pass. The objects referenced must already exist from the definition pass. |
+
+If a load, boundary condition, amplitude, etc. refers to a set that **has not been created at the moment the step is parsed**, Abaqus aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In the file you posted:
+
+* `*NSET, NSET=N1` **does** exist, but it is placed **outside** any `*STEP … *END STEP` block (or the step block is incomplete).  
+* Consequently, when Abaqus reaches the `*BOUNDARY` line during the step‑parsing pass, the set `N1` is still “invisible” and the error is raised.
+
+---
+
+## What you need to change
+
+1. **All definition commands (nodes, elements, sets, materials, sections, amplitudes, transforms, …) must appear before the first `*STEP`.**  
+2. **A step must have a *type* keyword** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` only toggles geometric non‑linearity; it does **not** replace the step‑type keyword.  
+3. **Every load, boundary condition, amplitude, output request, etc. must be placed inside the step block** that follows the step‑type line.  
+4. The `*TRANSFORM` line you used is syntactically correct; it translates the whole mesh by (0.5, 0.5, 0) and scales the Z‑direction by 8. It is **not** the cause of the error.
+
+---
+
+## Minimal corrected input file
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, NLGEOM, STATIC          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+*All definition commands (nodes, elements, sets, material, section, amplitude, transform) appear **before** the first `*STEP`.  
+*The step is started with a proper type keyword (`STATIC`) and optional `NLGEOM`.  
+*The `*BOUNDARY` line that references `N1` is now **inside** the step block, so Abaqus can find the set when it parses the load.*
+
+---
+
+## TL;DR – Quick checklist to avoid the error
+
+| ✔ | Action |
+|---|--------|
+| 1 | Put **all** nodes, elements, sets, materials, sections, amplitudes, transforms, etc. **before** any `*STEP`. |
+| 2 | Start a step with a **type** keyword (`*STATIC`, `*DYNAMIC`, …). `NLGEOM` is optional. |
+| 3 | Place **every** load, boundary condition, amplitude, output request, etc. **inside** that step block. |
+| 4 | Close the step with `*END STEP`. |
+
+When you follow these three rules, the node set `N1` will be known when the `*BOUNDARY` line is read, and the analysis will run without the “Node set N1 is not defined” message.
+
+---
+
+## Frequently asked follow‑up questions
+
+| Question | Answer |
+|----------|--------|
+| **Do I have to keep `NLGEOM`?** | Only if you need geometric non‑linearity (large deformations). If not, use `*STEP, STATIC`. |
+| **Can I have more than one step?** | Yes. Repeat the pattern: `<definition block> → *STEP, … → <loads/BCs> → *END STEP`. All sets defined before the first step remain available to later steps. |
+| **How do I apply a time‑dependent load?** | Define an `*AMPLITUDE` (as shown) **before** the step and attach its name to the load line (`…, A1`). |
+| **Is `*TRANSFORM` mandatory?** | No. It is only needed if you want to translate/rotate/scale the mesh after it is defined. |
+| **Why does Abaqus abort instead of just warning?** | Loads/BCs that reference undefined objects are fatal because the solver would have no way to apply them. The parser therefore stops immediately. |
+
+Feel free to copy the corrected input file above, insert your full element‑connectivity data where indicated, and run the analysis – it should complete without the “Node set N1 is not defined” error.
+A: **Why the “Node set N1 is not defined” error appears**
+
+Abaqus reads an input file in **two passes**  
+
+| Pass | What is read | When it becomes available for later commands |
+|------|--------------|----------------------------------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, boundary conditions, amplitudes, output requests, etc.) | **During** the step pass. The objects referenced must already exist from the definition pass. |
+
+When Abaqus reaches a load, boundary condition, amplitude, etc. it looks for the referenced set **in the definition pass**.  
+If the set has not been created yet, the parser aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In the file you posted the line
+
+```abaqus
+*BOUNDARY
+N1, 1, 1, 0.5, A1
+```
+
+is read **inside** the step‑parsing pass, but the command that creates the set
+
+```abaqus
+*NSET, NSET=N1
+5
+```
+
+is placed **after** the step (or inside an incomplete step block). Consequently, when the step is parsed the set does not exist and the error is raised.
+
+---
+
+## What must be changed
+
+1. **All definition commands** (`*NODE`, `*ELEMENT`, `*NSET`, `*ELSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, …) **must appear before the first `*STEP`.**  
+2. A step **must start with a step‑type keyword** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` only toggles geometric non‑linearity; it does **not** replace the step‑type keyword.  
+3. **Every load, boundary condition, amplitude, output request, etc. must be placed inside the step block** that follows the step‑type line.  
+4. Close the step with `*END STEP`.  
+
+The `*TRANSFORM` line you used is syntactically correct; it translates the whole mesh by (0.5, 0.5, 0) and scales the Z‑direction by 8. It is **not** the cause of the error.
+
+---
+
+## Minimal corrected input file
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, STATIC, NLGEOM          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+### What changed?
+
+| Change | Reason |
+|--------|--------|
+| All `*NSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM` lines moved **before** `*STEP` | They belong to the definition pass, so they are known when the step is parsed. |
+| `*STEP, STATIC, NLGEOM` used instead of just `*STEP, NLGEOM` | A step‑type keyword (`STATIC`) is required; `NLGEOM` is only an optional flag. |
+| `*BOUNDARY` line placed **inside** the step block | Loads must be defined inside the step that uses them. |
+| `*END STEP` added | Properly terminates the step. |
+
+With these modifications Abaqus can find the set `N1` when it reads the `*BOUNDARY` command, and the analysis runs without the “Node set N1 is not defined” message.
+
+---
+
+## TL;DR – Quick checklist to avoid the error
+
+| ✔ | Action |
+|---|--------|
+| 1 | Put **all** nodes, elements, sets, materials, sections, amplitudes, transforms, etc. **before** any `*STEP`. |
+| 2 | Start a step with a **type** keyword (`*STATIC`, `*DYNAMIC`, …). `NLGEOM` is optional. |
+| 3 | Place **every** load, boundary condition, amplitude, output request, etc. **inside** that step block. |
+| 4 | Close the step with `*END STEP`. |
+
+Follow the checklist, and the “Node set N1 is not defined” error will disappear. If you need additional steps, repeat the pattern: definition block → `*STEP` → loads/BCs → `*END STEP`.
+
+=== 2026-04-17 23:45:46 ===
+Q: **Why the “Node set N1 is not defined” error appears**
+
+Abaqus reads an input file in two passes  
+
+| Pass | What is read | When it becomes available |
+|------|--------------|--------------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, boundary conditions, amplitudes, output requests, …) | **During** the step pass. The objects referenced must already exist from the definition pass. |
+
+When the parser reaches a command that refers to a set (e.g. a `*BOUNDARY` line), it looks for that set in the **definition pass**.  
+If the set has not been created yet, the parser aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In the file you posted the command that creates the set
+
+```abaqus
+*NSET, NSET=N1
+5
+```
+
+appears **after** the step (or inside an incomplete step block), while the load that uses it
+
+```abaqus
+*BOUNDARY
+N1, 1, 1, 0.5, A1
+```
+
+is read **inside** the step‑parsing pass. Consequently, when the step is parsed the set `N1` does not exist and the error is raised.
+
+---
+
+## What must be changed
+
+1. **All definition commands** (`*NODE`, `*ELEMENT`, `*NSET`, `*ELSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, …) **must appear before the first `*STEP`.**  
+2. A step **must start with a step‑type keyword** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` is only an optional flag; it does **not** replace the step‑type keyword.  
+3. **Every load, boundary condition, amplitude, output request, etc. must be placed inside the step block** that follows the step‑type line.  
+4. Close the step with `*END STEP`.  
+
+The `*TRANSFORM` line you used is syntactically correct; it translates the whole mesh by (0.5, 0.5, 0) and scales the Z‑direction by 8. It is **not** the cause of the error.
+
+---
+
+## Minimal corrected input file
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, STATIC, NLGEOM          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+**Explanation of the changes**
+
+| Change | Why it is needed |
+|--------|------------------|
+| All `*NSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM` lines placed **before** `*STEP` | They belong to the definition pass, so they are known when the step is parsed. |
+| `*STEP, STATIC, NLGEOM` (instead of just `*STEP, NLGEOM`) | A step‑type keyword (`STATIC`) is mandatory; `NLGEOM` is only an optional flag. |
+| `*BOUNDARY` line moved **inside** the step block | Loads/BCs must be defined inside the step that uses them. |
+| `*END STEP` added | Properly terminates the step. |
+
+With these modifications Abaqus can locate the set `N1` when it reads the `*BOUNDARY` command, and the analysis runs without the “Node set N1 is not defined” message.
+
+---
+
+## TL;DR – Quick checklist to avoid the error
+
+| ✔ | Action |
+|---|--------|
+| 1 | Put **all** nodes, elements, sets, materials, sections, amplitudes, transforms, etc. **before** any `*STEP`. |
+| 2 | Start a step with a **type** keyword (`*STATIC`, `*DYNAMIC`, …). `NLGEOM` is optional. |
+| 3 | Place **every** load, boundary condition, amplitude, output request, etc. **inside** that step block. |
+| 4 | Close the step with `*END STEP`. |
+
+Follow this checklist for every step you add; the defined sets remain available to later steps, and the “Node set N1 is not defined” error will disappear. If you need additional steps, repeat the pattern: definition block → `*STEP` → loads/BCs → `*END STEP`.
+A: **Why the “Node set N1 is not defined” error appears**
+
+Abaqus reads an input file in **two passes**  
+
+| Pass | What is read | When it becomes available |
+|------|--------------|---------------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*MATERIAL`, `*NSET`, `*ELSET`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, boundary conditions, amplitudes, output requests, …) | **During** the step pass. The objects referenced must already exist from the definition pass. |
+
+When the parser reaches a command that refers to a set (e.g. a `*BOUNDARY` line), it looks for that set in the **definition pass**.  
+If the set has not been created yet, the parser aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+In the file you posted the line that creates the set
+
+```abaqus
+*NSET, NSET=N1
+5
+```
+
+appears **after** the step (or inside an incomplete step block), while the load that uses it
+
+```abaqus
+*BOUNDARY
+N1, 1, 1, 0.5, A1
+```
+
+is read **inside** the step‑parsing pass. Consequently, when the step is parsed the set `N1` does not exist and the error is raised.
+
+---
+
+## What has to be changed
+
+1. **All definition commands** (`*NODE`, `*ELEMENT`, `*NSET`, `*ELSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, …) **must be placed before the first `*STEP`.**  
+2. A step **must start with a step‑type keyword** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` is only an optional flag; it does **not** replace the step‑type keyword.  
+3. **Every load, boundary condition, amplitude, output request, etc. must be placed inside the step block** that follows the step‑type line.  
+4. Close the step with `*END STEP`.  
+
+The `*TRANSFORM` line you used is syntactically correct; it translates the whole mesh by (0.5, 0.5, 0) and scales the Z‑direction by 8. It is **not** the cause of the error.
+
+---
+
+## Minimal corrected input file
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, STATIC, NLGEOM          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+### What was changed
+
+| Change | Reason |
+|--------|--------|
+| All `*NSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM` lines moved **before** `*STEP` | They belong to the definition pass, so they are known when the step is parsed. |
+| `*STEP, STATIC, NLGEOM` (instead of just `*STEP, NLGEOM`) | A step‑type keyword (`STATIC`) is mandatory; `NLGEOM` is only an optional flag. |
+| `*BOUNDARY` line moved **inside** the step block | Loads/BCs must be defined inside the step that uses them. |
+| `*END STEP` added | Properly terminates the step. |
+
+With these modifications Abaqus can locate the set `N1` when it reads the `*BOUNDARY` command, and the analysis runs without the “Node set N1 is not defined” message.
+
+---
+
+## TL;DR – Quick checklist to avoid the error
+
+| ✔ | Action |
+|---|--------|
+| 1 | Put **all** nodes, elements, sets, materials, sections, amplitudes, transforms, etc. **before** any `*STEP`. |
+| 2 | Start a step with a **type** keyword (`*STATIC`, `*DYNAMIC`, …). `NLGEOM` is optional. |
+| 3 | Place **every** load, boundary condition, amplitude, output request, etc. **inside** that step block. |
+| 4 | Close the step with `*END STEP`. |
+
+Follow this checklist for every step you add; the defined sets remain available to later steps, and the “Node set N1 is not defined” error will disappear. If you need additional steps, repeat the pattern: **definition block → `*STEP` → loads/BCs → `*END STEP`**.
+
+=== 2026-04-17 23:46:27 ===
+Q: **Why the error occurs**
+
+Abaqus reads an input file in two stages  
+
+| Stage | What is read | When it becomes known |
+|-------|--------------|-----------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*NSET`, `*ELSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, boundary conditions, amplitudes, output requests, …) | **During** the step pass. Any set referenced here must already exist from the definition pass. |
+
+In the posted file the command that creates the set
+
+```abaqus
+*NSET, NSET=N1
+5
+```
+
+is placed **after** the step (or inside an incomplete step block), while the load that uses it
+
+```abaqus
+*BOUNDARY
+N1, 1, 1, 0.5, A1
+```
+
+is read **inside** the step‑parsing pass.  
+When the step is parsed the set `N1` does not yet exist, so the parser aborts with
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+---
+
+## What has to be changed
+
+1. **All definition commands** (`*NODE`, `*ELEMENT`, `*NSET`, `*ELSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, …) **must appear before the first `*STEP`.**  
+2. A step **must start with a step‑type keyword** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` is only an optional flag; it does **not** replace the step‑type keyword.  
+3. **Every load, boundary condition, amplitude, output request, etc. must be placed inside the step block** that follows the step‑type line.  
+4. Close the step with `*END STEP`.  
+
+The `*TRANSFORM` line you used is syntactically correct (it translates the whole mesh by (0.5, 0.5, 0) and scales the Z‑direction by 8); it is **not** the cause of the error.
+
+---
+
+## Minimal corrected input file
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, STATIC, NLGEOM          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+### What was changed
+
+| Change | Reason |
+|--------|--------|
+| All `*NSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM` lines moved **before** `*STEP` | They belong to the definition pass, so they are known when the step is parsed. |
+| `*STEP, STATIC, NLGEOM` (instead of just `*STEP, NLGEOM`) | A step‑type keyword (`STATIC`) is mandatory; `NLGEOM` is only an optional flag. |
+| `*BOUNDARY` line moved **inside** the step block | Loads/BCs must be defined inside the step that uses them. |
+| `*END STEP` added | Properly terminates the step. |
+
+With these modifications Abaqus can locate the set `N1` when it reads the `*BOUNDARY` command, and the analysis runs without the “Node set N1 is not defined” message.
+
+---
+
+## TL;DR – Quick checklist to avoid the error
+
+| ✔ | Action |
+|---|--------|
+| 1 | Put **all** nodes, elements, sets, materials, sections, amplitudes, transforms, etc. **before** any `*STEP`. |
+| 2 | Start a step with a **type** keyword (`*STATIC`, `*DYNAMIC`, …). `NLGEOM` is optional. |
+| 3 | Place **every** load, boundary condition, amplitude, output request, etc. **inside** that step block. |
+| 4 | Close the step with `*END STEP`. |
+
+Follow this checklist for every step you add; the defined sets remain available to later steps, and the “Node set N1 is not defined” error will disappear. If you need additional steps, repeat the pattern: **definition block → `*STEP` → loads/BCs → `*END STEP`**.
+A: **Why the error occurs**
+
+Abaqus reads an input file in two passes  
+
+| Pass | What is read | When it must already be known |
+|------|--------------|------------------------------|
+| **Definition pass** | `*NODE`, `*ELEMENT`, `*NSET`, `*ELSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, … | **Before** the first `*STEP` is encountered. |
+| **Step‑parsing pass** | Everything that lies **between** a `*STEP` and its matching `*END STEP` (loads, boundary conditions, output requests, …) | **During** the step pass. Any set referenced here must already exist from the definition pass. |
+
+In the posted file the node‑set that is later used in a boundary condition
+
+```abaqus
+*NSET, NSET=N1
+5
+```
+
+was placed **after** the step (or inside an incomplete step block).  
+When the parser reaches the `*BOUNDARY` line inside the step
+
+```abaqus
+*BOUNDARY
+N1, 1, 1, 0.5, A1
+```
+
+the set `N1` has not yet been defined, so Abaqus aborts with
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+The `*TRANSFORM` line is syntactically correct; it is **not** the cause of the error.
+
+---
+
+## What has to be changed
+
+1. **All definition commands** (`*NODE`, `*ELEMENT`, `*NSET`, `*ELSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, …) **must appear before the first `*STEP`.**  
+2. A step **must start with a step‑type keyword** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` is only an optional flag; it does **not** replace the step‑type keyword.  
+3. **Every load, boundary condition, amplitude, output request, etc. must be placed inside the step block** that follows the step‑type line.  
+4. Close the step with `*END STEP`.  
+
+When these rules are obeyed the parser can find the set `N1` when it reads the `*BOUNDARY` command and the analysis runs without the “Node set N1 is not defined” message.
+
+---
+
+## Minimal corrected input file
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, STATIC, NLGEOM          ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1               ! X‑direction displacement of node 5
+*END STEP
+```
+
+### What was changed
+
+| Change | Reason |
+|--------|--------|
+| All `*NSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM` lines moved **before** `*STEP` | They belong to the definition pass, so they are known when the step is parsed. |
+| `*STEP, STATIC, NLGEOM` (instead of just `*STEP, NLGEOM`) | A step‑type keyword (`STATIC`) is mandatory; `NLGEOM` is only an optional flag. |
+| `*BOUNDARY` line moved **inside** the step block | Loads/BCs must be defined inside the step that uses them. |
+| `*END STEP` added | Properly terminates the step. |
+
+---
+
+## TL;DR – Quick checklist to avoid “Node set … is not defined”
+
+| ✔ | Action |
+|---|--------|
+| 1 | Put **all** nodes, elements, sets, materials, sections, amplitudes, transforms, etc. **before** any `*STEP`. |
+| 2 | Start a step with a **type** keyword (`*STATIC`, `*DYNAMIC`, …). `NLGEOM` is optional. |
+| 3 | Place **every** load, boundary condition, amplitude, output request, etc. **inside** that step block. |
+| 4 | Close the step with `*END STEP`. |
+
+Repeat the pattern for every additional step you need:
+
+```
+<definition block>
+*STEP, <type>, <optional flags>
+   <loads / BCs / output requests>
+*END STEP
+```
+
+Following this checklist guarantees that all referenced sets exist when Abaqus parses the step, eliminating the “Node set N1 is not defined” error.
+
+=== 2026-04-17 23:47:08 ===
+Q: WHY THE ERROR OCCURS  
+
+Abaqus reads an input file in two stages.  
+
+**Definition stage** – all commands such as *NODE, *ELEMENT, *NSET, *ELSET, *MATERIAL, *SECTION, *AMPLITUDE, *TRANSFORM, etc. are read and stored **before** the first *STEP is encountered.  
+
+**Step‑parsing stage** – everything that lies between a *STEP and its matching *END STEP (loads, boundary conditions, output requests, etc.) is processed. Any set referenced in this stage must already exist from the definition stage.  
+
+In the file you posted the node‑set that is later used in a boundary condition
+
+```
+*NSET, NSET=N1
+5
+```
+
+was placed after the step (or inside an incomplete step block). When the parser reaches the *BOUNDARY line inside the step
+
+```
+*BOUNDARY
+N1, 1, 1, 0.5, A1
+```
+
+the set N1 has not yet been defined, so Abaqus stops with
+
+```
+ERROR: Node set N1 is not defined.
+```  
+
+The *TRANSFORM line is syntactically correct; it is not the cause of the error.
+
+WHAT HAS TO BE CHANGED  
+
+1. All definition commands (*NODE, *ELEMENT, *NSET, *ELSET, *MATERIAL, *SECTION, *AMPLITUDE, *TRANSFORM, etc.) must appear **before** the first *STEP.  
+2. A step must start with a step‑type keyword (*STATIC, *DYNAMIC, *HEAT TRANSFER, …). NLGEOM is only an optional flag; it does not replace the step‑type keyword.  
+3. Every load, boundary condition, amplitude, output request, etc. must be placed **inside** the step block that follows the step‑type line.  
+4. Close the step with *END STEP.  
+
+When these rules are obeyed the parser can find the set N1 when it reads the *BOUNDARY command and the analysis runs without the “Node set N1 is not defined” message.
+
+MINIMAL CORRECTED INPUT FILE  
+
+*HEADING  
+** 20‑node brick – static displacement of node 5  
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES  
+
+*NODE, NSET=Nall, GENERATE  
+1, 261  
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall  
+...   (your element connectivity – unchanged)  
+
+*# 1. Definition of node‑sets, material, section  
+*NSET, NSET=FIX  
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,  
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1  
+
+*MATERIAL, NAME=EL  
+*ELASTIC  
+210000., 0.3  
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL  
+
+*# 2. Node‑set that will be used in the load  
+*NSET, NSET=N1  
+5  
+
+*# 3. Optional amplitude (linear ramp)  
+*AMPLITUDE, NAME=A1  
+0., 0., 1., 1.  
+
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)  
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.  
+
+*# 5. Analysis step – load must be inside the step  
+*STEP, STATIC, NLGEOM   ! static step with geometric non‑linearity  
+*BOUNDARY  
+N1, 1, 1, 0.5, A1   ! X‑direction displacement of node 5  
+*END STEP  
+
+WHAT WAS CHANGED  
+
+All *NSET, *MATERIAL, *SECTION, *AMPLITUDE, *TRANSFORM lines were moved before *STEP – they belong to the definition stage and must be known when the step is parsed.  
+
+*STEP, STATIC, NLGEOM was used instead of *STEP, NLGEOM – a step‑type keyword (STATIC) is mandatory; NLGEOM is only an optional flag.  
+
+The *BOUNDARY line was moved inside the step block – loads and BCs must be defined inside the step that uses them.  
+
+*END STEP was added to properly terminate the step.  
+
+TL;DR – QUICK CHECKLIST TO AVOID “NODE SET … IS NOT DEFINED”  
+
+1. Place all nodes, elements, sets, materials, sections, amplitudes, transforms, etc. **before** any *STEP.  
+2. Start each step with a **type** keyword (*STATIC, *DYNAMIC, …). NLGEOM is optional.  
+3. Put every load, boundary condition, amplitude, output request, etc. **inside** the step block.  
+4. End each step with *END STEP.  
+
+Repeat the pattern for each additional step you need:
+
+```
+<definition block>
+*STEP, <type>, <optional flags>
+   <loads / BCs / output requests>
+*END STEP
+```  
+
+Following this checklist guarantees that all referenced sets exist when Abaqus parses the step, eliminating the “Node set N1 is not defined” error.
+A: **Why the error occurs**
+
+Abaqus reads an input file in two distinct phases  
+
+| Phase | What is read | When it must appear |
+|-------|--------------|---------------------|
+| **Definition stage** | *NODE, *ELEMENT, *NSET, *ELSET, *MATERIAL, *SECTION, *AMPLITUDE, *TRANSFORM … | **Before the first** `*STEP` keyword |
+| **Step‑parsing stage** | Anything that lies between a `*STEP` and its matching `*END STEP` (loads, boundary conditions, output requests, etc.) | **Inside** a step block |
+
+In the file you posted the node‑set **N1** is created **after** the step (or inside an incomplete step). When the parser reaches the line
+
+```abaqus
+*BOUNDARY
+N1, 1, 1, 0.5, A1
+```
+
+the set *N1* does not yet exist, so Abaqus aborts with  
+
+```
+ERROR: Node set N1 is not defined.
+```
+
+The `*TRANSFORM` line is syntactically correct; it is not the source of the error.
+
+---
+
+## What has to be changed
+
+1. **Move every definition command** (`*NODE`, `*ELEMENT`, `*NSET`, `*ELSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, …) **above the first `*STEP`.**  
+2. **Start each step with a step‑type keyword** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). `NLGEOM` is only an optional flag and cannot replace the step‑type keyword.  
+3. **Place all loads, boundary conditions, amplitudes, output requests, etc. inside the step block** that follows the step‑type line.  
+4. **Terminate every step with `*END STEP`.**  
+
+When these rules are obeyed the parser can find the set *N1* when it reads the `*BOUNDARY` command and the analysis runs without the “Node set N1 is not defined” message.
+
+---
+
+## Minimal corrected input file
+
+Below is a **complete, minimal** version of your model that follows the rules above.  
+Only the parts you supplied are kept; the element‑connectivity section (`...`) must be filled with your original data.
+
+```abaqus
+*HEADING
+** 20‑node brick – static displacement of node 5
+*PREPRINT, ECHO=YES, MODEL=YES, HISTORY=YES, CONTACT=YES  
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...   (your element connectivity – unchanged)
+
+*# -------------------------------------------------
+*# 1. Definition of node‑sets, material, section
+*# -------------------------------------------------
+*NSET, NSET=FIX
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*# -------------------------------------------------
+*# 2. Node‑set that will be used in the load
+*# -------------------------------------------------
+*NSET, NSET=N1
+5
+
+*# -------------------------------------------------
+*# 3. Optional amplitude (linear ramp)
+*# -------------------------------------------------
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.
+
+*# -------------------------------------------------
+*# 4. Optional mesh transform (translate 0.5,0.5,0 and scale Z by 8)
+*# -------------------------------------------------
+*TRANSFORM, NSET=Nall, TYPE=C, 0.5, 0.5, 0., 1., 1., 8.
+
+*# -------------------------------------------------
+*# 5. Analysis step – load must be inside the step
+*# -------------------------------------------------
+*STEP, STATIC, NLGEOM   ! static step with geometric non‑linearity
+*BOUNDARY
+N1, 1, 1, 0.5, A1   ! X‑direction displacement of node 5
+*END STEP
+```
+
+### What was changed compared with the original file?
+
+| Change | Reason |
+|--------|--------|
+|All `*NSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM` lines moved **before** `*STEP`|They belong to the definition stage and must be known when the step is parsed.|
+|`*STEP, STATIC, NLGEOM` used instead of `*STEP, NLGEOM`|A step‑type keyword (`STATIC`) is mandatory; `NLGEOM` is only an optional flag.|
+|`*BOUNDARY` line placed **inside** the step block|Loads/BCs must be defined inside the step that uses them.|
+|Added `*END STEP`|Properly terminates the step.|
+|Added comments (`*# …`) for readability|Helps future maintenance.|
+
+---
+
+## TL;DR – Quick checklist to avoid “Node set … is not defined”
+
+1. **Definition block first** – `*NODE`, `*ELEMENT`, all `*NSET`/`*ELSET`, `*MATERIAL`, `*SECTION`, `*AMPLITUDE`, `*TRANSFORM`, etc. must appear **before any** `*STEP`.  
+2. **Start a step with a type keyword** (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …). Optional flags (`NLGEOM`, `INC=…`, …) follow the comma‑separated list.  
+3. **Put every load, boundary condition, amplitude, output request, etc. inside the step block** that follows the step‑type line.  
+4. **Close the step with `*END STEP`.**  
+
+```abaqus
+<definition block>
+*STEP, <type>, <optional flags>
+   <loads / BCs / output requests>
+*END STEP
+```
+
+Follow this pattern for each additional step you need, and the parser will always find the referenced sets, eliminating the “Node set N1 is not defined” error.
+

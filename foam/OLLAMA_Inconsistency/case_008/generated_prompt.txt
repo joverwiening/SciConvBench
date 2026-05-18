@@ -1,0 +1,138 @@
+The case uses the rhoPorousSimpleFoam solver with the SIMPLE algorithm for a steady‑state compressible flow through a 45‑degree angled porous duct.  
+The geometry is defined by the following blockMeshDict (included verbatim):
+
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}
+convertToMeters 0.001;
+angle 45;
+width     50;
+lenInlet  150;
+lenPoro   100;
+lenOutlet 100;
+yzCells      20;
+nInletCells  15;
+nPoroCells   20;
+nOutletCells 20;
+vertices #codeStream
+{
+    codeInclude
+    #{
+        #include "pointField.H"
+        #include "transformField.H"
+    #};
+    code
+    #{
+        const scalar halfWidth = ($width)/2.0;
+        const scalar distOutlet = $lenPoro + $lenOutlet;
+        pointField points
+        ({
+            point(0,          0,      -halfWidth), 
+            point($lenPoro,   0,      -halfWidth), 
+            point(distOutlet, 0,      -halfWidth), 
+            point(0,          $width, -halfWidth), 
+            point($lenPoro,   $width, -halfWidth), 
+            point(distOutlet, $width, -halfWidth)  
+        });
+        points = transform(Rz(degToRad($angle)), points);
+        points.append(point(-$lenInlet, points[0].y(), points[0].z()));  
+        points.append(point(-$lenInlet, points[3].y(), points[3].z()));  
+        points.append(cmptMultiply(points, vector(1, 1, -1)));
+        os  << points;
+    #};
+};
+blocks
+(
+    hex (6 0 3 7 14 8 11 15)
+    inlet  ($nInletCells $yzCells $yzCells) simpleGrading (1 1 1)
+    hex (0 1 4 3 8 9 12 11)
+    porosity ($nPoroCells $yzCells $yzCells) simpleGrading (1 1 1)
+    hex (1 2 5 4 9 10 13 12)
+    outlet ($nOutletCells $yzCells $yzCells)  simpleGrading (1 1 1)
+);
+defaultPatch
+{
+    name walls;
+    type wall;
+}
+boundary
+(
+    porosityWall
+    {
+        type wall;
+        faces
+        (
+            (8 9 12 11)
+            (0 3 4 1)
+            (0 1 9 8)
+            (3 11 12 4)
+        );
+    }
+    inlet
+    {
+        type patch;
+        faces
+        (
+            (14 15 7 6)
+        );
+    }
+    outlet
+    {
+        type patch;
+        faces
+        (
+            (2 5 13 10)
+        );
+    }
+);
+
+The mesh consists of 55 cells in the streamwise direction (15 inlet + 20 porous + 20 outlet) and 20 cells in each transverse direction, giving a total of 55 × 20 × 20 cells.
+
+The constant directory contains the following files:
+
+thermophysicalProperties defines air as an ideal gas with γ = 1.4, R = 287 J kg⁻¹ K⁻¹, and reference temperature 300 K.
+
+turbulenceProperties selects the k‑epsilon model.
+
+porousProperties (applied to the “porosity” cell zone) specifies DarcyCoeff = 1e5 1/m and ForchCoeff = 1e3 1/m.
+
+controlDict sets startTime = 0, endTime = 1000, deltaT = 1, writeInterval = 100, and uses the SIMPLE algorithm.
+
+fvSchemes uses bounded Gauss upwind for all convective terms and Gauss linear corrected for all diffusive terms.
+
+fvSolution configures:
+- pressure solver GAMG with tolerance 1e‑8, relTol 0.05;
+- velocity and turbulence solvers smoothSolver with GaussSeidel smoother, tolerance 1e‑6 for velocity and 1e‑7 for k‑epsilon;
+- relaxation factors 0.3 for pressure, 0.7 for velocity, and 0.9 for turbulence quantities.
+
+Boundary conditions are defined as follows:
+
+Inlet patch:
+- velocity U fixedValue uniform (1 0 0) m s⁻¹;
+- pressure p fixedValue uniform 101325 Pa;
+- temperature T fixedValue uniform 300 K;
+- turbulent kinetic energy k fixedValue uniform 0.01 m² s⁻²;
+- turbulent dissipation rate epsilon fixedValue uniform 0.001 m² s⁻³.
+
+Outlet patch:
+- velocity U zeroGradient;
+- pressure p fixedValue uniform 101325 Pa;
+- temperature T fixedValue uniform 300 K;
+- k zeroGradient;
+- epsilon zeroGradient.
+
+PorosityWall (wall type):
+- velocity U fixedValue uniform (0 0 0) (no‑slip);
+- pressure p zeroGradient;
+- temperature T zeroGradient;
+- k zeroGradient;
+- epsilon zeroGradient.
+
+All remaining wall patches use the default wall type with no‑slip velocity and zeroGradient for pressure, temperature, k, and epsilon.
+
+Initial fields (0/U, 0/p, 0/T, 0/k, 0/epsilon) are set to the same uniform values as the inlet conditions.
+
+The case is ready to be run with blockMesh, followed by rhoPorousSimpleFoam.

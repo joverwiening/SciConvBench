@@ -1,0 +1,156 @@
+def compute_defect_groupings():
+    """
+    Compute defect grouping summaries for GaN using pymatgen.
+
+    This function has no input arguments. It reads the structure file
+    ``GaN.vasp`` located in the directory pointed to by the environment
+    variable ``FILE_PATH`` (or the current working directory if the variable
+    is not set). From this structure it generates:
+
+    * Vacancy defects – one for each atomic site in the structure.
+    * Two interstitial defects – a nitrogen atom added at fractional
+      coordinates (0, 0, 0) and (0, 0, 0.25).
+
+    The defects are then grouped in three different ways:
+
+    1. **defect_grouping_without_key_function** – groups defects solely by the
+       resulting defect structure (i.e., defects that produce identical
+       structures are placed in the same group). No additional key such as the
+       defect name is used.
+
+    2. **defect_grouping_with_key_function** – groups defects by a composite key
+       consisting of the defect structure *and* the defect name. Defects that
+       share both the same structure and the same name belong to the same group.
+
+    3. **group_names_with_key_function** – provides a list of the names of the
+       groups formed in step 2. The list is rendered as a Python list literal
+       inside a string.
+
+    The function returns a dictionary whose keys are the three property names
+    above and whose values are human‑readable summary strings describing the
+    grouping results.
+
+    Returns
+    -------
+    dict
+        {
+            "defect_grouping_without_key_function": <summary string>,
+            "defect_grouping_with_key_function": <summary string>,
+            "group_names_with_key_function": <summary string>
+        }
+    """
+    import os
+    from pathlib import Path
+    from pymatgen.core import Structure, Site
+    from pymatgen.analysis.defects.core import Vacancy, Interstitial
+    from pymatgen.analysis.structure_matcher import StructureMatcher
+
+    # -------------------------------------------------------------------------
+    # Helper functions
+    # -------------------------------------------------------------------------
+    def _load_structure():
+        """Load GaN.vasp from the base directory."""
+        base_dir = os.getenv("FILE_PATH", ".")
+        file_path = Path(base_dir) / "GaN.vasp"
+        if not file_path.is_file():
+            raise FileNotFoundError(f"Structure file not found: {file_path}")
+        return Structure.from_file(str(file_path))
+
+    def _generate_vacancies(structure):
+        """Create a Vacancy object for every site in the structure."""
+        vacancies = []
+        for idx, site in enumerate(structure.sites):
+            vac_struct = structure.copy()
+            vac_struct.remove_sites([idx])
+            name = f"vacancy_{site.species_string}_{idx}"
+            vacancies.append({"defect": Vacancy(vac_struct, site), "name": name})
+        return vacancies
+
+    def _generate_interstitials(structure):
+        """Create two interstitials at fixed fractional coordinates."""
+        interstitials = []
+        # First interstitial at (0, 0, 0)
+        int_struct1 = structure.copy()
+        int_site1 = Site("N", [0.0, 0.0, 0.0])
+        int_struct1.append(int_site1.species, int_site1.frac_coords, validate_proximity=False)
+        name1 = "interstitial_N_0.0_0.0_0.0"
+        interstitials.append({"defect": Interstitial(int_struct1, int_site1), "name": name1})
+
+        # Second interstitial at (0, 0, 0.25)
+        int_struct2 = structure.copy()
+        int_site2 = Site("N", [0.0, 0.0, 0.25])
+        int_struct2.append(int_site2.species, int_site2.frac_coords, validate_proximity=False)
+        name2 = "interstitial_N_0.0_0.0_0.25"
+        interstitials.append({"defect": Interstitial(int_struct2, int_site2), "name": name2})
+
+        return interstitials
+
+    def _group_by_structure(defects):
+        """
+        Group defects solely by structural equivalence.
+        Returns a list of groups, each group being a list of defect dictionaries.
+        """
+        matcher = StructureMatcher()
+        groups = []
+        for d in defects:
+            placed = False
+            for grp in groups:
+                # Compare with the first element of the group
+                if matcher.fit(d["defect"].defect_structure, grp[0]["defect"].defect_structure):
+                    grp.append(d)
+                    placed = True
+                    break
+            if not placed:
+                groups.append([d])
+        return groups
+
+    def _group_by_structure_and_name(defects):
+        """
+        Group defects by a composite key: (structure hash, defect name).
+        Returns a list of groups, each group being a list of defect dictionaries.
+        """
+        matcher = StructureMatcher()
+        groups = {}
+        for d in defects:
+            # Use StructureMatcher to obtain a hash that is invariant under
+            # symmetry operations.
+            struct_hash = matcher.get_hash(d["defect"].defect_structure)
+            key = (struct_hash, d["name"])
+            groups.setdefault(key, []).append(d)
+        # Convert dict values to list of groups
+        return list(groups.values())
+
+    # -------------------------------------------------------------------------
+    # Main execution
+    # -------------------------------------------------------------------------
+    struct = _load_structure()
+    vacancy_defs = _generate_vacancies(struct)
+    interstitial_defs = _generate_interstitials(struct)
+    all_defects = vacancy_defs + interstitial_defs
+
+    # 1. Grouping without a key function (structure only)
+    groups_no_key = _group_by_structure(all_defects)
+    desc_no_key = (
+        f"{len(groups_no_key)} groups – "
+        f"{', '.join([f'{len(g)} defect(s) in group {i}' for i, g in enumerate(groups_no_key)])}."
+    )
+    result_no_key = f"defect_grouping_without_key_function: {desc_no_key}"
+
+    # 2. Grouping with a key function (structure + name)
+    groups_with_key = _group_by_structure_and_name(all_defects)
+    desc_with_key = (
+        f"{len(groups_with_key)} groups – "
+        f"{', '.join([f'{len(g)} defect(s) in group {i}' for i, g in enumerate(groups_with_key)])}."
+    )
+    result_with_key = f"defect_grouping_with_key_function: {desc_with_key}"
+
+    # 3. Names of groups formed with the key function
+    group_names = [grp[0]["name"] for grp in groups_with_key]
+    result_names = f"group_names_with_key_function: {group_names!r}"
+
+    # Assemble final dictionary
+    return {
+        "defect_grouping_without_key_function": result_no_key,
+        "defect_grouping_with_key_function": result_with_key,
+        "group_names_with_key_function": result_names,
+    }

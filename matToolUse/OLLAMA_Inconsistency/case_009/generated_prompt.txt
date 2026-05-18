@@ -1,0 +1,121 @@
+Compute the number of chemical‑potential limits in the Mg‑Ga‑N formation‑energy diagram.
+
+The function:
+- Determines the base directory from the ``FILE_PATH`` environment variable (or the current working directory if not set).
+- Loads the stable entries from ``stable_entries_Mg_Ga_N.json``.
+- Loads the bulk VASP calculation (``Mg_Ga/bulk/vasprun.xml.gz``) to obtain the bulk entry and VBM.
+- Loads defect calculations for charge states ``-2, -1, 0, 1, 2`` from the sub‑folders ``Mg_Ga/charge_-2``, ``Mg_Ga/charge_-1``, ``Mg_Ga/charge_0``, ``Mg_Ga/charge_1`` and ``Mg_Ga/charge_2``. Each sub‑folder must contain ``vasprun.xml.gz`` and ``LOCPOT.gz``.
+- Constructs ``DefectEntry`` objects for each charge state and applies the Freysoldt correction (dielectric constant = 14) to obtain corrected formation energies.
+- Builds a ``PhaseDiagram`` from the elemental stable entries and the bulk entry.
+- Constructs a ``FormationEnergyDiagram`` from the corrected defect entries and the phase diagram.
+- Returns the number of distinct chemical‑potential limits, i.e. the number of vertices in the formation‑energy diagram.
+
+```python
+def compute_chemical_potential_limits():
+    """
+    Compute the number of chemical‑potential limits in the Mg‑Ga‑N formation‑energy
+    diagram.
+
+    Returns
+    -------
+    dict
+        {'chemical_potential_limits_count': <int>}
+    """
+    import os
+    import json
+    from pymatgen.entries.computed_entries import ComputedEntry
+    from pymatgen.analysis.phase_diagram import PhaseDiagram
+    from pymatgen.analysis.defects.core import DefectEntry
+    from pymatgen.analysis.defects.corrections import FreysoldtCorrection
+    from pymatgen.analysis.defects.formation_energy import FormationEnergyDiagram
+    from pymatgen.io.vasp import Vasprun
+
+    # ------------------------------------------------------------------
+    # Base directory
+    # ------------------------------------------------------------------
+    base_dir = os.getenv("FILE_PATH", ".")
+    base_dir = os.path.abspath(base_dir)
+
+    # ------------------------------------------------------------------
+    # Load stable entries (Mg‑Ga‑N system)
+    # ------------------------------------------------------------------
+    stable_path = os.path.join(base_dir, "stable_entries_Mg_Ga_N.json")
+    if not os.path.isfile(stable_path):
+        raise FileNotFoundError(f"Stable entries file not found: {stable_path}")
+
+    with open(stable_path, "r") as f:
+        stable_data = json.load(f)
+
+    stable_entries = [ComputedEntry.from_dict(d) for d in stable_data]
+
+    # ------------------------------------------------------------------
+    # Load bulk calculation (VBM and bulk entry)
+    # ------------------------------------------------------------------
+    bulk_vasprun_path = os.path.join(base_dir, "Mg_Ga", "bulk", "vasprun.xml.gz")
+    if not os.path.isfile(bulk_vasprun_path):
+        raise FileNotFoundError(f"Bulk vasprun not found: {bulk_vasprun_path}")
+
+    bulk_vasprun = Vasprun(bulk_vasprun_path, parse_potcar_file=False)
+    bulk_entry = bulk_vasprun.get_computed_entry()
+    vbm = bulk_vasprun.eigenvalue_band_properties[0]  # VBM energy
+
+    # ------------------------------------------------------------------
+    # Build phase diagram from elemental stable entries + bulk entry
+    # ------------------------------------------------------------------
+    elemental_entries = [e for e in stable_entries if len(e.composition.elements) == 1]
+    phase_entries = elemental_entries + [bulk_entry]
+    phase_diagram = PhaseDiagram(phase_entries)
+
+    # ------------------------------------------------------------------
+    # Load defect calculations for required charge states
+    # ------------------------------------------------------------------
+    defect_dir = os.path.join(base_dir, "Mg_Ga")
+    charge_states = [-2, -1, 0, 1, 2]  # include q = 2 as requested
+    defect_entries = []
+
+    for charge in charge_states:
+        sub_dir = os.path.join(defect_dir, f"charge_{charge}")
+        vasprun_path = os.path.join(sub_dir, "vasprun.xml.gz")
+        locpot_path = os.path.join(sub_dir, "LOCPOT.gz")
+
+        if not (os.path.isfile(vasprun_path) and os.path.isfile(locpot_path)):
+            raise FileNotFoundError(
+                f"Missing files for charge {charge} in {sub_dir}"
+            )
+
+        # Construct raw DefectEntry
+        raw_defect = DefectEntry.from_paths(
+            defect_path=vasprun_path,
+            bulk_path=bulk_vasprun_path,
+            locpot_path=locpot_path,
+            charge=charge,
+            vbm=vbm,
+        )
+
+        # Apply Freysoldt correction (dielectric constant = 14)
+        correction = FreysoldtCorrection(
+            dielectric=14,
+            bulk_vasprun=bulk_vasprun,
+            defect_vasprun=Vasprun(vasprun_path, parse_potcar_file=False),
+        )
+        corrected_entry = correction.apply_correction(raw_defect)
+
+        defect_entries.append(corrected_entry)
+
+    # ------------------------------------------------------------------
+    # Build formation‑energy diagram
+    # ------------------------------------------------------------------
+    fed = FormationEnergyDiagram(
+        defect_entries,
+        phase_diagram,
+        bulk_entry,
+        vbm=vbm,
+    )
+
+    # ------------------------------------------------------------------
+    # Number of chemical‑potential limits (vertices of the diagram)
+    # ------------------------------------------------------------------
+    chemical_potential_limits_count = len(fed.chemical_potential_limits)
+
+    return {"chemical_potential_limits_count": chemical_potential_limits_count}
+```

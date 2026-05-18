@@ -1,0 +1,157 @@
+Write a Python function named `compute_localized_bands` with no required arguments. The function must:
+
+- Import the necessary classes from pymatgen (`Vasprun`, `Procar`, `Spin`) and standard libraries (`os`, `glob`, `numpy`).
+- Assume a variable `file_path` points to the base directory that contains the case files.
+- Locate the three `vasprun.xml` files in each of the directories `v_Ga/ccd_0_-1` and `v_Ga/ccd_-1_0` (search recursively).
+- Pair each `vasprun.xml` from `v_Ga/ccd_0_-1` with the `PROCAR` file located at `v_Ga/ccd_-1_0/1/PROCAR`, and each `vasprun.xml` from `v_Ga/ccd_-1_0` with the `PROCAR` file located at `v_Ga/ccd_0_-1/1/PROCAR`.
+- Load each `Vasprun` and its corresponding `Procar`.
+- Identify defect‑related atoms by element symbol: any atom whose species is `"Ga"` or `"N"` (these are treated as the vacancy site and its nearest‑neighbor atoms).
+- For every band index (1‑based indexing as used in PROCAR):
+    * Sum the projected weight on all defect‑related atoms across all orbitals.
+    * Compute the total projected weight on all atoms.
+    * If the defect‑related fraction exceeds 0.70 (70 %), mark the band as localized.
+- Create `localized_bands_set_1` as the union of all band indices that satisfy the >70 % criterion for the first defect configuration (no energy window).
+- Create `localized_bands_set_2` as the subset of those bands whose energies lie within ±2 eV of the Fermi level for the second defect configuration. Band energies are taken from the `Vasprun` eigenvalues (non‑spin‑polarized case; if spin‑polarized, both spin channels are examined). A band is considered within the window if any k‑point energy for that band falls inside the ±2 eV range.
+- Return a dictionary with keys `"localized_bands_set_1"` and `"localized_bands_set_2"` mapping to Python `set` objects containing the identified band indices.
+
+The function must include a comprehensive docstring that describes:
+- No input parameters.
+- The expected directory layout and file naming conventions.
+- The method used to determine defect‑related atoms and the projection‑weight threshold.
+- The energy window applied for the second set.
+- The structure of the returned dictionary.
+
+```python
+import os
+import glob
+import numpy as np
+from pymatgen.io.vasp.outputs import Vasprun, Procar, Spin
+
+def compute_localized_bands():
+    """
+    Compute localized band indices for two defect configurations using VASP output files.
+
+    No arguments are required. The function assumes that a variable ``file_path`` is
+    defined in the environment (or can be edited manually) and points to the base
+    directory containing the following sub‑folders:
+
+        v_Ga/ccd_0_-1/
+        v_Ga/ccd_-1_0/
+
+    Each of the above directories must contain three ``vasprun.xml`` files (the
+    function searches recursively). The PROCAR files are expected at:
+
+        v_Ga/ccd_-1_0/1/PROCAR   (paired with vaspruns from ccd_0_-1)
+        v_Ga/ccd_0_-1/1/PROCAR   (paired with vaspruns from ccd_-1_0)
+
+    Defect‑related atoms are identified by element symbol: all Ga and N atoms in the
+    structure are treated as belonging to the vacancy site or its nearest neighbours.
+    A band is considered *localized* when the summed projection weight on these atoms
+    exceeds 70 % of the total projection weight for that band.
+
+    For the second defect configuration a further energy filter is applied:
+    only bands whose energies lie within ±2 eV of the Fermi level (``vasprun.efermi``)
+    are retained.
+
+    Returns
+    -------
+    dict
+        {
+            "localized_bands_set_1": set of band indices (int) for the first configuration,
+            "localized_bands_set_2": set of band indices (int) for the second configuration
+        }
+    """
+    # -------------------------------------------------------------------------
+    # Configuration
+    # -------------------------------------------------------------------------
+    # Base directory – edit this line if the variable is not set externally.
+    base_dir = globals().get("file_path", "/path/to/base/directory")
+
+    # Directories for the two CCD directions
+    dir_a = os.path.join(base_dir, "v_Ga", "ccd_0_-1")
+    dir_b = os.path.join(base_dir, "v_Ga", "ccd_-1_0")
+
+    # Helper to collect vasprun paths recursively
+    def collect_vaspruns(directory):
+        pattern = os.path.join(directory, "**", "vasprun.xml")
+        return sorted(glob.glob(pattern, recursive=True))
+
+    vaspruns_a = collect_vaspruns(dir_a)
+    vaspruns_b = collect_vaspruns(dir_b)
+
+    # Pairings
+    pairs = []
+    # a -> PROCAR from b/1/PROCAR
+    procar_b = os.path.join(dir_b, "1", "PROCAR")
+    for vr_path in vaspruns_a:
+        pairs.append((vr_path, procar_b, "set1"))
+    # b -> PROCAR from a/1/PROCAR
+    procar_a = os.path.join(dir_a, "1", "PROCAR")
+    for vr_path in vaspruns_b:
+        pairs.append((vr_path, procar_a, "set2"))
+
+    # -------------------------------------------------------------------------
+    # Analysis
+    # -------------------------------------------------------------------------
+    localized_set_1 = set()
+    localized_set_2 = set()
+    projection_threshold = 0.70
+    energy_window = 2.0  # eV
+
+    for vr_path, procar_path, target_set in pairs:
+        # Load files
+        vasprun = Vasprun(vr_path, parse_projected_eigen=True)
+        procar = Procar(procar_path)
+
+        # Identify defect‑related atom indices (Ga and N)
+        defect_atom_indices = [
+            i for i, site in enumerate(vasprun.final_structure)
+            if site.species_string in ("Ga", "N")
+        ]
+
+        # Extract eigenvalues (non‑spin‑polarized handling)
+        if vasprun.is_spin:
+            # Combine both spin channels
+            eigen_up = vasprun.eigenvalues[Spin.up]
+            eigen_dn = vasprun.eigenvalues[Spin.down]
+            eigenvalues = np.concatenate([eigen_up, eigen_dn], axis=0)
+        else:
+            eigenvalues = vasprun.eigenvalues[Spin.up]
+
+        # eigenvalues shape: (n_bands, n_kpoints)
+        n_bands = eigenvalues.shape[0]
+
+        # Loop over bands (PROCAR uses 1‑based indexing)
+        for band_idx in range(1, n_bands + 1):
+            # Total weight for this band (sum over all atoms and orbitals)
+            total_weight = procar.get_band_projection(band_idx).sum()
+
+            # Weight on defect‑related atoms
+            defect_weight = procar.get_band_projection(band_idx, atom_indices=defect_atom_indices).sum()
+
+            if total_weight == 0:
+                continue  # avoid division by zero
+
+            fraction = defect_weight / total_weight
+
+            if fraction >= projection_threshold:
+                if target_set == "set1":
+                    localized_set_1.add(band_idx)
+                else:
+                    # Energy filter for set2
+                    band_energies = eigenvalues[band_idx - 1]  # zero‑based index
+                    fermi = vasprun.efermi
+                    within_window = np.any(
+                        np.abs(band_energies - fermi) <= energy_window
+                    )
+                    if within_window:
+                        localized_set_2.add(band_idx)
+
+    # -------------------------------------------------------------------------
+    # Return result
+    # -------------------------------------------------------------------------
+    return {
+        "localized_bands_set_1": localized_set_1,
+        "localized_bands_set_2": localized_set_2,
+    }
+```

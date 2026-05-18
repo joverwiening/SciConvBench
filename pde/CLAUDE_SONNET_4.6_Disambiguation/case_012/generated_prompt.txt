@@ -1,0 +1,144 @@
+Solve the Allen-Cahn PDE numerically as specified below.
+
+The PDE is u_t = (0.015)^2 * (u_xx + u_yy) + u - u**3.
+The spatial domain is (x,y) in [0,1] x [0,1] and time domain is t in [0, 0.2].
+The parameter epsilon = 0.015.
+The initial condition is u(x,y,0) = sin(pi*x) * sin(pi*y).
+
+Use a uniform grid with Nx = Ny = 200 intervals, giving 201 x 201 grid points including both endpoints.
+Set dx = 1/200 and dy = 1/200.
+Grid points are x_i = i*dx for i = 0..200 and y_j = j*dy for j = 0..200.
+Use dt = 0.0002 and run for 1000 time steps to reach T = 0.2.
+
+Apply the 5-point Laplacian stencil for the spatial discretization of u_xx + u_yy.
+Enforce zero Neumann boundary conditions using ghost nodes with mirror values (ghost node value equals the interior neighbor value).
+Use a semi-implicit time integration scheme: (u^{n+1} - u^n) / dt = epsilon**2 * Laplacian(u^{n+1}) + u^n - (u^n)**3.
+Rearrange to form a sparse linear system and solve it each time step.
+The linear system has the form (I - dt * epsilon**2 * L) * u^{n+1} = u^n + dt * (u^n - (u^n)**3), where L is the discrete Laplacian operator with Neumann ghost-node boundary conditions.
+
+At T = 0.2, compute u(x,y,T) on the full 201 x 201 grid.
+Store the solution array u with shape (201, 201) such that u[j, i] = u(x_i, y_j).
+Save a file named "solution_agent_allen_cahn_06.npz" containing: x as a 1D array of length 201, y as a 1D array of length 201, u as the 2D array of shape (201, 201), and scalar metadata T=0.2, dx=1/200, dy=1/200, dt=0.0002.
+Save a heatmap or contour plot of u(x,y,T) as "solution_agent_allen_cahn_06.png".
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2) * dx * dy) at T = 0.2.
+
+Use Python with numpy and scipy.sparse for the sparse linear system assembly and solver.
+
+```python
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+
+# ── parameters ────────────────────────────────────────────────────────────────
+epsilon = 0.015
+eps2    = epsilon**2
+Nx = Ny = 200          # number of intervals  →  Nx+1 = 201 grid points
+Nt = 1000
+T  = 0.2
+dt = T / Nt            # 0.0002
+
+dx = 1.0 / Nx
+dy = 1.0 / Ny
+
+x = np.linspace(0.0, 1.0, Nx + 1)   # 201 points
+y = np.linspace(0.0, 1.0, Ny + 1)   # 201 points
+
+Nx1 = Nx + 1   # 201
+Ny1 = Ny + 1   # 201
+N   = Nx1 * Ny1
+
+# ── initial condition ─────────────────────────────────────────────────────────
+XX, YY = np.meshgrid(x, y)           # shape (Ny1, Nx1)
+u = np.sin(np.pi * XX) * np.sin(np.pi * YY)   # u[j,i]
+
+# ── build sparse Laplacian with zero-Neumann ghost nodes ──────────────────────
+#
+#  Interior stencil (5-point):
+#    L u[j,i] = (u[j,i-1] - 2u[j,i] + u[j,i+1])/dx^2
+#             + (u[j-1,i] - 2u[j,i] + u[j+1,i])/dy^2
+#
+#  Ghost-node Neumann BC:  u[-1,i] = u[0,i],  u[Nx+1,i] = u[Nx,i]  (and same in y)
+#  This means the one-sided difference at the boundary contributes 0 in the
+#  second-derivative stencil, so the diagonal coefficient for boundary nodes
+#  in x is -1/dx^2 (one neighbour instead of two) and similarly for y.
+#
+#  We build 1-D second-derivative matrices Dxx (size Nx1) and Dyy (size Ny1)
+#  with Neumann BCs, then form L = kron(I_y, Dxx/dx^2) + kron(Dyy/dy^2, I_x).
+
+def neumann_1d(n, h):
+    """
+    1-D second-derivative matrix of size n x n with zero-Neumann ghost nodes.
+    Interior row i (0 < i < n-1): [-1, 2, -1] / h^2  (standard)
+    Boundary row 0:               [-1, 1]     / h^2   (ghost mirrors node 1)
+    Boundary row n-1:             [ 1,-1]     / h^2
+    """
+    diag_main = -2.0 * np.ones(n)
+    diag_off  =  1.0 * np.ones(n - 1)
+    # fix boundaries: ghost node mirrors the first interior node
+    diag_main[0]    = -1.0
+    diag_main[n-1]  = -1.0
+    mat = (sp.diags(diag_main, 0, shape=(n, n))
+         + sp.diags(diag_off,  1, shape=(n, n))
+         + sp.diags(diag_off, -1, shape=(n, n)))
+    return mat / h**2
+
+Dxx = neumann_1d(Nx1, dx)   # (201, 201)
+Dyy = neumann_1d(Ny1, dy)   # (201, 201)
+
+Ix = sp.eye(Nx1)
+Iy = sp.eye(Ny1)
+
+# Laplacian in 2-D  (row-major: index = j*Nx1 + i)
+L = sp.kron(Iy, Dxx) + sp.kron(Dyy, Ix)   # (N, N)
+
+# ── build LHS matrix  A = I - dt*eps2*L ──────────────────────────────────────
+A = sp.eye(N) - dt * eps2 * L
+A = A.tocsr()
+
+# use a direct sparse solver (SuperLU via spsolve)
+# factorize once since A is constant
+solver = spla.factorized(A)
+
+# ── time integration ──────────────────────────────────────────────────────────
+u_flat = u.ravel()   # shape (N,)  row-major → index j*Nx1+i
+
+for step in range(Nt):
+    rhs = u_flat + dt * (u_flat - u_flat**3)
+    u_flat = solver(rhs)
+
+# ── reshape to 2-D ────────────────────────────────────────────────────────────
+u_final = u_flat.reshape(Ny1, Nx1)   # u_final[j,i] = u(x_i, y_j)
+
+# ── diagnostics ───────────────────────────────────────────────────────────────
+u_min  = u_final.min()
+u_max  = u_final.max()
+l2norm = np.sqrt(np.sum(u_final**2) * dx * dy)
+
+print(f"min(u)  = {u_min:.6f}")
+print(f"max(u)  = {u_max:.6f}")
+print(f"L2 norm = {l2norm:.6f}")
+
+# ── save .npz ─────────────────────────────────────────────────────────────────
+np.savez(
+    "solution_agent_allen_cahn_06.npz",
+    x=x, y=y, u=u_final,
+    T=np.float64(T),
+    dx=np.float64(dx),
+    dy=np.float64(dy),
+    dt=np.float64(dt),
+)
+print("Saved solution_agent_allen_cahn_06.npz")
+
+# ── save plot ─────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(6, 5))
+cf = ax.contourf(x, y, u_final, levels=50, cmap="RdBu_r")
+plt.colorbar(cf, ax=ax, label="u")
+ax.set_title(f"Allen-Cahn solution at T={T}")
+ax.set_xlabel("x")
+ax.set_ylabel("y")
+plt.tight_layout()
+plt.savefig("solution_agent_allen_cahn_06.png", dpi=150)
+plt.close()
+print("Saved solution_agent_allen_cahn_06.png")
+```

@@ -1,0 +1,2745 @@
+=== 2026-04-17 20:08:12 ===
+Q: **Short answer**  
+In Abaqus a *mean‑rotation* MPC is defined with the keyword  
+
+```
+*MPC, TYPE=MEANROT, NSET=<node‑set>, REF NODE=<reference‑node>
+```
+
+The rotations of all nodes that belong to **NSET** are averaged and that average is forced to be equal to the rotation of the **reference node**.  
+The reference node must **not** be a member of the node set.
+
+Below is a minimal, self‑contained example that shows the complete workflow (material, section, element set, node set, MPC definition and a static step).  The same pattern can be inserted into your larger model.
+
+---
+
+## 1. What the mean‑rotation MPC does
+
+For a 3‑D solid element each node has three rotational degrees of freedom (DOFs) – `UR1`, `UR2`, `UR3`.  
+When you write
+
+```
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+Abaqus creates, for each of the three rotation components, one constraint equation of the form  
+
+\[
+\frac{1}{N}\sum_{i\in\text{CN7}} \; \text{UR}_k^{(i)} \;-\; \text{UR}_k^{(262)} \;=\;0
+\qquad k = 1,2,3
+\]
+
+where \(N\) is the number of nodes in the set **CN7**.  
+Thus the *average* rotation of the nodes in **CN7** is forced to be exactly the rotation of node **262**.
+
+---
+
+## 2. Required input sections
+
+| Section | What you need to write |
+|---------|------------------------|
+| **Node set** that will be averaged | `*NSET, NSET=CN7` (list of nodes) |
+| **Reference node** (single node) | `*NSET, NSET=REFNODE, GENERATE` (or just list the node) |
+| **MPC definition** | `*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262` |
+| **Step** (non‑linear geometry is optional) | `*STEP, NLGEOM` … `*END STEP` |
+
+---
+
+## 3. Minimal working input (illustrative)
+
+```abaqus
+*Heading
+**  Simple cantilever beam – mean rotation constraint
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+**  Nodes (a tiny 2‑x‑2‑x‑2 mesh – 27 nodes)
+** -------------------------------------------------
+*Node
+1, 0., 0., 0.
+2, 1., 0., 0.
+3, 0., 1., 0.
+4, 1., 1., 0.
+5, 0., 0., 1.
+6, 1., 0., 1.
+7, 0., 1., 1.
+8, 1., 1., 1.
+9, 0.5, 0.5, 0.5   ** <-- reference node (262 in your model)
+
+** -------------------------------------------------
+**  Elements (8 linear bricks)
+** -------------------------------------------------
+*Element, type=C3D8, elset=EALL
+1, 1,2,4,3,5,6,8,7
+2, 2,4,8,6,6,8,9,9   ** (just dummy numbers – you will have your own)
+
+** -------------------------------------------------
+**  Material & section (linear isotropic)
+** -------------------------------------------------
+*Material, name=STEEL
+*Elastic
+210000., 0.3
+*Solid Section, elset=EALL, material=STEEL
+
+** -------------------------------------------------
+**  Node set that will be averaged (any subset you like)
+** -------------------------------------------------
+*Nset, nset=CN7
+1,2,3,4,5,6,7,8
+
+** -------------------------------------------------
+**  Reference node (must NOT be in CN7)
+** -------------------------------------------------
+*Nset, nset=REFNODE
+9
+
+** -------------------------------------------------
+**  Mean‑rotation MPC
+** -------------------------------------------------
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=REFNODE
+
+** -------------------------------------------------
+**  Step
+** -------------------------------------------------
+*Step, nlgeom=YES, inc=100
+*Static
+** (apply loads / boundary conditions here)
+*End Step
+```
+
+### What you have to change for your model
+
+| What you have | What you need to replace |
+|---------------|--------------------------|
+| `*NSET, NSET=CN7 …` (list of 21 nodes) | Keep it – this is the set whose mean rotation you want to constrain. |
+| `*MPC` line you wrote (`MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262`) | **Replace it** with the single line shown above:  
+
+  ```abaqus
+  *MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+  ```
+  (or `REF NODE=REFNODE` if you defined a separate node set). |
+| `*STEP,INC=100,NLGEOM` | Keep it (or use `*STEP, NLGEOM`). The MPC is already defined before the step, so no extra cards are needed inside the step. |
+
+**Important points**
+
+1. **Do not repeat node numbers** in the *MPC* line. The syntax you used (`5,5,5,6,6,6,…`) is interpreted as *three separate constraints* (one for each rotation component) and the repeated numbers are taken as *different nodes* – which is not what you want.  
+2. **The reference node must be unique** (not part of the node set). In your original file you added node `262` at the very end (`262,0.,0.,1.`). That is fine; just be sure it is *not* listed in `CN7`.  
+3. **The node set can be generated** (`*NSET, NSET=CN7, GENERATE …`) if you have a regular numbering pattern. The only requirement is that the set contains the nodes whose rotations you want to average.  
+4. **The MPC card must be placed before the first *STEP*** (as you already did). Abaqus reads the MPC definition once and then uses it in every step that follows.  
+
+---
+
+## 4. Full version of your original file (only the corrected part)
+
+Below is your original input with **only the necessary correction** highlighted (the rest of the model – elements, material, etc. – is left untouched).
+
+```abaqus
+...
+*NSET,NSET=CN7
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+*ELSET,ELSET=EALL,GENERATE
+1,32
+*NSET,NSET=NALL,GENERATE
+1,261
+*MATERIAL,NAME=LIN_ISO_EL
+*SOLID SECTION,ELSET=EALL,MATERIAL=LIN_ISO_EL
+*END MATERIAL
+
+**---  ***  CORRECTED MPC CARD  ***  -----------------
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+**--------------------------------------------------
+
+*STEP,INC=100,NLGEOM
+*STATIC
+** (your loads / BCs here)
+*END STEP
+```
+
+That single line replaces the long, comma‑separated list you had before.  After this change the analysis will run and the rotation of node **262** will be exactly the arithmetic mean of the rotations of the 21 nodes in **CN7** (for each of the three rotation components).
+
+---
+
+## 5. Quick sanity check (post‑processing)
+
+After the step finishes you can verify that the constraint is satisfied:
+
+```python
+# Python script that can be run in Abaqus/CAE or from the command line
+from odbAccess import *
+odb = openOdb('job_name.odb')
+step = odb.steps['Step-1']
+frame = step.frames[-1]          # last increment
+ref_rot = frame.fieldOutputs['UR'].getSubset(region=odb.rootAssembly.instances['PART-1-1'].nodeSets['REFNODE']).values[0].data
+cn7_rot = frame.fieldOutputs['UR'].getSubset(region=odb.rootAssembly.instances['PART-1-1'].nodeSets['CN7']).values
+mean_rot = sum([v.data for v in cn7_rot]) / len(cn7_rot)
+
+print('Reference node rotation (UR1,UR2,UR3):', ref_rot)
+print('Mean rotation of CN7 (UR1,UR2,UR3)   :', mean_rot)
+```
+
+The printed vectors should be identical (to machine precision).  If they are not, the MPC was not read correctly (most likely because of a syntax error).
+
+---
+
+## 6. TL;DR – What you need to type
+
+```abaqus
+*NSET, NSET=CN7
+… list of nodes whose mean rotation you want …
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+*STEP
+*STATIC
+… loads / BCs …
+*END STEP
+```
+
+That is all.  The rest of your model (elements, material, section, etc.) stays exactly as you already have it.  
+
+Feel free to ask if you need any further clarification (e.g., how to combine the mean‑rotation MPC with other MPCs, or how to apply it to a subset of rotation components only). Happy modelling!
+A: **Short answer**
+
+In Abaqus a mean‑rotation MPC is created with a **single** *MPC* line:
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+* `CN7` – node set whose three rotational DOFs (UR1, UR2, UR3) are to be averaged.  
+* `262` – the reference node whose rotation is forced to equal that average.  
+* The reference node **must not** belong to `CN7`.  
+
+That line replaces any long, comma‑separated list of node numbers. Place it **before** the first *STEP* (as you already do) and the constraint will be active for all subsequent steps.
+
+=== 2026-04-17 20:08:42 ===
+Q: **Short answer**  
+
+In Abaqus a *mean‑rotation* MPC is defined with a single line  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```  
+
+`CN7` is the node set whose three rotational DOFs (UR1‑UR3) are averaged, and node **262** (the reference node) is forced to have exactly that average rotation. The reference node must **not** be a member of `CN7`.  
+
+---
+
+## Detailed answer  
+
+### 1. What the mean‑rotation MPC does  
+
+For a 3‑D solid element each node has three rotational DOFs (`UR1`, `UR2`, `UR3`).  
+When the card  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```  
+
+is read, Abaqus creates three constraint equations (one for each rotation component):
+
+\[
+\frac{1}{N}\sum_{i\in\text{CN7}} \text{UR}_k^{(i)} \;-\; \text{UR}_k^{(262)} = 0,
+\qquad k = 1,2,3
+\]
+
+where \(N\) is the number of nodes in **CN7**.  
+Thus the *average* rotation of all nodes in **CN7** is forced to be exactly the rotation of node **262** (for each of the three components).
+
+### 2. Required input sections  
+
+| Section | What you must write |
+|---------|---------------------|
+| **Node set to be averaged** | `*NSET, NSET=CN7` (list of nodes) |
+| **Reference node** (single node) | `*NSET, NSET=REFNODE` (or just list the node) |
+| **MPC definition** | `*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262` |
+| **Step** (static, dynamic, etc.) | `*STEP, NLGEOM` … `*END STEP` |
+
+The MPC card must appear **before the first *STEP***; Abaqus reads it once and then uses it in every step that follows.
+
+### 3. Minimal working example (illustrative)
+
+```abaqus
+*Heading
+** Simple cantilever – mean‑rotation MPC
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+1, 0., 0., 0.
+2, 1., 0., 0.
+3, 0., 1., 0.
+4, 1., 1., 0.
+5, 0., 0., 1.
+6, 1., 0., 1.
+7, 0., 1., 1.
+8, 1., 1., 1.
+9, 0.5, 0.5, 0.5   ** reference node (node 262 in your model)
+
+*Element, type=C3D8, elset=EALL
+1, 1,2,4,3,5,6,8,7
+
+*Material, name=STEEL
+*Elastic
+210000., 0.3
+*Solid Section, elset=EALL, material=STEEL
+
+** Node set whose mean rotation will be constrained
+*Nset, nset=CN7
+1,2,3,4,5,6,7,8
+
+** Reference node (must NOT be in CN7)
+*Nset, nset=REFNODE
+9
+
+** Mean‑rotation MPC
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=REFNODE
+
+*Step, nlgeom=YES, inc=100
+*Static
+** (apply loads / BCs here)
+*End Step
+```
+
+### 4. How to adapt your original file  
+
+You already have the node set **CN7** and the reference node **262** (you added it at the end of the file).  
+All you need to change is the *MPC* line. Replace the long comma‑separated list you wrote
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```
+
+with the single, correct line:
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+The rest of your model (elements, material, section, etc.) stays exactly as it is.
+
+### 5. Important points to remember  
+
+1. **One line only** – the syntax you used (`5,5,5,6,6,6,…`) is interpreted as three separate constraints with repeated node numbers, which is not what you want.  
+2. **Reference node must be unique** – it must not appear in the node set `CN7`.  
+3. **The *MPC* card must be placed before the first *STEP*** (you already do this).  
+4. The constraint is active for **all** steps that follow; you do not need to repeat it inside the step.
+
+### 6. Quick verification (post‑processing)
+
+After the analysis finishes you can check that the constraint is satisfied:
+
+```python
+# Python script for Abaqus/CAE or command line
+from odbAccess import *
+odb = openOdb('job_name.odb')
+step = odb.steps['Step-1']
+frame = step.frames[-1]          # last increment
+ref_rot = frame.fieldOutputs['UR'].getSubset(
+    region=odb.rootAssembly.instances['PART-1-1'].nodeSets['REFNODE']).values[0].data
+cn7_rot = frame.fieldOutputs['UR'].getSubset(
+    region=odb.rootAssembly.instances['PART-1-1'].nodeSets['CN7']).values
+mean_rot = sum([v.data for v in cn7_rot]) / len(cn7_rot)
+
+print('Reference node rotation (UR1,UR2,UR3):', ref_rot)
+print('Mean rotation of CN7 (UR1,UR2,UR3)   :', mean_rot)
+```
+
+The two printed vectors should be identical (to machine precision). If they differ, the MPC was not read correctly (most likely a syntax error).
+
+### 7. TL;DR – What you need to type  
+
+```abaqus
+*NSET, NSET=CN7
+… list of nodes …
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+*STEP
+*STATIC
+… loads / BCs …
+*END STEP
+```
+
+That single line creates the mean‑rotation constraint for your model. Feel free to ask if you need further help (e.g., combining with other MPCs, applying only to a subset of rotation components, etc.). Happy modelling!
+A: **Short answer**  
+
+In Abaqus a mean‑rotation MPC is defined with a **single** card  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```  
+
+* `CN7` – node set whose three rotational DOFs (UR1‑UR3) are averaged.  
+* `262` – reference node (must **not** belong to `CN7`).  
+The card must appear **once**, before the first *STEP*.  
+
+---
+
+## Detailed answer  
+
+### 1. What the mean‑rotation MPC does  
+
+For a 3‑D solid model each node has three rotational DOFs (`UR1`, `UR2`, `UR3`).  
+When Abaqus reads  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```  
+
+it creates **three** constraint equations (one per rotation component):
+
+\[
+\frac{1}{N}\sum_{i\in\text{CN7}} \text{UR}_k^{(i)} \;-\; \text{UR}_k^{(262)} = 0,
+\qquad k = 1,2,3
+\]
+
+where \(N\) is the number of nodes in `CN7`.  
+Thus the *average* rotation of all nodes in `CN7` is forced to be exactly the rotation of node 262 for **each** component.
+
+---
+
+### 2. Required input sections  
+
+| Section | What you must write |
+|---------|---------------------|
+| **Node set to be averaged** | `*NSET, NSET=CN7` (list of the nodes whose mean rotation is taken) |
+| **Reference node** (single node) | `*NSET, NSET=REFNODE` (or just list the node number) |
+| **MPC definition** | `*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=REFNODE` |
+| **Step** (static, dynamic, etc.) | `*STEP … *END STEP` (the MPC card must be placed **before** the first *STEP*) |
+
+---
+
+### 3. Minimal working example (illustrative)
+
+```abaqus
+*Heading
+** Simple cantilever – mean‑rotation MPC
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+1, 0., 0., 0.
+2, 1., 0., 0.
+3, 0., 1., 0.
+4, 1., 1., 0.
+5, 0., 0., 1.
+6, 1., 0., 1.
+7, 0., 1., 1.
+8, 1., 1., 1.
+9, 0.5, 0.5, 0.5   ** reference node (node 262 in your model)
+
+*Element, type=C3D8, elset=EALL
+1, 1,2,4,3,5,6,8,7
+
+*Material, name=STEEL
+*Elastic
+210000., 0.3
+*Solid Section, elset=EALL, material=STEEL
+
+** Node set whose mean rotation will be constrained
+*Nset, nset=CN7
+1,2,3,4,5,6,7,8
+
+** Reference node (must NOT be in CN7)
+*Nset, nset=REFNODE
+9
+
+** Mean‑rotation MPC (single line)
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=REFNODE
+
+*Step, nlgeom=YES, inc=100
+*Static
+** (apply loads / BCs here)
+*End Step
+```
+
+Running this model will enforce that the average rotation of nodes 1‑8 equals the rotation of node 9 for UR1, UR2 and UR3.
+
+---
+
+### 4. How to adapt your original file  
+
+You already have  
+
+* a node set `CN7` (the nodes whose mean rotation you want)  
+* a reference node **262** (added at the end of the file)  
+
+All you need to do is **replace** the long, comma‑separated list you wrote
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```
+
+with the correct single line:
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+Everything else (elements, material, sections, loads, etc.) stays unchanged.
+
+---
+
+### 5. Important points to remember  
+
+1. **One line only** – the syntax `5,5,5,6,6,6,…` is interpreted as three separate constraints with duplicated node numbers; it does **not** create a mean‑rotation MPC.  
+2. **Reference node must be unique** – it must **not** belong to the node set `CN7`.  
+3. **Placement** – the `*MPC` card must appear **before** the first `*STEP`. Abaqus reads it once and then applies it to every subsequent step.  
+4. The constraint is active for **all** steps that follow; you do **not** need to repeat it inside a step.  
+
+---
+
+### 6. Quick verification (post‑processing)
+
+After the analysis finishes you can check that the constraint is satisfied with a short Python script (run in Abaqus/CAE or from the command line):
+
+```python
+# Verify mean‑rotation MPC
+from odbAccess import openOdb
+odb = openOdb('job_name.odb')
+step = odb.steps['Step-1']
+frame = step.frames[-1]                     # last increment
+
+# reference node rotation (UR1,UR2,UR3)
+ref_rot = frame.fieldOutputs['UR'].getSubset(
+    region=odb.rootAssembly.instances['PART-1-1'].nodeSets['REFNODE']).values[0].data
+
+# rotations of the nodes in CN7
+cn7_vals = frame.fieldOutputs['UR'].getSubset(
+    region=odb.rootAssembly.instances['PART-1-1'].nodeSets['CN7']).values
+mean_rot = sum([v.data for v in cn7_vals]) / len(cn7_vals)
+
+print('Reference node rotation (UR1,UR2,UR3):', ref_rot)
+print('Mean rotation of CN7 (UR1,UR2,UR3)   :', mean_rot)
+```
+
+The two printed vectors should be identical to machine precision. If they differ, the MPC was not read correctly (most likely a syntax error).
+
+---
+
+### 7. TL;DR – What you need to type  
+
+```abaqus
+*NSET, NSET=CN7
+… list of nodes …
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+*STEP
+*STATIC
+… loads / BCs …
+*END STEP
+```
+
+That single line creates the mean‑rotation constraint for your model.  
+
+Feel free to ask if you need further help (e.g., combining with other MPCs, applying the constraint only to a subset of rotation components, etc.). Happy modelling!
+
+=== 2026-04-17 20:09:13 ===
+Q: **Short answer**  
+
+In Abaqus a mean‑rotation MPC is created with a **single** *MPC* line:
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+* `CN7` – node set whose three rotational DOFs (UR1‑UR3) are averaged.  
+* `262` – the reference node whose rotation is forced to equal that average.  
+The reference node must **not** belong to `CN7`.  
+Place this card **once**, before the first *STEP*; the constraint will be active for all subsequent steps.
+A: **Short answer**
+
+In Abaqus a mean‑rotation MPC is defined with **one** `*MPC` card, e.g.
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+- **CN7** – node set whose three rotational DOFs (UR1‑UR3) are averaged.  
+- **262** – reference node whose rotation is forced to equal that average.  
+- The reference node **must not** be a member of `CN7`.  
+- The card is placed **once**, before the first `*STEP`; the constraint then remains active for every subsequent step.  
+
+That’s all that is required to create a mean‑rotation MPC in Abaqus.
+
+=== 2026-04-17 20:09:27 ===
+Q: **Short answer**  
+
+In Abaqus a mean‑rotation MPC is created with a **single** `*MPC` card, for example  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```  
+
+* `CN7` – the node set whose three rotational DOFs (UR1‑UR2‑UR3) are averaged.  
+* `262` – the reference node whose rotation is forced to be exactly that average.  
+* The reference node **must not** belong to `CN7`.  
+* The card is written **once**, before the first `*STEP`; the constraint then stays active for all subsequent steps.  
+A: **Short answer**
+
+Yes. In Abaqus a mean‑rotation multi‑point constraint (MPC) is defined with **one** `*MPC` card, e.g.
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+- **CN7** – node set whose three rotational DOFs (UR1‑UR2‑UR3) are averaged.  
+- **262** – reference node whose rotation is forced to be exactly that average.  
+- The reference node **must not** be a member of `CN7`.  
+- The card is written **once**, before the first `*STEP`; the constraint then remains active for every subsequent step (unless you later delete it with `*MPC, OP=DELETE`).
+
+=== 2026-04-17 20:09:43 ===
+Q: Yes. In Abaqus a mean‑rotation MPC is defined with a single `*MPC` card, for example  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```  
+
+`CN7` is the node set whose three rotational DOFs (UR1‑UR2‑UR3) are averaged, and node 262 (the reference node) is forced to have exactly that average rotation. The reference node must **not** belong to `CN7`. Write this card once, before the first `*STEP`; the constraint then stays active for all subsequent steps.
+A: **Answer – How to define a *mean‑rotation* MPC in Abaqus**
+
+A mean‑rotation multi‑point constraint (MPC) forces a *reference node* to adopt the arithmetic average of the three rotational degrees of freedom (UR1‑UR2‑UR3) of all the nodes that belong to a user‑defined node set.  
+The definition is made with a single `*MPC` card; once it is written it remains active for every step that follows (unless it is explicitly deleted).
+
+Below is a **complete, step‑by‑step description** of everything you need to know in order to use this feature correctly.
+
+---
+
+## 1. Syntax of the card
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```
+
+| Keyword | Required? | Meaning |
+|---------|-----------|---------|
+| `TYPE=MEANROT` | Yes | Tells Abaqus to create a mean‑rotation constraint. |
+| `NSET=` | Yes | Name of the node set whose rotations are to be averaged. |
+| `REF NODE=` | Yes | Label of the *single* reference node that will receive the averaged rotation. |
+
+**No additional data lines** follow the card – the whole definition is contained in the single line above.
+
+---
+
+## 2. Prerequisites – What must exist before the card
+
+| Item | How to create it | Remarks |
+|------|------------------|---------|
+| **Node set (`NSET`)** | `*Nset, nset=CN7` followed by a list of node labels (or via the GUI) | Must contain **at least two** nodes, otherwise the “average” is meaningless. |
+| **Reference node** | Any node that is **not** part of the `NSET`. Define it normally in the *Node* section. | The reference node must **not** belong to the node set; Abaqus will issue an error if it does. |
+| **Rotational DOFs** | The model must have rotational degrees of freedom (i.e., you are using a 3‑D beam, shell, or solid element with rotational DOFs enabled). | If you are using a purely translational element (e.g., C3D8), the constraint will be ignored. |
+
+> **Tip:** It is often convenient to create a *dummy* node far away from the physical model (e.g., node 9999) and use it as the reference node. This node can be constrained later (e.g., fixed, prescribed rotation, etc.) without affecting the geometry.
+
+---
+
+## 3. Where to place the card in the input file
+
+- **Before the first `*STEP`** (i.e., in the *model definition* section).  
+- The card is **global**: once defined, the constraint is automatically active in **all subsequent steps** unless you delete it with `*MPC, DELETE`.  
+
+```abaqus
+*Heading
+...
+*Node
+...
+*Element
+...
+*Nset, nset=CN7
+ 101, 102, 103, 104
+*Node
+ 262, 0.0, 0.0, 0.0   ; reference node (must NOT be in CN7)
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+> **Do NOT** place the card inside a step block (e.g., after `*Step`). If you need the constraint only for a particular step, you must create it before the step and delete it at the end of the step with a second `*MPC, DELETE` card.
+
+---
+
+## 4. What the constraint actually does (mathematical form)
+
+For each rotational DOF *k* (k = 1, 2, 3) the constraint enforces:
+
+\[
+\text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)}
+\]
+
+where  
+
+- \( \text{UR}_k^{\text{(ref)}} \) = rotation of the reference node,  
+- \( \text{UR}_k^{(i)} \) = rotation of node *i* belonging to the set `CN7`,  
+- \( N \) = number of nodes in `CN7`.
+
+Thus the reference node “inherits” the **average** of the three rotational components of the set.
+
+---
+
+## 5. Interaction with other constraints / loads
+
+| Situation | Effect |
+|-----------|--------|
+| **Prescribed rotation on the reference node** (e.g., `*Boundary, ENCASTRE`) | The prescribed value **overwrites** the averaged value – the constraint becomes redundant for that DOF. |
+| **Prescribed rotation on any node in the set** | The prescribed value participates in the average. |
+| **Other MPCs that involve the same nodes** | Abaqus solves the whole system of equations simultaneously; no special ordering is required. |
+| **Rigid body constraints (`*Rigid Body`)** | The mean‑rotation MPC can be used together with a rigid body definition, but be careful: the rigid body already enforces a common rotation for all its nodes, which may make the mean‑rotation redundant. |
+
+---
+
+## 6. Common pitfalls and how to avoid them
+
+| Pitfall | Symptom | Fix |
+|---------|---------|-----|
+| Reference node **included** in `NSET` | Abaqus aborts with “Reference node cannot be in the node set”. | Move the reference node to a different label or create a separate node set. |
+| Node set **empty** or contains only one node | The average is ill‑defined; Abaqus may issue a warning or treat it as a simple equality constraint. | Ensure at least two nodes are in the set. |
+| Using **2‑D elements** that have no rotational DOFs | The constraint is ignored; you will see “No rotational DOFs defined for the nodes”. | Switch to 3‑D elements (e.g., beam, shell) or add rotational DOFs via `*Element, type=...` that support them. |
+| Placing the card **inside a step** | The constraint is not recognized (or is only active for that step). | Move the card to the model definition section (before the first `*Step`). |
+| Forgetting to **delete** the constraint when you need it only temporarily | The constraint stays active for later steps, possibly contaminating results. | Add a second line `*MPC, DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262` at the end of the step where you want it removed. |
+
+---
+
+## 7. Full example – Minimal, working input file
+
+```abaqus
+*Heading
+** Example of a mean‑rotation MPC
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+** Nodes
+*Node
+ 101, 0.0, 0.0, 0.0
+ 102, 10.0, 0.0, 0.0
+ 103, 20.0, 0.0, 0.0
+ 104, 30.0, 0.0, 0.0
+ 262, 0.0, 0.0, 0.0   ; reference node (must NOT be in CN7)
+
+** -------------------------------------------------
+** Elements (simple 3‑D beam for illustration)
+*Element, type=B31
+ 1, 101, 102
+ 2, 102, 103
+ 3, 103, 104
+
+** -------------------------------------------------
+** Node set whose rotations will be averaged
+*Nset, nset=CN7
+ 101, 102, 103, 104
+
+** -------------------------------------------------
+** Mean‑rotation MPC (global)
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+** -------------------------------------------------
+** Boundary conditions (fix the reference node in translation)
+*Boundary
+ 262, 1, 3, 0.0   ; fix X, Y, Z translations
+
+** -------------------------------------------------
+** Load step
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+** (Optional) prescribe a rotation on one of the CN7 nodes
+*Boundary
+101, 4, 6, 0.05   ; UR1‑UR3 = 0.05 rad on node 101
+*End Step
+```
+
+*What you will see in the output*  
+
+- Node 262 will have UR1‑UR3 equal to the average of the rotations of nodes 101‑104.  
+- Because node 101 is prescribed a rotation of 0.05 rad, the average will be `(0.05 + 0 + 0 + 0)/4 = 0.0125 rad`.  
+- The output file (`*.odb`) will show `UR1`, `UR2`, `UR3` for node 262 exactly at 0.0125 rad (within solver tolerance).
+
+---
+
+## 8. Quick checklist (copy‑paste into your notes)
+
+```
+[ ] Create node set (NSET) with the nodes whose rotations you want to average.
+[ ] Choose a reference node that is NOT in that set.
+[ ] Write the *MPC card:
+    *MPC, TYPE=MEANROT, NSET=<your_set>, REF NODE=<ref_node>
+[ ] Place the card before the first *STEP.
+[ ] Verify that the model uses elements with rotational DOFs.
+[ ] (Optional) Add *MPC, DELETE … if you need to turn it off later.
+[ ] Run a short test (e.g., prescribe a rotation on one node) and check the reference node’s rotation in the output.
+```
+
+---
+
+### TL;DR
+
+- **One line**: `*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262`
+- **Before any `*STEP`**; stays active for all steps.
+- `CN7` = node set whose **UR1‑UR2‑UR3** are averaged.
+- Node 262 = reference node that **receives** that average.
+- Reference node **must not** belong to `CN7`.
+- Works only with elements that have rotational DOFs (3‑D beams, shells, solids with rotation).
+
+That’s everything you need to define and use a mean‑rotation MPC in Abaqus correctly. If you have any follow‑up questions (e.g., how to combine it with a rigid body, or how to extract the averaged rotation in a Python script), feel free to ask!
+
+=== 2026-04-17 20:10:31 ===
+Q: **Mean‑rotation MPC in Abaqus**
+
+A *mean‑rotation* multi‑point constraint forces a **reference node** to adopt the arithmetic average of the three rotational degrees of freedom (UR1‑UR2‑UR3) of all the nodes that belong to a user‑defined node set.
+
+---
+
+### 1. Required objects
+
+| Object | How to create | Remarks |
+|--------|---------------|---------|
+| **Node set** (`NSET`) | `*Nset, nset=CN7` followed by a list of node labels (or via the GUI) | Contains the nodes whose rotations will be averaged. |
+| **Reference node** | Any node **not** in the above set (e.g. node 262) | Must be a single node; it cannot be a member of the set. |
+| **Elements with rotational DOFs** | 3‑D beam, shell, or solid elements that support UR1‑UR3 | If the model uses only translational elements the constraint is ignored. |
+
+---
+
+### 2. Syntax of the card
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```
+
+*No data lines follow the card* – the whole definition is contained in that single line.
+
+---
+
+### 3. Where to place it
+
+- **Write the card once, before the first `*STEP`.**  
+  The constraint is global: it remains active in every step that follows (unless you later delete it with `*MPC, OP=DELETE`).
+
+```abaqus
+*Heading
+...
+*Node
+ 101, 0., 0., 0.
+ 102, 10., 0., 0.
+ 103, 20., 0., 0.
+ 104, 30., 0., 0.
+ 262, 0., 0., 0.   ; reference node (must NOT be in CN7)
+
+*Nset, nset=CN7
+ 101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+---
+
+### 4. What the constraint does
+
+For each rotational component *k* (k = 1, 2, 3)
+
+\[
+\text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)}
+\]
+
+where \(N\) is the number of nodes in `CN7`.  
+Thus node 262 “inherits” the average rotation of the set.
+
+---
+
+### 5. Common pitfalls
+
+| Problem | Symptom | Remedy |
+|---------|---------|--------|
+| Reference node is also in `NSET` | Abaqus aborts: *Reference node cannot be in the node set* | Use a different node label for the reference node. |
+| Node set empty or contains only one node | Average is meaningless; solver may warn. | Ensure at least two nodes are in the set. |
+| Elements without rotational DOFs (e.g., 2‑D trusses) | Constraint is ignored. | Use 3‑D elements that support UR1‑UR3. |
+| Card placed inside a `*STEP` block | Constraint not recognized (or only active for that step). | Move the card to the model definition section (before the first `*STEP`). |
+| Need the constraint only for a single step | It stays active for later steps. | Add a second line `*MPC, DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262` at the end of the step. |
+
+---
+
+### 6. Minimal working example
+
+```abaqus
+*Heading
+** Mean‑rotation MPC example
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+262, 0., 0., 0.   ; reference node (not in CN7)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=CN7
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+*Boundary
+262, 1, 3, 0.0   ; fix translations of the reference node
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation on node 101
+*End Step
+```
+
+*Result*: Node 262 will have UR1‑UR3 equal to the average of the rotations of nodes 101‑104 (≈0.0125 rad in this case).
+
+---
+
+### 7. Quick copy‑paste checklist
+
+```text
+[ ] Define NSET with the nodes to be averaged.
+[ ] Choose a reference node not in that set.
+[ ] Insert the line:
+    *MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+[ ] Place it before the first *STEP.
+[ ] Verify that the model uses elements with rotational DOFs.
+[ ] (Optional) Add *MPC, DELETE … if you need to turn it off later.
+```
+
+That single line, placed before any step, is all that is required to create a **mean‑rotation MPC** in Abaqus. If you need further help (e.g., combining it with a rigid body, extracting the averaged rotation in a Python script, etc.), just let me know!
+A: Below is a **complete, step‑by‑step guide** for creating a **mean‑rotation MPC** in Abaqus/Standard (or Abaqus/Explicit).  
+Everything you need – from the objects that must exist, to the exact card syntax, where to put it, what it does, common mistakes, a minimal working example and a quick‑copy checklist – is included.
+
+---
+
+## 1. Objects that must exist before you write the MPC card  
+
+| Object | How to create it | Remarks |
+|--------|------------------|---------|
+| **Node set** (`NSET`) that contains the nodes whose rotations will be averaged | `*Nset, nset=<set‑name>` followed by a list of node labels (or via the GUI) | Must contain **at least two** nodes. All nodes must belong to elements that have rotational DOFs (UR1‑UR3). |
+| **Reference node** | Any single node **not** belonging to the above set (e.g. node 262) | The node that will receive the averaged rotation. It can be a “dummy” node that is not otherwise used in the model, but it must be defined in the *Node* section. |
+| **Elements with rotational DOFs** | 3‑D beam (`B31`, `B32`, …), shell (`S4`, `S8R`, …) or solid (`C3D8`, `C3D20R`, …) elements that support UR1‑UR3 | If you only have 2‑D trusses or point masses the constraint is ignored. |
+
+---
+
+## 2. Exact card syntax  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```
+
+*No data lines follow the card* – the whole definition is contained in that single line.
+
+---
+
+## 3. Where to place the card  
+
+- **Write the card once, **before the first `*STEP`**.**  
+  The constraint is global: it stays active for every step that follows unless you later delete it with a `*MPC, OP=DELETE` line.  
+
+Typical location in the input file:
+
+```text
+*Heading
+...
+*Node
+...                ; all nodes, including the reference node
+*Nset, nset=CN7
+101, 102, 103, 104 ; example nodes to be averaged
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+```
+
+If you need the constraint **only for a particular step**, add a second line at the end of that step:
+
+```abaqus
+*MPC, OP=DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+---
+
+## 4. What the constraint actually does  
+
+For each rotational component *k* (k = 1, 2, 3)
+
+\[
+\boxed{\; \text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)} \;}
+\]
+
+where  
+
+* \(N\) = number of nodes in the set `CN7`  
+* \(\text{UR}_k^{(i)}\) = rotation of node *i* about the *k*‑th local axis  
+* \(\text{UR}_k^{\text{(ref)}}\) = rotation of the reference node (node 262 in the example)
+
+Thus the reference node “inherits” the arithmetic mean of the three rotational DOFs of all nodes in the set.
+
+---
+
+## 5. Common pitfalls & how to avoid them  
+
+| Problem | Symptom / Abaqus message | Fix |
+|---------|--------------------------|-----|
+| **Reference node also listed in the NSET** | Abort: *Reference node cannot be in the node set* | Choose a different node label for the reference node (or remove it from the set). |
+| **Node set empty or contains only one node** | Solver warns that the average is ill‑defined; the constraint may be ignored. | Ensure the set has **≥ 2** nodes. |
+| **Elements without rotational DOFs** (e.g., 2‑D trusses) | Constraint silently does nothing. | Use 3‑D beam, shell or solid elements that support UR1‑UR3. |
+| **Card placed inside a `*STEP` block** | The constraint is not recognized (or only active for that step). | Move the `*MPC` line to the model definition section (before the first `*STEP`). |
+| **Constraint needed only for a single step** | It stays active for later steps. | Add a `*MPC, OP=DELETE …` line at the end of the step where you no longer need it. |
+| **Reference node is over‑constrained** (e.g., also fixed in translation) | No rotation can develop → the averaged rotation will be forced to zero. | Apply only the necessary boundary conditions; you can still fix translations while leaving rotations free. |
+
+---
+
+## 6. Minimal Working Example (MWE)  
+
+The following input file demonstrates a complete, runnable model that uses a mean‑rotation MPC. Copy‑paste it into a text editor, save as `meanrot.inp`, and run `abaqus job=meanrot`.
+
+```abaqus
+*Heading
+** Example: mean‑rotation MPC
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+262, 0., 0., 0.   ; reference node (must NOT be in CN7)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=CN7
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+*Boundary
+262, 1, 3, 0.0   ; fix translations of the reference node (UR1‑UR3 are free)
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation of 0.05 rad about all three local axes on node 101
+*End Step
+```
+
+### What you will see in the output  
+
+- Node 101 has UR1‑UR3 = 0.05 rad (prescribed).  
+- Nodes 102‑104 are free, so they will acquire whatever rotation the beam stiffness transmits.  
+- The reference node 262 will end up with  
+
+\[
+\text{UR}_k^{262} \approx \frac{0.05 + \text{UR}_k^{102} + \text{UR}_k^{103} + \text{UR}_k^{104}}{4}
+\]
+
+If the beam is stiff enough that the other three nodes rotate almost the same as node 101, the average will be ≈ 0.0125 rad, as mentioned in the description.
+
+---
+
+## 7. Quick‑copy‑paste checklist  
+
+```text
+[ ] 1️⃣ Create a node set (NSET) that contains the nodes to be averaged.
+[ ] 2️⃣ Choose a reference node that is **not** in that set.
+[ ] 3️⃣ Verify that the model uses elements with UR1‑UR3 (3‑D beams, shells, solids).
+[ ] 4️⃣ Insert the MPC line **before the first *STEP**:
+
+    *MPC, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 5️⃣ (Optional) If you need to turn the constraint off later, add at the end of the desired step:
+
+    *MPC, OP=DELETE, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 6️⃣ Run the job and check the rotations of the reference node in the .odb (UR1‑UR3 fields).
+```
+
+---
+
+### TL;DR  
+
+*Define a node set, pick a separate reference node, write a single `*MPC, TYPE=MEANROT` line before the first step, and Abaqus will enforce that the reference node’s three rotational DOFs equal the arithmetic mean of the rotations of all nodes in the set.*  
+
+If you run into any of the pitfalls listed above, adjust the model accordingly. Feel free to ask for further help—e.g., how to extract the averaged rotation in a Python post‑processing script, how to combine the MPC with a rigid body, or how to use it in an explicit dynamic analysis.
+
+=== 2026-04-17 20:11:27 ===
+Q: Below is a **complete, step‑by‑step guide** for creating a **mean‑rotation MPC** in Abaqus/Standard (or Abaqus/Explicit).  
+Everything you need – from the objects that must exist, to the exact card syntax, where to put it, what it does, common mistakes, a minimal working example and a quick‑copy checklist – is included.
+
+---
+
+## 1. Objects that must exist before you write the MPC card  
+
+| Object | How to create it | Remarks |
+|--------|------------------|---------|
+| **Node set** (`NSET`) that contains the nodes whose rotations will be averaged | `*Nset, nset=<set‑name>` followed by a list of node labels (or via the GUI) | Must contain **≥ 2** nodes. All nodes must belong to elements that have rotational DOFs (UR1‑UR3). |
+| **Reference node** | Any single node **not** belonging to the above set (e.g. node 262) | This node will receive the averaged rotation. It can be a “dummy” node that is not otherwise used in the model, but it must be defined in the *Node* section. |
+| **Elements with rotational DOFs** | 3‑D beam (`B31`, `B32`, …), shell (`S4`, `S8R`, …) or solid (`C3D8`, `C3D20R`, …) elements that support UR1‑UR3 | If you only have 2‑D trusses or point masses the constraint is ignored. |
+
+---
+
+## 2. Exact card syntax  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```
+
+*No data lines follow the card* – the whole definition is contained in that single line.
+
+---
+
+## 3. Where to place the card  
+
+- **Write the card once, **before the first `*STEP`**.**  
+  The constraint is global: it stays active for every step that follows unless you later delete it with a `*MPC, OP=DELETE` line.
+
+Typical location in the input file:
+
+```text
+*Heading
+...
+*Node
+...                ; all nodes, including the reference node
+*Nset, nset=CN7
+101, 102, 103, 104 ; example nodes to be averaged
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+```
+
+If you need the constraint **only for a particular step**, add a second line at the end of that step:
+
+```abaqus
+*MPC, OP=DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262
+```
+
+---
+
+## 4. What the constraint actually does  
+
+For each rotational component *k* (k = 1, 2, 3)
+
+\[
+\boxed{\; \text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)} \;}
+\]
+
+where  
+
+* \(N\) = number of nodes in the set `CN7`  
+* \(\text{UR}_k^{(i)}\) = rotation of node *i* about the *k*‑th local axis  
+* \(\text{UR}_k^{\text{(ref)}}\) = rotation of the reference node (node 262 in the example)
+
+Thus the reference node “inherits” the arithmetic mean of the three rotational DOFs of all nodes in the set.
+
+---
+
+## 5. Common pitfalls & how to avoid them  
+
+| Problem | Symptom / Abaqus message | Fix |
+|---------|--------------------------|-----|
+| **Reference node also listed in the NSET** | Abort: *Reference node cannot be in the node set* | Choose a different node label for the reference node (or remove it from the set). |
+| **Node set empty or contains only one node** | Solver warns that the average is ill‑defined; the constraint may be ignored. | Ensure the set has **≥ 2** nodes. |
+| **Elements without rotational DOFs** (e.g., 2‑D trusses) | Constraint silently does nothing. | Use 3‑D beam, shell or solid elements that support UR1‑UR3. |
+| **Card placed inside a `*STEP` block** | The constraint is not recognized (or only active for that step). | Move the `*MPC` line to the model definition section (before the first `*STEP`). |
+| **Constraint needed only for a single step** | It stays active for later steps. | Add a `*MPC, OP=DELETE …` line at the end of the step where you no longer need it. |
+| **Reference node over‑constrained** (e.g., also fixed in rotation) | No rotation can develop → the averaged rotation will be forced to zero. | Apply only the necessary boundary conditions; you can still fix translations while leaving rotations free. |
+
+---
+
+## 6. Minimal Working Example (MWE)  
+
+Copy‑paste the following into a text editor, save as `meanrot.inp`, and run `abaqus job=meanrot`.
+
+```abaqus
+*Heading
+** Example: mean‑rotation MPC
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+262, 0., 0., 0.   ; reference node (must NOT be in CN7)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=CN7
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+*Boundary
+262, 1, 3, 0.0   ; fix translations of the reference node (UR1‑UR3 are free)
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation of 0.05 rad about all three local axes on node 101
+*End Step
+```
+
+### What you will see in the output  
+
+- Node 101 has UR1‑UR3 = 0.05 rad (prescribed).  
+- Nodes 102‑104 are free, so they acquire whatever rotation the beam stiffness transmits.  
+- The reference node 262 ends up with  
+
+\[
+\text{UR}_k^{262} \approx \frac{0.05 + \text{UR}_k^{102} + \text{UR}_k^{103} + \text{UR}_k^{104}}{4}
+\]
+
+If the beam is stiff enough that the other three nodes rotate almost the same as node 101, the average will be ≈ 0.0125 rad.
+
+---
+
+## 7. Quick‑copy‑paste checklist  
+
+```text
+[ ] 1️⃣ Create a node set (NSET) that contains the nodes to be averaged.
+[ ] 2️⃣ Choose a reference node that is **not** in that set.
+[ ] 3️⃣ Verify that the model uses elements with UR1‑UR3 (3‑D beams, shells, solids).
+[ ] 4️⃣ Insert the MPC line **before the first *STEP**:
+
+    *MPC, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 5️⃣ (Optional) If you need to turn the constraint off later, add at the end of the desired step:
+
+    *MPC, OP=DELETE, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 6️⃣ Run the job and check the rotations of the reference node in the .odb (UR1‑UR3 fields).
+```
+
+---
+
+### TL;DR  
+
+1. **Define a node set** (`CN7`) that contains the nodes whose rotations you want to average.  
+2. **Pick a separate reference node** (e.g., 262) that is **not** in that set.  
+3. **Write a single line** before any step:  
+
+   ```abaqus
+   *MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+   ```
+
+Abaqus will then enforce that the reference node’s three rotational DOFs (UR1‑UR3) are equal to the arithmetic mean of the rotations of all nodes in the set.  
+
+If you encounter any of the pitfalls listed above, adjust the model accordingly. Feel free to ask for further help—e.g., how to extract the averaged rotation in a Python post‑processing script, how to combine the MPC with a rigid body, or how to use it in an explicit dynamic analysis.
+A: Below is a **complete, copy‑and‑paste‑ready guide** that walks you through everything you need to create a **MEAN‑ROTATION MPC** in Abaqus/Standard (and the same steps work for Abaqus/Explicit).  
+It is organized exactly the way you asked for – objects, card syntax, placement, behaviour, pitfalls, a minimal working example, and a quick‑check‑list you can tick off in the editor.
+
+---
+
+## 1️⃣  Objects that **must exist** before you write the MPC card  
+
+| # | Object | How to create it (input‑file syntax) | Remarks / requirements |
+|---|--------|--------------------------------------|------------------------|
+| 1 | **Node set** (`NSET`) that contains the nodes whose rotations will be averaged | `*Nset, nset=<set‑name>`  <br>followed by a comma‑separated list of node labels (or create it in the GUI) | • Must contain **≥ 2** nodes. <br>• All nodes must belong to elements that have rotational DOFs (UR1‑UR3). |
+| 2 | **Reference node** – a single node that will receive the averaged rotation | Define it in the `*Node` section like any other node. Example: `262, 0., 0., 0.` | • **Must NOT** be part of the node set above. <br>• It can be a “dummy” node that is otherwise unused, but it must exist. |
+| 3 | **Elements that support rotational DOFs** | 3‑D beam (`B31`, `B32`, …), shell (`S4`, `S8R`, …) or solid (`C3D8`, `C3D20R`, …) elements. | If you only have 2‑D trusses, point masses, or axisymmetric elements the MPC will be ignored because those elements have no UR1‑UR3. |
+
+> **Tip:** In the GUI you can create the node set with *Tools → Set → Create* → *Node* and pick the nodes. The reference node can be created with *Part → Create → Node* and then **not** added to the set.
+
+---
+
+## 2️⃣  Exact card syntax  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```
+
+*No data lines follow the card* – the whole definition lives on that single line.
+
+| Keyword | Meaning |
+|---------|---------|
+| `TYPE=MEANROT` | Tells Abaqus to use the mean‑rotation formulation. |
+| `NSET=` | Name of the node set that will be averaged. |
+| `REF NODE=` | Label of the reference node that will receive the average. |
+
+---
+
+## 3️⃣  Where to place the card  
+
+| Situation | Where to put the line |
+|-----------|-----------------------|
+| **Global constraint** (active for every step) | **Before the first `*STEP`** in the model definition section. |
+| **Constraint needed only for a particular step** | Put the line **before the step** (so it is defined) and then delete it at the end of that step with `OP=DELETE` (see below). |
+
+### Typical location in an input file
+
+```text
+*Heading
+...
+*Node
+...                ; all nodes, including the reference node
+*Nset, nset=CN7
+101, 102, 103, 104 ; nodes whose rotations will be averaged
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; <<< ONE‑LINE definition
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+```
+
+### Deleting the MPC after a step (optional)
+
+If you only need the mean‑rotation for *Step‑1*:
+
+```abaqus
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+*MPC, OP=DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; turns it off for later steps
+```
+
+---
+
+## 4️⃣  What the constraint **actually does**  
+
+For each rotational component *k* (k = 1, 2, 3)
+
+\[
+\boxed{\; \text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)} \;}
+\]
+
+* \(N\) – number of nodes in the set `CN7`.  
+* \(\text{UR}_k^{(i)}\) – rotation of node *i* about its local axis *k*.  
+* \(\text{UR}_k^{\text{(ref)}}\) – rotation of the reference node (node 262 in the example).
+
+Thus the reference node **inherits the arithmetic mean** of the three rotational DOFs of all nodes in the set. The constraint is *kinematic* – it does **not** add stiffness; it simply enforces the equality at the algebraic level.
+
+---
+
+## 5️⃣  Common pitfalls & how to avoid them  
+
+| # | Problem | Abaqus symptom / message | How to fix it |
+|---|---------|--------------------------|---------------|
+| 1 | **Reference node also appears in the NSET** | Abort with: *“Reference node cannot be in the node set”* | Choose a different node label for the reference node, or remove it from the set. |
+| 2 | **Node set empty or contains only one node** | Solver may issue a warning that the average is ill‑defined; the MPC may be ignored. | Ensure the set has **≥ 2** nodes. |
+| 3 | **Elements without rotational DOFs** (e.g., 2‑D trusses) | The MPC silently does nothing – you will see no effect on the reference node. | Use 3‑D beam, shell, or solid elements that support UR1‑UR3. |
+| 4 | **Card placed inside a `*STEP` block** | Abaqus may treat it as a step‑local definition or ignore it, leading to “undefined MPC” errors. | Move the `*MPC` line to the model definition section (before the first `*STEP`). |
+| 5 | **Constraint needed only for a single step but left active** | The reference node continues to be constrained in later steps, possibly over‑constraining the model. | Add a `*MPC, OP=DELETE …` line at the end of the step where you no longer need it. |
+| 6 | **Reference node over‑constrained by other BCs** (e.g., also fixed in rotation) | The averaged rotation is forced to zero → you never see the mean value. | Apply only the necessary boundary conditions; you can still fix translations while leaving rotations free. |
+| 7 | **Wrong node ordering in the NSET** (mixed local axes) | The average may be physically meaningless because each node’s local axes differ. | For beams/shells that share the same orientation (or are aligned) the average is sensible. If you need a global average, first transform UR1‑UR3 to a common coordinate system (requires a user subroutine). |
+
+---
+
+## 6️⃣  Minimal Working Example (MWE)  
+
+Copy the block below into a plain‑text file called **`meanrot.inp`** and run:
+
+```bash
+abaqus job=meanrot interactive
+```
+
+The model is deliberately tiny – four beam nodes that rotate, one dummy reference node that receives the average.
+
+```abaqus
+*Heading
+** Example: mean‑rotation MPC (Abaqus/Standard)
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+262, 0., 0., 0.   ; reference node (must NOT be in CN7)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=CN7
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+*Boundary
+262, 1, 3, 0.0   ; fix translations of the reference node (UR1‑UR3 stay free)
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation of 0.05 rad about all three local axes on node 101
+*End Step
+```
+
+### What you will see in the output  
+
+| Node | UR1 | UR2 | UR3 |
+|------|-----|-----|-----|
+| 101 | 0.05 | 0.05 | 0.05 (prescribed) |
+| 102‑104 | whatever the beam stiffness transmits (≈ 0.05 if the beam is stiff) |
+| **262** (reference) | ≈ (UR1₁+UR1₂+UR1₃+UR1₄)/4 | same for UR2 | same for UR3 |
+
+Open the resulting **`.odb`** in Abaqus/Viewer, plot **UR1‑UR3** for node 262 and verify that they equal the arithmetic mean of the four beam nodes.
+
+---
+
+## 7️⃣  Quick‑copy‑paste **check‑list**  
+
+```text
+[ ] 1️⃣  Create a node set (NSET) that contains the nodes to be averaged.
+[ ] 2️⃣  Choose a reference node that is NOT in that set.
+[ ] 3️⃣  Verify that the model uses elements with UR1‑UR3 (3‑D beams, shells, solids).
+[ ] 4️⃣  Insert the MPC line **before the first *STEP**:
+
+    *MPC, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 5️⃣  (Optional) If you need the constraint only for a particular step, add at the end of that step:
+
+    *MPC, OP=DELETE, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 6️⃣  Run the job.
+[ ] 7️⃣  Post‑process: open the .odb, plot UR1‑UR3 of the reference node, or extract with Python:
+
+    from odbAccess import *
+    odb = openOdb('meanrot.odb')
+    step = odb.steps['Step-1']
+    frame = step.frames[-1]
+    refNode = odb.rootAssembly.instances['PART-1-1'].nodes[261]   # 262‑1 because Python is 0‑based
+    ur = frame.fieldOutputs['UR'].getSubset(region=refNode).values[0].data
+    print('UR1,UR2,UR3 =', ur)
+    odb.close()
+```
+
+---
+
+## 8️⃣  Extra notes (optional but often useful)
+
+| Topic | What you might need | How to do it |
+|-------|--------------------|--------------|
+| **Abaqus/Explicit** | Same syntax works; just place the `*MPC` line before the first `*Dynamic` step. | No change needed. |
+| **Combining with a rigid body** | You can attach the reference node to a rigid body via `*Rigid Body` and still keep the mean‑rotation constraint. | Define the rigid body, then add the `*MPC` line; the reference node will move as part of the rigid body while its rotations are the averaged value. |
+| **Extracting the averaged rotation in a script** | Use the Python snippet above, or write a small **ODB** script that loops over steps. | See the snippet in the checklist. |
+| **Using a different averaging rule (e.g., weighted)** | Abaqus does **not** provide a weighted mean‑rotation MPC. You would need a **user subroutine** (`*MPC, USER`) and implement the weighting yourself. | Write a `MPC` user subroutine in Fortran; see the Abaqus manual section *User Subroutines → MPC*. |
+| **Large node sets (thousands of nodes)** | No performance penalty – the MPC is assembled as a single equation. | Just make sure the node set is defined efficiently (e.g., via `*Elset` → `*Generate`). |
+
+---
+
+### TL;DR (the 30‑second version)
+
+1. **Define a node set** (`CN7`) that contains the nodes whose rotations you want to average.  
+2. **Pick a reference node** (`262`) that is **not** in that set.  
+3. **Insert a single line** **before the first `*STEP`**:
+
+   ```abaqus
+   *MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+   ```
+
+Abaqus will then enforce  
+
+\[
+\text{UR}_k^{262}= \frac{1}{N}\sum_{i\in\text{CN7}}\text{UR}_k^{(i)}\qquad(k=1,2,3)
+\]
+
+If you run into any of the pitfalls listed above, adjust the model accordingly.  
+
+Feel free to ask for more details – e.g., how to pull the averaged rotation into a Python post‑processor, how to combine the MPC with a rigid body, or how to use it in an explicit dynamic analysis. Happy modelling!
+
+=== 2026-04-17 20:12:40 ===
+Q: Below is a **copy‑and‑paste‑ready** guide that walks you through everything you need to create a **MEAN‑ROTATION MPC** in Abaqus/Standard (the same steps work for Abaqus/Explicit).  
+It follows exactly the order you asked for:
+
+* objects that must exist  
+* card syntax  
+* where to place the card  
+* what the constraint does  
+* common pitfalls & fixes  
+* a minimal working example (MWE) you can run immediately  
+* a quick‑check‑list you can tick off in the editor  
+
+---
+
+## 1️⃣  Objects that **must exist** before you write the MPC card  
+
+| # | Object | Input‑file syntax | Remarks / requirements |
+|---|--------|-------------------|------------------------|
+| 1 | **Node set** (`NSET`) – the nodes whose rotations will be averaged | `*Nset, nset=<set‑name>`  <br>followed by a comma‑separated list of node labels (or create it in the GUI) | • Must contain **≥ 2** nodes. <br>• All nodes must belong to elements that have rotational DOFs (UR1‑UR3). |
+| 2 | **Reference node** – the node that will receive the averaged rotation | Define it in the `*Node` section like any other node, e.g. `262, 0., 0., 0.` | • **Must NOT** be part of the node set above. <br>• It can be a dummy node that is otherwise unused, but it must exist. |
+| 3 | **Elements that support UR1‑UR3** | 3‑D beam (`B31`, `B32`, …), shell (`S4`, `S8R`, …) or solid (`C3D8`, `C3D20R`, …) elements. | If you only have 2‑D trusses, axisymmetric elements, or point masses the MPC will be ignored because those elements have no rotational DOFs. |
+
+> **Tip (GUI)** – Create the node set with *Tools → Set → Create → Node* and pick the nodes. The reference node can be created with *Part → Create → Node* and simply **not** added to the set.
+
+---
+
+## 2️⃣  Exact card syntax  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```
+
+*No data lines follow the card* – the whole definition lives on that single line.
+
+| Keyword | Meaning |
+|---------|---------|
+| `TYPE=MEANROT` | Use the mean‑rotation formulation. |
+| `NSET=` | Name of the node set that will be averaged. |
+| `REF NODE=` | Label of the reference node that will receive the average. |
+
+---
+
+## 3️⃣  Where to place the card  
+
+| Situation | Where to put the line |
+|-----------|-----------------------|
+| **Global constraint** (active for every step) | **Before the first `*STEP`** in the model definition section. |
+| **Constraint needed only for a particular step** | Define it before the step, then delete it at the end of that step with `OP=DELETE` (see §5). |
+
+### Typical location in an input file
+
+```text
+*Heading
+...
+*Node
+...                ; all nodes, including the reference node
+*Nset, nset=CN7
+101, 102, 103, 104 ; nodes whose rotations will be averaged
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; <<< ONE‑LINE definition
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+```
+
+### Deleting the MPC after a step (optional)
+
+If you only need the mean‑rotation for *Step‑1*:
+
+```abaqus
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+*MPC, OP=DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; turns it off for later steps
+```
+
+---
+
+## 4️⃣  What the constraint **does**  
+
+For each rotational component *k* (k = 1, 2, 3)
+
+\[
+\boxed{\; \text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)} \;}
+\]
+
+* \(N\) – number of nodes in the set `CN7`.  
+* \(\text{UR}_k^{(i)}\) – rotation of node *i* about its local axis *k*.  
+* \(\text{UR}_k^{\text{(ref)}}\) – rotation of the reference node (node 262 in the example).
+
+The reference node **inherits the arithmetic mean** of the three rotational DOFs of all nodes in the set.  
+The MPC is *kinematic* – it does **not** add stiffness, it only enforces the equality at the algebraic level.
+
+---
+
+## 5️⃣  Common pitfalls & how to avoid them  
+
+| # | Problem | Abaqus symptom / message | Fix |
+|---|---------|--------------------------|-----|
+| 1 | Reference node also appears in the NSET | Abort: *“Reference node cannot be in the node set”* | Choose a different node label for the reference node, or remove it from the set. |
+| 2 | Node set empty or contains only one node | Warning that the average is ill‑defined; the MPC may be ignored. | Ensure the set has **≥ 2** nodes. |
+| 3 | Elements without rotational DOFs (e.g., 2‑D trusses) | The MPC silently does nothing – you see no effect on the reference node. | Use 3‑D beam, shell, or solid elements that support UR1‑UR3. |
+| 4 | Card placed inside a `*STEP` block | “Undefined MPC” or the constraint is ignored. | Move the `*MPC` line to the model definition section (before the first `*STEP`). |
+| 5 | Constraint left active when only needed for one step | Over‑constrains later steps. | Add a `*MPC, OP=DELETE …` line at the end of the step where you no longer need it. |
+| 6 | Reference node over‑constrained by other BCs (e.g., also fixed in rotation) | Averaged rotation forced to zero. | Apply only the necessary BCs; you can still fix translations while leaving rotations free. |
+| 7 | Nodes have different local axis orientations | The arithmetic mean may be physically meaningless. | Use the MPC only when all nodes share the same orientation, or write a USER‑MPC subroutine that transforms to a common system. |
+
+---
+
+## 6️⃣  Minimal Working Example (MWE)  
+
+Save the block below as **`meanrot.inp`** and run it (Standard or Explicit – the same syntax works).
+
+```abaqus
+*Heading
+** Example: mean‑rotation MPC (Abaqus/Standard)
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+262, 0., 0., 0.   ; reference node (must NOT be in CN7)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=CN7
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+*Boundary
+262, 1, 3, 0.0   ; fix translations of the reference node (UR1‑UR3 stay free)
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation of 0.05 rad about all three local axes on node 101
+*End Step
+```
+
+**What you will see**
+
+| Node | UR1 | UR2 | UR3 |
+|------|-----|-----|-----|
+| 101 | 0.05 (prescribed) | 0.05 | 0.05 |
+| 102‑104 | whatever the beam transmits (≈ 0.05 if the beam is stiff) |
+| **262** (reference) | ≈ (UR1₁+UR1₂+UR1₃+UR1₄)/4 | same for UR2 | same for UR3 |
+
+Open the resulting **`.odb`** in Abaqus/Viewer, plot **UR1‑UR3** for node 262 and verify that they equal the arithmetic mean of the four beam nodes.
+
+---
+
+## 7️⃣  Quick‑copy‑paste **check‑list**  
+
+```text
+[ ] 1️⃣  Create a node set (NSET) that contains the nodes to be averaged.
+[ ] 2️⃣  Choose a reference node that is NOT in that set.
+[ ] 3️⃣  Verify that the model uses elements with UR1‑UR3 (3‑D beams, shells, solids).
+[ ] 4️⃣  Insert the MPC line **before the first *STEP**:
+
+    *MPC, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 5️⃣  (Optional) If you need the constraint only for a particular step, add at the end of that step:
+
+    *MPC, OP=DELETE, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 6️⃣  Run the job.
+[ ] 7️⃣  Post‑process: open the .odb, plot UR1‑UR3 of the reference node, or extract with Python:
+
+    from odbAccess import *
+    odb = openOdb('meanrot.odb')
+    step = odb.steps['Step-1']
+    frame = step.frames[-1]
+    refNode = odb.rootAssembly.instances['PART-1-1'].nodes[261]   # node 262 → index 261
+    ur = frame.fieldOutputs['UR'].getSubset(region=refNode).values[0].data
+    print('UR1,UR2,UR3 =', ur)
+    odb.close()
+```
+
+---
+
+## 8️⃣  Extra notes (optional but often useful)
+
+| Topic | When you might need it | How to do it |
+|-------|------------------------|--------------|
+| **Abaqus/Explicit** | Same syntax works; just place the `*MPC` line before the first `*Dynamic` step. | No change needed. |
+| **Rigid body coupling** | You can attach the reference node to a rigid body via `*Rigid Body` and still keep the mean‑rotation constraint. | Define the rigid body, then add the `*MPC` line; the reference node will move as part of the rigid body while its rotations are the averaged value. |
+| **Weighted averaging** | Abaqus does **not** provide a weighted mean‑rotation MPC. | Write a USER‑MPC subroutine (`*MPC, USER`) in Fortran and implement the weighting yourself (see the Abaqus manual). |
+| **Large node sets** | No performance penalty – the MPC is assembled as a single equation. | Define the set efficiently (e.g., via `*Elset` → `*Generate`). |
+
+---
+
+### TL;DR (the 30‑second version)
+
+1. **Define a node set** (`CN7`) that contains the nodes whose rotations you want to average.  
+2. **Pick a reference node** (`262`) that is **not** in that set.  
+3. **Insert a single line** **before the first `*STEP`**:
+
+   ```abaqus
+   *MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+   ```
+
+Abaqus will then enforce  
+
+\[
+\text{UR}_k^{262}= \frac{1}{N}\sum_{i\in\text{CN7}}\text{UR}_k^{(i)}\qquad(k=1,2,3)
+\]
+
+If you hit any of the pitfalls listed above, adjust the model accordingly.  
+
+Feel free to ask for more details – e.g., how to pull the averaged rotation into a Python post‑processor, how to combine the MPC with a rigid body, or how to use it in an explicit dynamic analysis. Happy modelling!
+A: Below is a **copy‑and‑paste‑ready** guide that walks you through everything you need to create a **MEAN‑ROTATION MPC** in Abaqus/Standard (the same steps work for Abaqus/Explicit).  
+It follows exactly the order you asked for:
+
+* objects that must exist  
+* card syntax  
+* where to place the card  
+* what the constraint does  
+* common pitfalls & fixes  
+* a minimal working example (MWE) you can run immediately  
+* a quick‑check‑list you can tick off in the editor  
+
+---  
+
+## 1️⃣  Objects that **must exist** before you write the MPC card  
+
+| # | Object | Input‑file syntax | Remarks / requirements |
+|---|--------|-------------------|------------------------|
+| 1 | **Node set** (`NSET`) – the nodes whose rotations will be averaged | `*Nset, nset=<set‑name>`  <br>followed by a comma‑separated list of node labels (or create it in the GUI) | • Must contain **≥ 2** nodes. <br>• All nodes must belong to elements that have rotational DOFs (UR1‑UR3). |
+| 2 | **Reference node** – the node that will receive the averaged rotation | Define it in the `*Node` section like any other node, e.g. `262, 0., 0., 0.` | • **Must NOT** be part of the node set above. <br>• It can be a dummy node that is otherwise unused, but it must exist. |
+| 3 | **Elements that support UR1‑UR3** | 3‑D beam (`B31`, `B32`, …), shell (`S4`, `S8R`, …) or solid (`C3D8`, `C3D20R`, …) elements. | If you only have 2‑D trusses, axisymmetric elements, or point masses the MPC will be ignored because those elements have no rotational DOFs. |
+
+> **Tip (GUI)** – Create the node set with *Tools → Set → Create → Node* and pick the nodes. The reference node can be created with *Part → Create → Node* and simply **not** added to the set.
+
+---
+
+## 2️⃣  Exact card syntax  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```
+
+*No data lines follow the card* – the whole definition lives on that single line.
+
+| Keyword | Meaning |
+|---------|---------|
+| `TYPE=MEANROT` | Use the mean‑rotation formulation. |
+| `NSET=` | Name of the node set that will be averaged. |
+| `REF NODE=` | Label of the reference node that will receive the average. |
+
+---
+
+## 3️⃣  Where to place the card  
+
+| Situation | Where to put the line |
+|-----------|-----------------------|
+| **Global constraint** (active for every step) | **Before the first `*STEP`** in the model definition section. |
+| **Constraint needed only for a particular step** | Define it before the step, then delete it at the end of that step with `OP=DELETE` (see §5). |
+
+### Typical location in an input file
+
+```text
+*Heading
+...
+*Node
+...                ; all nodes, including the reference node
+*Nset, nset=CN7
+101, 102, 103, 104 ; nodes whose rotations will be averaged
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; <<< ONE‑LINE definition
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+```
+
+### Deleting the MPC after a step (optional)
+
+If you only need the mean‑rotation for *Step‑1*:
+
+```abaqus
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+*MPC, OP=DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; turns it off for later steps
+```
+
+---
+
+## 4️⃣  What the constraint **does**  
+
+For each rotational component *k* (k = 1, 2, 3)
+
+\[
+\boxed{\; \text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)} \;}
+\]
+
+* \(N\) – number of nodes in the set `CN7`.  
+* \(\text{UR}_k^{(i)}\) – rotation of node *i* about its local axis *k*.  
+* \(\text{UR}_k^{\text{(ref)}}\) – rotation of the reference node (node 262 in the example).
+
+The reference node **inherits the arithmetic mean** of the three rotational DOFs of all nodes in the set.  
+The MPC is *kinematic* – it does **not** add stiffness, it only enforces the equality at the algebraic level.
+
+---
+
+## 5️⃣  Common pitfalls & how to avoid them  
+
+| # | Problem | Abaqus symptom / message | Fix |
+|---|---------|--------------------------|-----|
+| 1 | Reference node also appears in the NSET | Abort: *“Reference node cannot be in the node set”* | Choose a different node label for the reference node, or remove it from the set. |
+| 2 | Node set empty or contains only one node | Warning that the average is ill‑defined; the MPC may be ignored. | Ensure the set has **≥ 2** nodes. |
+| 3 | Elements without rotational DOFs (e.g., 2‑D trusses) | The MPC silently does nothing – you see no effect on the reference node. | Use 3‑D beam, shell, or solid elements that support UR1‑UR3. |
+| 4 | Card placed inside a `*STEP` block | “Undefined MPC” or the constraint is ignored. | Move the `*MPC` line to the model definition section (before the first `*STEP`). |
+| 5 | Constraint left active when only needed for one step | Over‑constrains later steps. | Add a `*MPC, OP=DELETE …` line at the end of the step where you no longer need it. |
+| 6 | Reference node over‑constrained by other BCs (e.g., also fixed in rotation) | Averaged rotation forced to zero. | Apply only the necessary BCs; you can still fix translations while leaving rotations free. |
+| 7 | Nodes have different local axis orientations | The arithmetic mean may be physically meaningless. | Use the MPC only when all nodes share the same orientation, or write a USER‑MPC subroutine that transforms to a common system. |
+
+---
+
+## 6️⃣  Minimal Working Example (MWE)  
+
+Save the block below as **`meanrot.inp`** and run it (Standard or Explicit – the same syntax works).
+
+```abaqus
+*Heading
+** Example: mean‑rotation MPC (Abaqus/Standard)
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+262, 0., 0., 0.   ; reference node (must NOT be in CN7)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=CN7
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+*Boundary
+262, 1, 3, 0.0   ; fix translations of the reference node (UR1‑UR3 stay free)
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation of 0.05 rad about all three local axes on node 101
+*End Step
+```
+
+### What you will see  
+
+| Node | UR1 | UR2 | UR3 |
+|------|-----|-----|-----|
+| 101 | 0.05 (prescribed) | 0.05 | 0.05 |
+| 102‑104 | whatever the beam transmits (≈ 0.05 if the beam is stiff) |
+| **262** (reference) | ≈ (UR1₁+UR1₂+UR1₃+UR1₄)/4 | same for UR2 | same for UR3 |
+
+Open the resulting **`.odb`** in Abaqus/Viewer, plot **UR1‑UR3** for node 262 and verify that they equal the arithmetic mean of the four beam nodes.
+
+---
+
+## 7️⃣  Quick‑copy‑paste **check‑list**  
+
+```text
+[ ] 1️⃣  Create a node set (NSET) that contains the nodes to be averaged.
+[ ] 2️⃣  Choose a reference node that is NOT in that set.
+[ ] 3️⃣  Verify that the model uses elements with UR1‑UR3 (3‑D beams, shells, solids).
+[ ] 4️⃣  Insert the MPC line **before the first *STEP**:
+
+    *MPC, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 5️⃣  (Optional) If you need the constraint only for a particular step, add at the end of that step:
+
+    *MPC, OP=DELETE, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 6️⃣  Run the job.
+[ ] 7️⃣  Post‑process: open the .odb, plot UR1‑UR3 of the reference node, or extract with Python:
+
+    from odbAccess import *
+    odb = openOdb('meanrot.odb')
+    step = odb.steps['Step-1']
+    frame = step.frames[-1]
+    # adjust instance name and node label as needed
+    refNode = odb.rootAssembly.instances['PART-1-1'].nodes[261]   # node 262 → index 261
+    ur = frame.fieldOutputs['UR'].getSubset(region=refNode).values[0].data
+    print('UR1,UR2,UR3 =', ur)
+    odb.close()
+```
+
+---  
+
+## 8️⃣  Extra notes (optional but often useful)
+
+| Topic | When you might need it | How to do it |
+|-------|------------------------|--------------|
+| **Abaqus/Explicit** | Same syntax works; just place the `*MPC` line before the first `*Dynamic` step. | No change needed. |
+| **Rigid body coupling** | You can attach the reference node to a rigid body via `*Rigid Body` and still keep the mean‑rotation constraint. | Define the rigid body, then add the `*MPC` line; the reference node will move as part of the rigid body while its rotations are the averaged value. |
+| **Weighted averaging** | Abaqus does **not** provide a weighted mean‑rotation MPC. | Write a USER‑MPC subroutine (`*MPC, USER`) in Fortran and implement the weighting yourself (see the Abaqus manual). |
+| **Large node sets** | No performance penalty – the MPC is assembled as a single equation. | Define the set efficiently (e.g., via `*Elset` → `*Generate`). |
+
+---
+
+### TL;DR (the 30‑second version)
+
+1. **Define a node set** (`CN7`) that contains the nodes whose rotations you want to average.  
+2. **Pick a reference node** (`262`) that is **not** in that set.  
+3. **Insert a single line** **before the first `*STEP`**:
+
+   ```abaqus
+   *MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+   ```
+
+Abaqus will then enforce  
+
+\[
+\text{UR}_k^{262}= \frac{1}{N}\sum_{i\in\text{CN7}}\text{UR}_k^{(i)}\qquad(k=1,2,3)
+\]
+
+If you hit any of the pitfalls listed above, adjust the model accordingly.  
+
+Feel free to ask for more details – e.g., how to pull the averaged rotation into a Python post‑processor, how to combine the MPC with a rigid body, or how to use it in an explicit dynamic analysis. Happy modelling!
+
+=== 2026-04-17 20:13:55 ===
+Q: Below is a **copy‑and‑paste‑ready** guide that walks you through everything you need to create a **MEAN‑ROTATION MPC** in Abaqus/Standard (the same steps work for Abaqus/Explicit).  
+It follows exactly the order you asked for:
+
+* objects that must exist  
+* card syntax  
+* where to place the card  
+* what the constraint does  
+* common pitfalls & fixes  
+* a minimal working example (MWE) you can run immediately  
+* a quick‑check‑list you can tick off in the editor  
+
+---  
+
+## 1️⃣  Objects that **must exist** before you write the MPC card  
+
+| # | Object | Input‑file syntax | Remarks / requirements |
+|---|--------|-------------------|------------------------|
+| 1 | **Node set** (`NSET`) – the nodes whose rotations will be averaged | `*Nset, nset=<set‑name>`  <br>followed by a comma‑separated list of node labels (or create it in the GUI) | • Must contain **≥ 2** nodes. <br>• All nodes must belong to elements that have rotational DOFs (UR1‑UR3). |
+| 2 | **Reference node** – the node that will receive the averaged rotation | Define it in the `*Node` section like any other node, e.g. `262, 0., 0., 0.` | • **Must NOT** be part of the node set above. <br>• It can be a dummy node that is otherwise unused, but it must exist. |
+| 3 | **Elements that support UR1‑UR3** | 3‑D beam (`B31`, `B32`, …), shell (`S4`, `S8R`, …) or solid (`C3D8`, `C3D20R`, …) elements. | If you only have 2‑D trusses, axisymmetric elements, or point masses the MPC will be ignored because those elements have no rotational DOFs. |
+
+> **Tip (GUI)** – Create the node set with *Tools → Set → Create → Node* and pick the nodes. The reference node can be created with *Part → Create → Node* and simply **not** added to the set.
+
+---  
+
+## 2️⃣  Exact card syntax  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```  
+
+*No data lines follow the card* – the whole definition lives on that single line.
+
+| Keyword | Meaning |
+|---------|---------|
+| `TYPE=MEANROT` | Use the mean‑rotation formulation. |
+| `NSET=` | Name of the node set that will be averaged. |
+| `REF NODE=` | Label of the reference node that will receive the average. |
+
+---  
+
+## 3️⃣  Where to place the card  
+
+| Situation | Where to put the line |
+|-----------|-----------------------|
+| **Global constraint** (active for every step) | **Before the first `*STEP`** in the model definition section. |
+| **Constraint needed only for a particular step** | Define it before the step, then delete it at the end of that step with `OP=DELETE` (see §5). |
+
+### Typical location in an input file
+
+```text
+*Heading
+...
+*Node
+...                ; all nodes, including the reference node
+*Nset, nset=CN7
+101, 102, 103, 104 ; nodes whose rotations will be averaged
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; <<< ONE‑LINE definition
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+```  
+
+### Deleting the MPC after a step (optional)
+
+If you only need the mean‑rotation for *Step‑1*:
+
+```abaqus
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+*MPC, OP=DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; turns it off for later steps
+```  
+
+---  
+
+## 4️⃣  What the constraint **does**  
+
+For each rotational component *k* (k = 1, 2, 3)
+
+\[
+\boxed{\; \text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)} \;}
+\]
+
+* \(N\) – number of nodes in the set `CN7`.  
+* \(\text{UR}_k^{(i)}\) – rotation of node *i* about its local axis *k*.  
+* \(\text{UR}_k^{\text{(ref)}}\) – rotation of the reference node (node 262 in the example).
+
+The reference node **inherits the arithmetic mean** of the three rotational DOFs of all nodes in the set.  
+The MPC is *kinematic* – it does **not** add stiffness, it only enforces the equality at the algebraic level.
+
+---  
+
+## 5️⃣  Common pitfalls & how to avoid them  
+
+| # | Problem | Abaqus symptom / message | Fix |
+|---|---------|--------------------------|-----|
+| 1 | Reference node also appears in the NSET | Abort: *“Reference node cannot be in the node set”* | Choose a different node label for the reference node, or remove it from the set. |
+| 2 | Node set empty or contains only one node | Warning that the average is ill‑defined; the MPC may be ignored. | Ensure the set has **≥ 2** nodes. |
+| 3 | Elements without rotational DOFs (e.g., 2‑D trusses) | The MPC silently does nothing – you see no effect on the reference node. | Use 3‑D beam, shell, or solid elements that support UR1‑UR3. |
+| 4 | Card placed inside a `*STEP` block | “Undefined MPC” or the constraint is ignored. | Move the `*MPC` line to the model definition section (before the first `*STEP`). |
+| 5 | Constraint left active when only needed for one step | Over‑constrains later steps. | Add a `*MPC, OP=DELETE …` line at the end of the step where you no longer need it. |
+| 6 | Reference node over‑constrained by other BCs (e.g., also fixed in rotation) | Averaged rotation forced to zero. | Apply only the necessary BCs; you can still fix translations while leaving rotations free. |
+| 7 | Nodes have different local axis orientations | The arithmetic mean may be physically meaningless. | Use the MPC only when all nodes share the same orientation, or write a USER‑MPC subroutine that transforms to a common system. |
+
+---  
+
+## 6️⃣  Minimal Working Example (MWE)  
+
+Save the block below as **`meanrot.inp`** and run it (Standard or Explicit – the same syntax works).
+
+```abaqus
+*Heading
+** Example: mean‑rotation MPC (Abaqus/Standard)
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+262, 0., 0., 0.   ; reference node (must NOT be in CN7)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=CN7
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+*Boundary
+262, 1, 3, 0.0   ; fix translations of the reference node (UR1‑UR3 stay free)
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation of 0.05 rad about all three local axes on node 101
+*End Step
+```  
+
+### What you will see  
+
+| Node | UR1 | UR2 | UR3 |
+|------|-----|-----|-----|
+| 101 | 0.05 (prescribed) | 0.05 | 0.05 |
+| 102‑104 | whatever the beam transmits (≈ 0.05 if the beam is stiff) |
+| **262** (reference) | ≈ (UR1₁+UR1₂+UR1₃+UR1₄)/4 | same for UR2 | same for UR3 |
+
+Open the resulting **`.odb`** in Abaqus/Viewer, plot **UR1‑UR3** for node 262 and verify that they equal the arithmetic mean of the four beam nodes.
+
+---  
+
+## 7️⃣  Quick‑copy‑paste **check‑list**  
+
+```text
+[ ] 1️⃣  Create a node set (NSET) that contains the nodes to be averaged.
+[ ] 2️⃣  Choose a reference node that is NOT in that set.
+[ ] 3️⃣  Verify that the model uses elements with UR1‑UR3 (3‑D beams, shells, solids).
+[ ] 4️⃣  Insert the MPC line **before the first *STEP**:
+
+    *MPC, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 5️⃣  (Optional) If you need the constraint only for a particular step, add at the end of that step:
+
+    *MPC, OP=DELETE, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 6️⃣  Run the job.
+[ ] 7️⃣  Post‑process: open the .odb, plot UR1‑UR3 of the reference node, or extract with Python:
+
+    from odbAccess import *
+    odb = openOdb('meanrot.odb')
+    step = odb.steps['Step-1']
+    frame = step.frames[-1]
+    # adjust instance name and node label as needed
+    refNode = odb.rootAssembly.instances['PART-1-1'].nodes[261]   # node 262 → index 261
+    ur = frame.fieldOutputs['UR'].getSubset(region=refNode).values[0].data
+    print('UR1,UR2,UR3 =', ur)
+    odb.close()
+```  
+
+---  
+
+## 8️⃣  Extra notes (optional but often useful)
+
+| Topic | When you might need it | How to do it |
+|-------|------------------------|--------------|
+| **Abaqus/Explicit** | Same syntax works; just place the `*MPC` line before the first `*Dynamic` step. | No change needed. |
+| **Rigid body coupling** | You can attach the reference node to a rigid body via `*Rigid Body` and still keep the mean‑rotation constraint. | Define the rigid body, then add the `*MPC` line; the reference node will move as part of the rigid body while its rotations are the averaged value. |
+| **Weighted averaging** | Abaqus does **not** provide a weighted mean‑rotation MPC. | Write a USER‑MPC subroutine (`*MPC, USER`) in Fortran and implement the weighting yourself (see the Abaqus manual). |
+| **Large node sets** | No performance penalty – the MPC is assembled as a single equation. | Define the set efficiently (e.g., via `*Elset` → `*Generate`). |
+
+---  
+
+### TL;DR (the 30‑second version)
+
+1. **Define a node set** (`CN7`) that contains the nodes whose rotations you want to average.  
+2. **Pick a reference node** (`262`) that is **not** in that set.  
+3. **Insert a single line** **before the first `*STEP`**:
+
+   ```abaqus
+   *MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+   ```
+
+Abaqus will then enforce  
+
+\[
+\text{UR}_k^{262}= \frac{1}{N}\sum_{i\in\text{CN7}}\text{UR}_k^{(i)}\qquad(k=1,2,3)
+\]
+
+If you hit any of the pitfalls listed above, adjust the model accordingly.  
+
+Feel free to ask for more details – e.g., how to pull the averaged rotation into a Python post‑processor, how to combine the MPC with a rigid body, or how to use it in an explicit dynamic analysis. Happy modelling!
+A: Below is a **copy‑and‑paste‑ready** guide that walks you through everything you need to create a **MEAN‑ROTATION MPC** in Abaqus/Standard (the same steps work for Abaqus/Explicit).  
+It follows exactly the order you asked for:
+
+* objects that must exist  
+* card syntax  
+* where to place the card  
+* what the constraint does  
+* common pitfalls & fixes  
+* a minimal working example (MWE) you can run immediately  
+* a quick‑check‑list you can tick off in the editor  
+
+---  
+
+## 1️⃣  Objects that **must exist** before you write the MPC card  
+
+| # | Object | Input‑file syntax | Remarks / requirements |
+|---|--------|-------------------|------------------------|
+| 1 | **Node set** (`NSET`) – the nodes whose rotations will be averaged | `*Nset, nset=<set‑name>`  <br>followed by a comma‑separated list of node labels (or create it in the GUI) | • Must contain **≥ 2** nodes. <br>• All nodes must belong to elements that have rotational DOFs (UR1‑UR3). |
+| 2 | **Reference node** – the node that will receive the averaged rotation | Define it in the `*Node` section like any other node, e.g. `262, 0., 0., 0.` | • **Must NOT** be part of the node set above. <br>• It can be a dummy node that is otherwise unused, but it must exist. |
+| 3 | **Elements that support UR1‑UR3** | 3‑D beam (`B31`, `B32`, …), shell (`S4`, `S8R`, …) or solid (`C3D8`, `C3D20R`, …) elements. | If you only have 2‑D trusses, axisymmetric elements, or point masses the MPC will be ignored because those elements have no rotational DOFs. |
+
+> **Tip (GUI)** – Create the node set with *Tools → Set → Create → Node* and pick the nodes. The reference node can be created with *Part → Create → Node* and simply **not** added to the set.
+
+---  
+
+## 2️⃣  Exact card syntax  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```  
+
+*No data lines follow the card* – the whole definition lives on that single line.
+
+| Keyword | Meaning |
+|---------|---------|
+| `TYPE=MEANROT` | Use the mean‑rotation formulation. |
+| `NSET=` | Name of the node set that will be averaged. |
+| `REF NODE=` | Label of the reference node that will receive the average. |
+
+---  
+
+## 3️⃣  Where to place the card  
+
+| Situation | Where to put the line |
+|-----------|-----------------------|
+| **Global constraint** (active for every step) | **Before the first `*STEP`** in the model definition section. |
+| **Constraint needed only for a particular step** | Define it before the step, then delete it at the end of that step with `OP=DELETE` (see §5). |
+
+### Typical location in an input file
+
+```text
+*Heading
+...
+*Node
+...                ; all nodes, including the reference node
+*Nset, nset=CN7
+101, 102, 103, 104 ; nodes whose rotations will be averaged
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; <<< ONE‑LINE definition
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+```  
+
+### Deleting the MPC after a step (optional)
+
+If you only need the mean‑rotation for *Step‑1*:
+
+```abaqus
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+*MPC, OP=DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; turns it off for later steps
+```  
+
+---  
+
+## 4️⃣  What the constraint **does**  
+
+For each rotational component *k* (k = 1, 2, 3)
+
+\[
+\boxed{\; \text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)} \;}
+\]
+
+* \(N\) – number of nodes in the set `CN7`.  
+* \(\text{UR}_k^{(i)}\) – rotation of node *i* about its local axis *k*.  
+* \(\text{UR}_k^{\text{(ref)}}\) – rotation of the reference node (node 262 in the example).
+
+The reference node **inherits the arithmetic mean** of the three rotational DOFs of all nodes in the set.  
+The MPC is *kinematic* – it does **not** add stiffness, it only enforces the equality at the algebraic level.
+
+---  
+
+## 5️⃣  Common pitfalls & how to avoid them  
+
+| # | Problem | Abaqus symptom / message | Fix |
+|---|---------|--------------------------|-----|
+| 1 | Reference node also appears in the NSET | Abort: *“Reference node cannot be in the node set”* | Choose a different node label for the reference node, or remove it from the set. |
+| 2 | Node set empty or contains only one node | Warning that the average is ill‑defined; the MPC may be ignored. | Ensure the set has **≥ 2** nodes. |
+| 3 | Elements without rotational DOFs (e.g., 2‑D trusses) | The MPC silently does nothing – you see no effect on the reference node. | Use 3‑D beam, shell, or solid elements that support UR1‑UR3. |
+| 4 | Card placed inside a `*STEP` block | “Undefined MPC” or the constraint is ignored. | Move the `*MPC` line to the model definition section (before the first `*STEP`). |
+| 5 | Constraint left active when only needed for one step | Over‑constrains later steps. | Add a `*MPC, OP=DELETE …` line at the end of the step where you no longer need it. |
+| 6 | Reference node over‑constrained by other BCs (e.g., also fixed in rotation) | Averaged rotation forced to zero. | Apply only the necessary BCs; you can still fix translations while leaving rotations free. |
+| 7 | Nodes have different local axis orientations | The arithmetic mean may be physically meaningless. | Use the MPC only when all nodes share the same orientation, or write a USER‑MPC subroutine that transforms to a common system. |
+
+---  
+
+## 6️⃣  Minimal Working Example (MWE)  
+
+Save the block below as **`meanrot.inp`** and run it (Standard or Explicit – the same syntax works).
+
+```abaqus
+*Heading
+** Example: mean‑rotation MPC (Abaqus/Standard)
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+262, 0., 0., 0.   ; reference node (must NOT be in CN7)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=CN7
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+*Boundary
+262, 1, 3, 0.0   ; fix translations of the reference node (UR1‑UR3 stay free)
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation of 0.05 rad about all three local axes on node 101
+*End Step
+```  
+
+### What you will see  
+
+| Node | UR1 | UR2 | UR3 |
+|------|-----|-----|-----|
+| 101 | 0.05 (prescribed) | 0.05 | 0.05 |
+| 102‑104 | whatever the beam transmits (≈ 0.05 if the beam is stiff) |
+| **262** (reference) | ≈ (UR1₁+UR1₂+UR1₃+UR1₄)/4 | same for UR2 | same for UR3 |
+
+Open the resulting **`.odb`** in Abaqus/Viewer, plot **UR1‑UR3** for node 262 and verify that they equal the arithmetic mean of the four beam nodes.
+
+---  
+
+## 7️⃣  Quick‑copy‑paste **check‑list**  
+
+```text
+[ ] 1️⃣  Create a node set (NSET) that contains the nodes to be averaged.
+[ ] 2️⃣  Choose a reference node that is NOT in that set.
+[ ] 3️⃣  Verify that the model uses elements with UR1‑UR3 (3‑D beams, shells, solids).
+[ ] 4️⃣  Insert the MPC line **before the first *STEP**:
+
+    *MPC, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 5️⃣  (Optional) If you need the constraint only for a particular step, add at the end of that step:
+
+    *MPC, OP=DELETE, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 6️⃣  Run the job.
+[ ] 7️⃣  Post‑process: open the .odb, plot UR1‑UR3 of the reference node, or extract with Python:
+
+    from odbAccess import *
+    odb = openOdb('meanrot.odb')
+    step = odb.steps['Step-1']
+    frame = step.frames[-1]
+    # adjust instance name and node label as needed
+    refNode = odb.rootAssembly.instances['PART-1-1'].nodes[261]   # node 262 → index 261
+    ur = frame.fieldOutputs['UR'].getSubset(region=refNode).values[0].data
+    print('UR1,UR2,UR3 =', ur)
+    odb.close()
+```  
+
+---  
+
+## 8️⃣  Extra notes (optional but often useful)
+
+| Topic | When you might need it | How to do it |
+|-------|------------------------|--------------|
+| **Abaqus/Explicit** | Same syntax works; just place the `*MPC` line before the first `*Dynamic` step. | No change needed. |
+| **Rigid body coupling** | You can attach the reference node to a rigid body via `*Rigid Body` and still keep the mean‑rotation constraint. | Define the rigid body, then add the `*MPC` line; the reference node will move as part of the rigid body while its rotations are the averaged value. |
+| **Weighted averaging** | Abaqus does **not** provide a weighted mean‑rotation MPC. | Write a USER‑MPC subroutine (`*MPC, USER`) in Fortran and implement the weighting yourself (see the Abaqus manual). |
+| **Large node sets** | No performance penalty – the MPC is assembled as a single equation. | Define the set efficiently (e.g., via `*Elset` → `*Generate`). |
+
+---  
+
+### TL;DR (the 30‑second version)
+
+1. **Define a node set** (`CN7`) that contains the nodes whose rotations you want to average.  
+2. **Pick a reference node** (`262`) that is **not** in that set.  
+3. **Insert a single line** **before the first `*STEP`**:
+
+   ```abaqus
+   *MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+   ```
+
+Abaqus will then enforce  
+
+\[
+\text{UR}_k^{262}= \frac{1}{N}\sum_{i\in\text{CN7}}\text{UR}_k^{(i)}\qquad(k=1,2,3)
+\]
+
+If you hit any of the pitfalls listed above, adjust the model accordingly.  
+
+Feel free to ask for more details – e.g., how to pull the averaged rotation into a Python post‑processor, how to combine the MPC with a rigid body, or how to use it in an explicit dynamic analysis. Happy modelling!
+
+=== 2026-04-17 20:15:08 ===
+Q: Below is a **copy‑and‑paste‑ready** guide that walks you through everything you need to create a **MEAN‑ROTATION MPC** in Abaqus/Standard (the same steps work for Abaqus/Explicit).  
+It follows exactly the order you asked for:
+
+* objects that must exist  
+* card syntax  
+* where to place the card  
+* what the constraint does  
+* common pitfalls & fixes  
+* a minimal working example (MWE) you can run immediately  
+* a quick‑check‑list you can tick off in the editor  
+
+---  
+
+## 1️⃣  Objects that **must exist** before you write the MPC card  
+
+| # | Object | Input‑file syntax | Remarks / requirements |
+|---|--------|-------------------|------------------------|
+| 1 | **Node set** (`NSET`) – the nodes whose rotations will be averaged | `*Nset, nset=<set‑name>`  <br>followed by a comma‑separated list of node labels (or create it in the GUI) | • Must contain **≥ 2** nodes. <br>• All nodes must belong to elements that have rotational DOFs (UR1‑UR3). |
+| 2 | **Reference node** – the node that will receive the averaged rotation | Define it in the `*Node` section like any other node, e.g. `262, 0., 0., 0.` | • **Must NOT** be part of the node set above. <br>• It can be a dummy node that is otherwise unused, but it must exist. |
+| 3 | **Elements that support UR1‑UR3** | 3‑D beam (`B31`, `B32`, …), shell (`S4`, `S8R`, …) or solid (`C3D8`, `C3D20R`, …) elements. | If you only have 2‑D trusses, axisymmetric elements, or point masses the MPC will be ignored because those elements have no rotational DOFs. |
+
+> **Tip (GUI)** – Create the node set with *Tools → Set → Create → Node* and pick the nodes. The reference node can be created with *Part → Create → Node* and simply **not** added to the set.
+
+---  
+
+## 2️⃣  Exact card syntax  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```  
+
+*No data lines follow the card* – the whole definition lives on that single line.
+
+| Keyword | Meaning |
+|---------|---------|
+| `TYPE=MEANROT` | Use the mean‑rotation formulation. |
+| `NSET=` | Name of the node set that will be averaged. |
+| `REF NODE=` | Label of the reference node that will receive the average. |
+
+---  
+
+## 3️⃣  Where to place the card  
+
+| Situation | Where to put the line |
+|-----------|-----------------------|
+| **Global constraint** (active for every step) | **Before the first `*STEP`** in the model definition section. |
+| **Constraint needed only for a particular step** | Define it before the step, then delete it at the end of that step with `OP=DELETE` (see §5). |
+
+### Typical location in an input file
+
+```text
+*Heading
+...
+*Node
+...                ; all nodes, including the reference node
+*Nset, nset=CN7
+101, 102, 103, 104 ; nodes whose rotations will be averaged
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; <<< ONE‑LINE definition
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+```  
+
+### Deleting the MPC after a step (optional)
+
+If you only need the mean‑rotation for *Step‑1*:
+
+```abaqus
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+*MPC, OP=DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; turns it off for later steps
+```  
+
+---  
+
+## 4️⃣  What the constraint **does**  
+
+For each rotational component *k* (k = 1, 2, 3)
+
+\[
+\boxed{\; \text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)} \;}
+\]
+
+* \(N\) – number of nodes in the set `CN7`.  
+* \(\text{UR}_k^{(i)}\) – rotation of node *i* about its local axis *k*.  
+* \(\text{UR}_k^{\text{(ref)}}\) – rotation of the reference node (node 262 in the example).
+
+The reference node **inherits the arithmetic mean** of the three rotational DOFs of all nodes in the set.  
+The MPC is *kinematic* – it does **not** add stiffness, it only enforces the equality at the algebraic level.
+
+---  
+
+## 5️⃣  Common pitfalls & how to avoid them  
+
+| # | Problem | Abaqus symptom / message | Fix |
+|---|---------|--------------------------|-----|
+| 1 | Reference node also appears in the NSET | Abort: *“Reference node cannot be in the node set”* | Choose a different node label for the reference node, or remove it from the set. |
+| 2 | Node set empty or contains only one node | Warning that the average is ill‑defined; the MPC may be ignored. | Ensure the set has **≥ 2** nodes. |
+| 3 | Elements without rotational DOFs (e.g., 2‑D trusses) | The MPC silently does nothing – you see no effect on the reference node. | Use 3‑D beam, shell, or solid elements that support UR1‑UR3. |
+| 4 | Card placed inside a `*STEP` block | “Undefined MPC” or the constraint is ignored. | Move the `*MPC` line to the model definition section (before the first `*STEP`). |
+| 5 | Constraint left active when only needed for one step | Over‑constrains later steps. | Add a `*MPC, OP=DELETE …` line at the end of the step where you no longer need it. |
+| 6 | Reference node over‑constrained by other BCs (e.g., also fixed in rotation) | Averaged rotation forced to zero. | Apply only the necessary BCs; you can still fix translations while leaving rotations free. |
+| 7 | Nodes have different local axis orientations | The arithmetic mean may be physically meaningless. | Use the MPC only when all nodes share the same orientation, or write a USER‑MPC subroutine that transforms to a common system. |
+
+---  
+
+## 6️⃣  Minimal Working Example (MWE)  
+
+Save the block below as **`meanrot.inp`** and run it (Standard or Explicit – the same syntax works).
+
+```abaqus
+*Heading
+** Example: mean‑rotation MPC (Abaqus/Standard)
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+262, 0., 0., 0.   ; reference node (must NOT be in CN7)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=CN7
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+*Boundary
+262, 1, 3, 0.0   ; fix translations of the reference node (UR1‑UR3 stay free)
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation of 0.05 rad about all three local axes on node 101
+*End Step
+```  
+
+### What you will see  
+
+| Node | UR1 | UR2 | UR3 |
+|------|-----|-----|-----|
+| 101 | 0.05 (prescribed) | 0.05 | 0.05 |
+| 102‑104 | whatever the beam transmits (≈ 0.05 if the beam is stiff) |
+| **262** (reference) | ≈ (UR1₁+UR1₂+UR1₃+UR1₄)/4 | same for UR2 | same for UR3 |
+
+Open the resulting **`.odb`** in Abaqus/Viewer, plot **UR1‑UR3** for node 262 and verify that they equal the arithmetic mean of the four beam nodes.
+
+---  
+
+## 7️⃣  Quick‑copy‑paste **check‑list**  
+
+```text
+[ ] 1️⃣  Create a node set (NSET) that contains the nodes to be averaged.
+[ ] 2️⃣  Choose a reference node that is NOT in that set.
+[ ] 3️⃣  Verify that the model uses elements with UR1‑UR3 (3‑D beams, shells, solids).
+[ ] 4️⃣  Insert the MPC line **before the first *STEP**:
+
+    *MPC, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 5️⃣  (Optional) If you need the constraint only for a particular step, add at the end of that step:
+
+    *MPC, OP=DELETE, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 6️⃣  Run the job.
+[ ] 7️⃣  Post‑process: open the .odb, plot UR1‑UR3 of the reference node, or extract with Python:
+
+    from odbAccess import *
+    odb = openOdb('meanrot.odb')
+    step = odb.steps['Step-1']
+    frame = step.frames[-1]
+    # adjust instance name and node label as needed
+    refNode = odb.rootAssembly.instances['PART-1-1'].nodes[261]   # node 262 → index 261
+    ur = frame.fieldOutputs['UR'].getSubset(region=refNode).values[0].data
+    print('UR1,UR2,UR3 =', ur)
+    odb.close()
+```  
+
+---  
+
+## 8️⃣  Extra notes (optional but often useful)
+
+| Topic | When you might need it | How to do it |
+|-------|------------------------|--------------|
+| **Abaqus/Explicit** | Same syntax works; just place the `*MPC` line before the first `*Dynamic` step. | No change needed. |
+| **Rigid body coupling** | You can attach the reference node to a rigid body via `*Rigid Body` and still keep the mean‑rotation constraint. | Define the rigid body, then add the `*MPC` line; the reference node will move as part of the rigid body while its rotations are the averaged value. |
+| **Weighted averaging** | Abaqus does **not** provide a weighted mean‑rotation MPC. | Write a USER‑MPC subroutine (`*MPC, USER`) in Fortran and implement the weighting yourself (see the Abaqus manual). |
+| **Large node sets** | No performance penalty – the MPC is assembled as a single equation. | Define the set efficiently (e.g., via `*Elset` → `*Generate`). |
+
+---  
+
+### TL;DR (the 30‑second version)
+
+1. **Define a node set** (`CN7`) that contains the nodes whose rotations you want to average.  
+2. **Pick a reference node** (`262`) that is **not** in that set.  
+3. **Insert a single line** **before the first `*STEP`**:
+
+   ```abaqus
+   *MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+   ```
+
+Abaqus will then enforce  
+
+\[
+\text{UR}_k^{262}= \frac{1}{N}\sum_{i\in\text{CN7}}\text{UR}_k^{(i)}\qquad(k=1,2,3)
+\]
+
+If you hit any of the pitfalls listed above, adjust the model accordingly.  
+
+Feel free to ask for more details – e.g., how to pull the averaged rotation into a Python post‑processor, how to combine the MPC with a rigid body, or how to use it in an explicit dynamic analysis. Happy modelling!
+A: Below is a **copy‑and‑paste‑ready** guide that walks you through everything you need to create a **MEAN‑ROTATION MPC** in Abaqus/Standard (the same steps work for Abaqus/Explicit).  
+It follows exactly the order you asked for:
+
+* objects that must exist  
+* card syntax  
+* where to place the card  
+* what the constraint does  
+* common pitfalls & fixes  
+* a minimal working example (MWE) you can run immediately  
+* a quick‑check‑list you can tick off in the editor  
+
+---  
+
+## 1️⃣  Objects that **must exist** before you write the MPC card  
+
+| # | Object | Input‑file syntax | Remarks / requirements |
+|---|--------|-------------------|------------------------|
+| 1 | **Node set** (`NSET`) – the nodes whose rotations will be averaged | `*Nset, nset=<set‑name>`  <br>followed by a comma‑separated list of node labels (or create it in the GUI) | • Must contain **≥ 2** nodes. <br>• All nodes must belong to elements that have rotational DOFs (UR1‑UR3). |
+| 2 | **Reference node** – the node that will receive the averaged rotation | Define it in the `*Node` section like any other node, e.g. `262, 0., 0., 0.` | • **Must NOT** be part of the node set above. <br>• It can be a dummy node that is otherwise unused, but it must exist. |
+| 3 | **Elements that support UR1‑UR3** | 3‑D beam (`B31`, `B32`, …), shell (`S4`, `S8R`, …) or solid (`C3D8`, `C3D20R`, …) elements. | If you only have 2‑D trusses, axisymmetric elements, or point masses the MPC will be ignored because those elements have no rotational DOFs. |
+
+> **Tip (GUI)** – Create the node set with *Tools → Set → Create → Node* and pick the nodes. The reference node can be created with *Part → Create → Node* and simply **not** added to the set.
+
+---  
+
+## 2️⃣  Exact card syntax  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<node‑set‑name>, REF NODE=<reference‑node‑label>
+```  
+
+*No data lines follow the card* – the whole definition lives on that single line.
+
+| Keyword | Meaning |
+|---------|---------|
+| `TYPE=MEANROT` | Use the mean‑rotation formulation. |
+| `NSET=` | Name of the node set that will be averaged. |
+| `REF NODE=` | Label of the reference node that will receive the average. |
+
+---  
+
+## 3️⃣  Where to place the card  
+
+| Situation | Where to put the line |
+|-----------|-----------------------|
+| **Global constraint** (active for every step) | **Before the first `*STEP`** in the model definition section. |
+| **Constraint needed only for a particular step** | Define it before the step, then delete it at the end of that step with `OP=DELETE` (see §5). |
+
+### Typical location in an input file
+
+```text
+*Heading
+...
+*Node
+...                ; all nodes, including the reference node
+*Nset, nset=CN7
+101, 102, 103, 104 ; nodes whose rotations will be averaged
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; <<< ONE‑LINE definition
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+```  
+
+### Deleting the MPC after a step (optional)
+
+If you only need the mean‑rotation for *Step‑1*:
+
+```abaqus
+*Step, name=Step-1, nlgeom=NO
+...
+*End Step
+*MPC, OP=DELETE, TYPE=MEANROT, NSET=CN7, REF NODE=262   ; turns it off for later steps
+```  
+
+---  
+
+## 4️⃣  What the constraint **does**  
+
+For each rotational component *k* (k = 1, 2, 3)
+
+\[
+\boxed{\; \text{UR}_k^{\text{(ref)}} \;=\; \frac{1}{N}\sum_{i=1}^{N}\text{UR}_k^{(i)} \;}
+\]
+
+* \(N\) – number of nodes in the set `CN7`.  
+* \(\text{UR}_k^{(i)}\) – rotation of node *i* about its local axis *k*.  
+* \(\text{UR}_k^{\text{(ref)}}\) – rotation of the reference node (node 262 in the example).
+
+The reference node **inherits the arithmetic mean** of the three rotational DOFs of all nodes in the set.  
+The MPC is *kinematic* – it does **not** add stiffness, it only enforces the equality at the algebraic level.
+
+---  
+
+## 5️⃣  Common pitfalls & how to avoid them  
+
+| # | Problem | Abaqus symptom / message | Fix |
+|---|---------|--------------------------|-----|
+| 1 | Reference node also appears in the NSET | Abort: *“Reference node cannot be in the node set”* | Choose a different node label for the reference node, or remove it from the set. |
+| 2 | Node set empty or contains only one node | Warning that the average is ill‑defined; the MPC may be ignored. | Ensure the set has **≥ 2** nodes. |
+| 3 | Elements without rotational DOFs (e.g., 2‑D trusses) | The MPC silently does nothing – you see no effect on the reference node. | Use 3‑D beam, shell, or solid elements that support UR1‑UR3. |
+| 4 | Card placed inside a `*STEP` block | “Undefined MPC” or the constraint is ignored. | Move the `*MPC` line to the model definition section (before the first `*STEP`). |
+| 5 | Constraint left active when only needed for one step | Over‑constrains later steps. | Add a `*MPC, OP=DELETE …` line at the end of the step where you no longer need it. |
+| 6 | Reference node over‑constrained by other BCs (e.g., also fixed in rotation) | Averaged rotation forced to zero. | Apply only the necessary BCs; you can still fix translations while leaving rotations free. |
+| 7 | Nodes have different local axis orientations | The arithmetic mean may be physically meaningless. | Use the MPC only when all nodes share the same orientation, or write a USER‑MPC subroutine that transforms to a common system. |
+
+---  
+
+## 6️⃣  Minimal Working Example (MWE)  
+
+Save the block below as **`meanrot.inp`** and run it (Standard or Explicit – the same syntax works).
+
+```abaqus
+*Heading
+** Example: mean‑rotation MPC (Abaqus/Standard)
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+101, 0., 0., 0.
+102, 10., 0., 0.
+103, 20., 0., 0.
+104, 30., 0., 0.
+262, 0., 0., 0.   ; reference node (must NOT be in CN7)
+
+*Element, type=B31
+1, 101, 102
+2, 102, 103
+3, 103, 104
+
+*Nset, nset=CN7
+101, 102, 103, 104
+
+*MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+
+*Boundary
+262, 1, 3, 0.0   ; fix translations of the reference node (UR1‑UR3 stay free)
+
+*Step, name=Step-1, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*Boundary
+101, 4, 6, 0.05   ; prescribe a rotation of 0.05 rad about all three local axes on node 101
+*End Step
+```  
+
+### What you will see  
+
+| Node | UR1 | UR2 | UR3 |
+|------|-----|-----|-----|
+| 101 | 0.05 (prescribed) | 0.05 | 0.05 |
+| 102‑104 | whatever the beam transmits (≈ 0.05 if the beam is stiff) |
+| **262** (reference) | ≈ (UR1₁+UR1₂+UR1₃+UR1₄)/4 | same for UR2 | same for UR3 |
+
+Open the resulting **`.odb`** in Abaqus/Viewer, plot **UR1‑UR3** for node 262 and verify that they equal the arithmetic mean of the four beam nodes.
+
+---  
+
+## 7️⃣  Quick‑copy‑paste **check‑list**  
+
+```text
+[ ] 1️⃣  Create a node set (NSET) that contains the nodes to be averaged.
+[ ] 2️⃣  Choose a reference node that is NOT in that set.
+[ ] 3️⃣  Verify that the model uses elements with UR1‑UR3 (3‑D beams, shells, solids).
+[ ] 4️⃣  Insert the MPC line **before the first *STEP**:
+
+    *MPC, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 5️⃣  (Optional) If you need the constraint only for a particular step, add at the end of that step:
+
+    *MPC, OP=DELETE, TYPE=MEANROT, NSET=<your‑set>, REF NODE=<ref‑node>
+
+[ ] 6️⃣  Run the job.
+[ ] 7️⃣  Post‑process: open the .odb, plot UR1‑UR3 of the reference node, or extract with Python:
+
+    from odbAccess import *
+    odb = openOdb('meanrot.odb')
+    step = odb.steps['Step-1']
+    frame = step.frames[-1]
+    # adjust instance name and node label as needed
+    refNode = odb.rootAssembly.instances['PART-1-1'].nodes[261]   # node 262 → index 261
+    ur = frame.fieldOutputs['UR'].getSubset(region=refNode).values[0].data
+    print('UR1,UR2,UR3 =', ur)
+    odb.close()
+```  
+
+---  
+
+## 8️⃣  Extra notes (optional but often useful)
+
+| Topic | When you might need it | How to do it |
+|-------|------------------------|--------------|
+| **Abaqus/Explicit** | Same syntax works; just place the `*MPC` line before the first `*Dynamic` step. | No change needed. |
+| **Rigid body coupling** | You can attach the reference node to a rigid body via `*Rigid Body` and still keep the mean‑rotation constraint. | Define the rigid body, then add the `*MPC` line; the reference node will move as part of the rigid body while its rotations are the averaged value. |
+| **Weighted averaging** | Abaqus does **not** provide a weighted mean‑rotation MPC. | Write a USER‑MPC subroutine (`*MPC, USER`) in Fortran and implement the weighting yourself (see the Abaqus manual). |
+| **Large node sets** | No performance penalty – the MPC is assembled as a single equation. | Define the set efficiently (e.g., via `*Elset` → `*Generate`). |
+
+---  
+
+### TL;DR (the 30‑second version)
+
+1. **Define a node set** (`CN7`) that contains the nodes whose rotations you want to average.  
+2. **Pick a reference node** (`262`) that is **not** in that set.  
+3. **Insert a single line** **before the first `*STEP`**:
+
+   ```abaqus
+   *MPC, TYPE=MEANROT, NSET=CN7, REF NODE=262
+   ```
+
+Abaqus will then enforce  
+
+\[
+\text{UR}_k^{262}= \frac{1}{N}\sum_{i\in\text{CN7}}\text{UR}_k^{(i)}\qquad(k=1,2,3)
+\]
+
+If you hit any of the pitfalls listed above, adjust the model accordingly.  
+
+Feel free to ask for more details – e.g., how to pull the averaged rotation into a Python post‑processor, how to combine the MPC with a rigid body, or how to use it in an explicit dynamic analysis. Happy modelling!
+

@@ -1,0 +1,129 @@
+Solve the PDE u_t = -q1 * d/dx(sin(u)) + (q2/pi) * u_xx numerically using the specifications below.
+
+Use Python with NumPy for all computations.
+
+The PDE is u_t = -1.0 * d/dx(sin(u)) + (0.05/pi) * u_xx.
+
+The spatial domain is [0, 1) with periodic boundary conditions.
+The time domain is [0, 0.5].
+
+Set q1 = 1.0 and q2 = 0.05.
+
+Use a uniform periodic grid with Nx = 1024 points.
+Set dx = 1.0 / Nx.
+Set x_j = j * dx for j = 0, 1, ..., Nx-1.
+
+Apply the initial condition u(x, 0) = 0.5 * sin(2 * pi * x) on all grid points.
+
+Discretize d/dx(sin(u)) using a conservative finite-volume Rusanov flux.
+At each cell interface between cell j and cell j+1, compute the Rusanov flux as F_{j+1/2} = 0.5 * (sin(u_j) + sin(u_{j+1})) - 0.5 * alpha * (u_{j+1} - u_j), where alpha = max(|cos(u_j)|, |cos(u_{j+1})|) evaluated locally at each interface.
+Compute the flux divergence at cell j as (F_{j+1/2} - F_{j-1/2}) / dx.
+Use periodic indexing so that index Nx wraps to 0 and index -1 wraps to Nx-1.
+
+Discretize u_xx using second-order central differences: u_xx at j = (u_{j+1} - 2*u_j + u_{j-1}) / dx**2, with periodic indexing.
+
+Compute the time step as follows.
+Set dt_adv = 0.2 * dx / 1.0.
+Set dt_diff = 0.2 * dx**2 / (q2 / pi).
+Set dt = min(dt_adv, dt_diff).
+Set Nt = ceil(T / dt) where T = 0.5.
+Redefine dt = T / Nt so the final step lands exactly at T = 0.5.
+
+Integrate in time using SSP-RK2 (Shu-Osher two-stage scheme).
+For each time step from n = 0 to Nt-1, compute the RHS L(u) = -q1 * flux_divergence(u) + (q2/pi) * u_xx(u).
+Stage 1: u_star = u_n + dt * L(u_n).
+Stage 2: u_{n+1} = 0.5 * u_n + 0.5 * (u_star + dt * L(u_star)).
+
+After completing all Nt time steps, the solution u represents u(x, T=0.5).
+
+Print min(u), max(u), mean(u), and the discrete L2 norm computed as sqrt(sum(u**2) * dx).
+
+No exact solution is provided, so skip the error computation step.
+
+Save a file named "solution_molk_029.npz" using numpy.savez.
+The file must contain the array x of length Nx, the array u of length Nx, and the scalars T=0.5, dx, Nx, q1=1.0, q2=0.05.
+
+Save a line plot of u versus x at T=0.5 as "solution_molk_029.png".
+Label the x-axis as "x", the y-axis as "u(x, T=0.5)", and title the plot "Solution at T=0.5".
+
+Below is the complete Python code implementing all of the above.
+
+```python
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+# Parameters
+q1 = 1.0
+q2 = 0.05
+T  = 0.5
+Nx = 1024
+
+# Grid
+dx = 1.0 / Nx
+x  = np.arange(Nx) * dx   # x_j = j*dx, j=0..Nx-1
+
+# Initial condition
+u = 0.5 * np.sin(2.0 * np.pi * x)
+
+# Time step
+dt_adv  = 0.2 * dx / 1.0
+dt_diff = 0.2 * dx**2 / (q2 / np.pi)
+dt      = min(dt_adv, dt_diff)
+Nt      = int(np.ceil(T / dt))
+dt      = T / Nt
+
+def rhs(u):
+    # --- Rusanov flux for d/dx(sin(u)) ---
+    # Interface j+1/2 is between cell j and cell j+1
+    u_L = u                          # left state at interface j+1/2
+    u_R = np.roll(u, -1)             # right state at interface j+1/2 (periodic)
+
+    sin_L = np.sin(u_L)
+    sin_R = np.sin(u_R)
+
+    # Local wave speed at each interface
+    alpha_face = np.maximum(np.abs(np.cos(u_L)), np.abs(np.cos(u_R)))
+
+    F_right = 0.5 * (sin_L + sin_R) - 0.5 * alpha_face * (u_R - u_L)  # F_{j+1/2}
+    F_left  = np.roll(F_right, 1)                                        # F_{j-1/2}
+
+    flux_div = (F_right - F_left) / dx
+
+    # --- Central difference for u_xx ---
+    u_xx = (np.roll(u, -1) - 2.0 * u + np.roll(u, 1)) / dx**2
+
+    return -q1 * flux_div + (q2 / np.pi) * u_xx
+
+# SSP-RK2 time integration
+for _ in range(Nt):
+    L1     = rhs(u)
+    u_star = u + dt * L1
+    L2     = rhs(u_star)
+    u      = 0.5 * u + 0.5 * (u_star + dt * L2)
+
+# Diagnostics
+print(f"min(u)  = {np.min(u):.6e}")
+print(f"max(u)  = {np.max(u):.6e}")
+print(f"mean(u) = {np.mean(u):.6e}")
+L2_norm = np.sqrt(np.sum(u**2) * dx)
+print(f"L2 norm = {L2_norm:.6e}")
+
+# Save .npz
+np.savez("solution_molk_029.npz",
+         x=x, u=u,
+         T=T, dx=dx, Nx=Nx,
+         q1=q1, q2=q2)
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u, linewidth=1.0)
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T=0.5)")
+ax.set_title("Solution at T=0.5")
+ax.grid(True)
+plt.tight_layout()
+plt.savefig("solution_molk_029.png", dpi=150)
+plt.close()
+```

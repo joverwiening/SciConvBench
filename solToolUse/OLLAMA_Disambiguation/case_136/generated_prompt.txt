@@ -1,0 +1,182 @@
+Below is a **complete, ready‑to‑use guide** for turning the data written by Abaqus with  
+
+```abaqus
+*CONTACT FILE, OUTPUT=CDIS, CSTRE, CAREA
+```  
+
+into the **resultant normal contact force** and the **average contact pressure** for the whole contact pair.
+
+---
+
+## 1. What the file contains  
+
+| Column | Variable | Meaning (per contact point) | Sign convention | Units (same as model) |
+|--------|----------|-----------------------------|-----------------|-----------------------|
+| 1      | **CDIS** | Normal gap > 0 or penetration < 0 (measured along the local contact normal). | `+` = gap (faces separated) <br> `‑` = penetration (over‑closure) | Length (mm, m, in, …) |
+| 2      | **CSTRE**| Normal contact pressure (scalar traction) transmitted across the interface. | `+` = compressive pressure (default) <br> `‑` = tensile pressure (only if “allow separation” is active) | Stress (MPa, N mm⁻², psi, …) |
+| 3 *(optional)* | **CAREA**| Surface area that belongs to the same contact point (slave node or integration point). | – | Length² (mm², m², in², …) |
+
+> **Important:** If you do **not** request `CAREA`, the file will have only two columns (CDIS CSTRE) and you can obtain a pressure distribution **but not** a force.
+
+---
+
+## 2. How to request the output in Abaqus  
+
+Add the following line in the step where you want the data (normally the last step).  
+
+```abaqus
+*CONTACT FILE, OUTPUT=CDIS, CSTRE, CAREA
+```  
+
+Abaqus writes the data to a file named **contact.dat** (or the name you give after the keyword).
+
+---
+
+## 3. Reading the file  
+
+Every non‑comment line = one contact point (or integration point).  
+Typical three‑column file (the first line is a comment and can be ignored):
+
+```
+#  CDIS   CSTRE   CAREA
+   0.000  12.5    0.020
+  -0.001   8.3    0.015
+   0.000   0.0    0.018
+```  
+
+**Interpretation of a single line**
+
+| CDIS | CSTRE | Meaning |
+|------|-------|---------|
+| 0    | >0   | Closed contact, compressive pressure transmitted. |
+| >0   | 0    | Gap – faces are separated, no normal pressure. |
+| <0   | >0   | Penetration – algorithm pushes the slave out. |
+| >0   | <0   | Tensile pressure (only if “allow separation” is on). |
+| any  | 0    | Friction‑only (no normal traction). |
+
+---
+
+## 4. From pressure to a **resultant normal contact force**
+
+`CSTRE` is a **pressure** (force / area).  
+To obtain a **force** you must multiply it by the **area belonging to the same point** (`CAREA`).
+
+\[
+\boxed{F_{\text{total}} \;=\; \sum_{i=1}^{N}\bigl(\text{CSTRE}_i \times \text{CAREA}_i\bigr)}
+\]
+
+* `F_total` – resultant normal force transmitted across the whole contact pair (force units, e.g. N).
+
+If you only need an **average pressure** over the whole interface:
+
+\[
+\boxed{\bar p \;=\; \frac{\displaystyle\sum_i \text{CSTRE}_i\,\text{CAREA}_i}{\displaystyle\sum_i \text{CAREA}_i}}
+\]
+
+---
+
+## 5. Quick sanity‑check (hand‑calculated)
+
+Using the three lines shown above:
+
+| i | CSTRE (MPa) | CAREA (mm²) | CSTRE × CAREA (N) |
+|---|------------|------------|-------------------|
+| 1 | 12.5       | 0.020      | 0.250 |
+| 2 | 8.3        | 0.015      | 0.1245 |
+| 3 | 0.0        | 0.018      | 0.0   |
+| **Σ** | – | – | **0.3745 N** |
+
+Total contact area = 0.020 + 0.015 + 0.018 = **0.053 mm²**  
+
+Average pressure = 0.3745 N / 0.053 mm² = **7.07 MPa** – exactly what the script below prints.
+
+---
+
+## 6. Ready‑to‑run Python post‑processor  
+
+```python
+#!/usr/bin/env python
+# --------------------------------------------------------------
+#   Convert Abaqus *CONTACT FILE output (CDIS, CSTRE, CAREA)
+#   into total normal contact force and average pressure.
+# --------------------------------------------------------------
+
+import numpy as np
+import pathlib
+
+# --------------------------------------------------------------
+# 1) File name (change if you used a different name)
+# --------------------------------------------------------------
+file_name = pathlib.Path('contact.dat')   # <-- edit if needed
+
+# --------------------------------------------------------------
+# 2) Load the data (skip comment lines that start with '#')
+# --------------------------------------------------------------
+# The file must contain at least three columns: CDIS CSTRE CAREA
+data = np.loadtxt(file_name, comments='#')
+
+# --------------------------------------------------------------
+# 3) Unpack columns
+# --------------------------------------------------------------
+cdis, cstre, carea = data.T   # CDIS, CSTRE, CAREA
+
+# --------------------------------------------------------------
+# 4) Force contributed by each contact point (pressure * area)
+# --------------------------------------------------------------
+force_per_point = cstre * carea
+
+# --------------------------------------------------------------
+# 5) Global quantities
+# --------------------------------------------------------------
+F_total   = force_per_point.sum()          # total normal force
+area_tot  = carea.sum()                    # total contact area
+p_average = force_per_point.sum() / area_tot   # average pressure
+
+# --------------------------------------------------------------
+# 6) Print results (units are the same as those used in the model)
+# --------------------------------------------------------------
+print(f"Total normal contact force = {F_total:.6g}  (force units)")
+print(f"Total contact area        = {area_tot:.6g}  (area units)")
+print(f"Average pressure          = {p_average:.6g}  (stress units)")
+```
+
+**What the script does**
+
+1. Loads the file, ignoring any line that begins with `#`.  
+2. Separates the three columns into `cdis`, `cstre`, `carea`.  
+3. Computes the force contributed by each point (`cstre * carea`).  
+4. Sums those contributions → `F_total`.  
+5. Divides the summed force by the summed area → `p_average`.  
+6. Prints the three engineering‑ready numbers.
+
+Run the script in the same folder as `contact.dat`. The output will be in the same units you used for the model (e.g. N, mm², MPa).
+
+---
+
+## 7. Post‑processing checklist (quick reference)
+
+| # | Action | Abaqus tip / comment |
+|---|--------|----------------------|
+| 1 | Request `CDIS, CSTRE, CAREA` in the step of interest | `*CONTACT FILE, OUTPUT=CDIS, CSTRE, CAREA` |
+| 2 | Run the analysis → file `contact.dat` (or your chosen name) | Verify the file appears in the `.dat` folder. |
+| 3 | Load the file with the script above (or MATLAB/Excel) | Ensure three columns are present; otherwise add `CAREA`. |
+| 4 | Compute `F_i = CSTRE_i * CAREA_i` | Positive → net compression, negative → net tension (only if separation allowed). |
+| 5 | Sum → `F_total = ΣF_i` | Compare with reaction forces at supports for validation. |
+| 6 | Compute average pressure → `p_avg = ΣF_i / ΣCAREA_i` | Useful for reporting a single “contact pressure” value. |
+| 7 | (Optional) Plot `CSTRE` vs. `CDIS` to visualise the contact law | Helpful for checking whether the contact is fully closed or partially open. |
+
+---
+
+## 8. Bottom line – the “complete requirement”
+
+| Symbol | Meaning | How to use it |
+|--------|---------|---------------|
+| **CDIS** | Normal gap (>0) or penetration (<0). | Diagnose open/closed/penetrating regions. |
+| **CSTRE**| Normal contact pressure (compressive = positive). | Multiply by **CAREA** to obtain a force contribution. |
+| **CAREA**| Contact area belonging to the point. | Needed to convert pressure → force and to compute an average pressure. |
+| **F_total**| Σ(CSTRE × CAREA) | Global normal contact force transmitted across the pair. |
+| **p_avg**| Σ(CSTRE × CAREA) / Σ(CAREA) | Mean pressure over the whole contact surface. |
+
+With the column definitions, the analytical formulas, the checklist, and the ready‑to‑run Python script you now have **everything** required to read an Abaqus `*CONTACT FILE` and obtain both the **resultant normal contact force** and the **average contact pressure** in a matter of seconds.  
+
+**Happy analysing!**

@@ -1,0 +1,109 @@
+Solve the heat equation u_t = 0.2 * u_xx numerically using the Crank-Nicolson method and save the results.
+
+PDE is u_t = 0.2 * u_xx with alpha = 0.2.
+Spatial domain is x in [0, 1], temporal domain is t in [0, 0.3].
+Use Nx = 300 uniform intervals so there are 301 grid points including both endpoints.
+Set dx = 1/300.
+Set dt = 0.0005 with 600 time steps so T_final = 0.3.
+Grid points are x_i = i * dx for i = 0, 1, ..., 300.
+
+Apply Dirichlet boundary conditions: u(0, t) = 0 and u(1, t) = 0 at all times.
+Set the initial condition u(x, 0) = exp(-0.2 * pi**2 * 0) * sin(pi * x) + 0.5 * exp(-0.2 * (3*pi)**2 * 0) * sin(3*pi*x), which simplifies to sin(pi*x) + 0.5*sin(3*pi*x).
+
+Use second-order central differences for u_xx on interior nodes.
+Use the Crank-Nicolson scheme: form the tridiagonal system (I - 0.5*dt*alpha*D2) * u_new = (I + 0.5*dt*alpha*D2) * u_old for interior nodes at each time step.
+Fix boundary nodes u[0] = 0 and u[300] = 0 at every time step by not including them in the linear system.
+Solve the resulting tridiagonal linear system at each of the 600 time steps using scipy.linalg.solve_banded or scipy.sparse.linalg.spsolve.
+
+After all time steps, evaluate the exact solution u_exact(x, T) = exp(-0.2*pi**2*0.3)*sin(pi*x) + 0.5*exp(-0.2*(3*pi)**2*0.3)*sin(3*pi*x) on the same 301-point grid.
+
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2) * dx) of the numerical solution at T = 0.3.
+Print the max absolute error max(abs(u_numerical - u_exact)) and the L2 error sqrt(sum((u_numerical - u_exact)**2) * dx).
+
+Save a file named "solution_agent_heat_03.npz" containing: array x of shape (301,), array u of shape (301,) holding the numerical solution at T = 0.3, and scalar metadata T = 0.3, dx = 1/300, dt = 0.0005.
+Save a line plot of u(x, T=0.3) versus x as "solution_agent_heat_03.png" with labeled axes.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.sparse import diags
+from scipy.sparse.linalg import spsolve
+
+# Parameters
+alpha = 0.2
+Nx = 300
+dx = 1.0 / Nx
+dt = 0.0005
+Nt = 600
+T_final = dt * Nt  # = 0.3
+
+# Grid
+x = np.linspace(0, 1, Nx + 1)  # 301 points
+
+# Initial condition
+u = np.sin(np.pi * x) + 0.5 * np.sin(3 * np.pi * x)
+
+# Interior indices
+n_int = Nx - 1  # 299 interior points (indices 1..299)
+
+# Crank-Nicolson coefficient
+r = alpha * dt / (2.0 * dx**2)
+
+# Build tridiagonal matrices for interior nodes
+# LHS: I - r * D2  (implicit part)
+# RHS: I + r * D2  (explicit part)
+diag_main = (1 + 2 * r) * np.ones(n_int)
+diag_off  = -r * np.ones(n_int - 1)
+A = diags([diag_off, diag_main, diag_off], [-1, 0, 1], format='csr')
+
+diag_main_rhs = (1 - 2 * r) * np.ones(n_int)
+diag_off_rhs  = r * np.ones(n_int - 1)
+B = diags([diag_off_rhs, diag_main_rhs, diag_off_rhs], [-1, 0, 1], format='csr')
+
+# Time integration
+for _ in range(Nt):
+    u_int = u[1:Nx]  # interior values, length 299
+    rhs = B.dot(u_int)
+    # Boundary contributions are zero (Dirichlet u[0]=u[Nx]=0), so no correction needed
+    u_new_int = spsolve(A, rhs)
+    u[1:Nx] = u_new_int
+    u[0] = 0.0
+    u[Nx] = 0.0
+
+# Exact solution at T = 0.3
+u_exact = (np.exp(-0.2 * np.pi**2 * T_final) * np.sin(np.pi * x) +
+           0.5 * np.exp(-0.2 * (3 * np.pi)**2 * T_final) * np.sin(3 * np.pi * x))
+
+# Diagnostics
+min_u = np.min(u)
+max_u = np.max(u)
+l2_norm = np.sqrt(np.sum(u**2) * dx)
+max_abs_err = np.max(np.abs(u - u_exact))
+l2_err = np.sqrt(np.sum((u - u_exact)**2) * dx)
+
+print(f"min(u)       = {min_u:.6e}")
+print(f"max(u)       = {max_u:.6e}")
+print(f"L2 norm(u)   = {l2_norm:.6e}")
+print(f"Max abs error= {max_abs_err:.6e}")
+print(f"L2 error     = {l2_err:.6e}")
+
+# Save .npz
+np.savez("solution_agent_heat_03.npz",
+         x=x, u=u,
+         T=np.float64(T_final),
+         dx=np.float64(dx),
+         dt=np.float64(dt))
+
+# Save plot
+plt.figure(figsize=(8, 5))
+plt.plot(x, u, label=f"Numerical u(x, T={T_final})", linewidth=2)
+plt.plot(x, u_exact, '--', label="Exact solution", linewidth=1.5)
+plt.xlabel("x")
+plt.ylabel("u(x, T)")
+plt.title(f"Heat Equation Solution at T={T_final} (Crank-Nicolson)")
+plt.legend()
+plt.tight_layout()
+plt.savefig("solution_agent_heat_03.png", dpi=150)
+plt.close()
+print("Files saved: solution_agent_heat_03.npz, solution_agent_heat_03.png")
+```

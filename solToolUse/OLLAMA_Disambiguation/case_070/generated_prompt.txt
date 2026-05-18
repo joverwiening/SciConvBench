@@ -1,0 +1,154 @@
+## 🎯 What you really have to edit – **only two lines**  
+
+| Line in the file | What it does | What you must replace (your values) |
+|------------------|--------------|--------------------------------------|
+| `*NODE, NSET=CLAMPED_NODES`  <br> `1,3,5,7` | Creates a **node‑set** that contains **every node on the clamped face (X = 0)**. | **All node IDs whose X‑coordinate = 0** for your model.  Use a comma‑separated list (e.g. `12,15,18,…`) **or** the `GENERATE` syntax (`start, end, inc`). |
+| `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` <br> `1, S2` | Defines the **surface** on which the pressure is applied – the **+X face of the tip element**. | **The element ID that owns the free‑end (+X) face** of your cantilever.  The face label for the +X side of a C3D8R brick is always `S2`. |
+
+> **All other lines in the file can stay exactly as they are.**  
+> If your geometry *is* the 20 × 10 × 5 mm block shown in the example, you can run the file **without any edits**.
+
+---
+
+## 1️⃣ How to obtain the two numbers for **any** cantilever geometry  
+
+| What you need | How to get it in Abaqus/CAE (or via a small script) |
+|---------------|----------------------------------------------------|
+| **All node IDs on the X = 0 face** | 1. Open the part in the **Part** module.<br>2. **Tools → Set → Create → Nodes → By Coordinate → X = 0**.<br>3. Give the set a name (e.g. `CLAMPED`).<br>4. In the model tree, right‑click the set → **Export → Node**.<br>5. Copy the list that appears. <br>   *If the list is long you can replace it with a `GENERATE` range, e.g. `1, 200, 1`.* |
+| **Element ID that owns the +X face at the free end** | 1. Switch to the **Assembly** (or **Part**) viewport.<br>2. Use **Query → Pick** (or simply hover over the element) and note the **element number** whose centroid has the **largest X‑coordinate** (the tip of the cantilever).<br>3. That number is the one you write in the surface definition. <br>   *For a C3D8R brick the +X face is always `S2` – you do **not** have to change the face label.* |
+
+---
+
+## 2️⃣ Ready‑to‑paste input file (with placeholder tags)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+** (your node list – keep exactly as you have it)
+** -------------------------------------------------
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+** (your element list – keep exactly as you have it)
+** -------------------------------------------------
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+** <<< REPLACE THE LINE BELOW WITH ALL NODE IDs whose X = 0 >>>
+** Example for the 20 × 10 × 5 mm block: 1,3,5,7
+<YOUR_NODE_ID_LIST>
+*END NODE
+
+**---  Surface for the pressure (positive X face of the tip element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+** <<< REPLACE <ELEMENT_ID> WITH THE ID OF THE TIP ELEMENT >>>
+** The face label for the +X side of a C3D8R brick is always S2.
+<ELEMENT_ID>, S2
+*END SURFACE
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+---
+
+## 3️⃣ What to do next  
+
+1. **Open the file** in any plain‑text editor (Notepad, VS Code, etc.).  
+2. **Replace `<YOUR_NODE_ID_LIST>`** with the comma‑separated list (or `GENERATE` range) of **all node IDs whose X‑coordinate is 0**.  
+3. **Replace `<ELEMENT_ID>`** with the **element number** that owns the free‑end (+X) face.  
+4. Save the file, e.g. `cantilever.inp`.  
+5. Run the job in Abaqus/Standard  
+
+```bash
+abaqus job=cantilever input=cantilever.inp
+```
+
+---
+
+## 4️⃣ Quick post‑run sanity check  
+
+| What to look for | How to verify |
+|------------------|---------------|
+| **Plastic strain (`PEEQ`)** appears near the clamp and grows towards the tip | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeds 250 MPa in the same region | *Result → Field Output → S, MISES* |
+| **Reaction force** curve shows an elastic‑to‑plastic transition | *Result → History Output → RF* |
+| **Zero plastic strain** (something went wrong) | Re‑check the two edited lines, the `*BOUNDARY` and `*DLOAD` definitions, and ensure the mesh is not too coarse. |
+
+If plasticity is missing, try one (or more) of the following:
+
+* **Refine the mesh** (especially through the thickness – 2 – 3 elements is a good start).  
+* **Reduce the initial increment** in the `*STATIC` line, e.g. `0.1, 0.5, 1e‑05, 1.`.  
+* Verify that the `*PLASTIC` block is exactly as shown (stress, plastic‑strain pairs, commas).  
+
+---
+
+## 5️⃣ TL;DR – “one‑line” summary  
+
+```text
+*NODE, NSET=CLAMPED_NODES
+<list‑of‑all‑nodes‑with‑X=0>
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+<ELEMENT‑ID‑of‑tip>, S2
+```  
+
+Everything else stays unchanged. Paste the file, replace the two placeholders, run the job, and you’ll obtain the elastic‑plastic response of your cantilever.
+
+**Happy modelling!**

@@ -1,0 +1,1797 @@
+=== 2026-04-17 21:56:01 ===
+Q: `*STEP` in the input file does not contain any **output requests** (field or history) and it also does not contain any loads or boundary conditions.  
+When the step finishes Abaqus writes an ODB that contains only the default
+output (which, for a static step with no loads, is essentially empty).  
+Consequently the ODB has **no data for the nodes that belong to the set
+`LAST`**.  
+
+When you try to display a result (e.g. a displacement, stress, or a history
+variable) for that node set Abaqus looks for the requested data in the ODB,
+doesn’t find it and issues the message
+
+```
+the data for the specified node is not available
+```
+
+**How to fix it**
+
+1. **Apply a load / boundary condition** (or at least a dummy load) in the
+   step so that the analysis actually solves something.
+
+2. **Request the output you want to plot**, for example  
+
+   ```abaqus
+   *STEP
+   *STATIC
+   *OUTPUT, FIELD
+   *NODE PRINT, NSET=LAST
+   U
+   *END STEP
+   ```
+
+   or, for history output,
+
+   ```abaqus
+   *OUTPUT, HISTORY
+   *NODE PRINT, NSET=LAST
+   U
+   *END STEP
+   ```
+
+   (add any other variables you need – stresses, reaction forces, etc.)
+
+3. Run the analysis again. The ODB will now contain field/history data for
+   the nodes in `LAST`, and you will be able to plot them without the error.
+
+In short, the error is caused by the fact that **no results are written for
+the nodes in the set because the step has no loads and no output requests**. Adding appropriate loads and output requests resolves the problem.
+A: **Why the message appears**
+
+`the data for the specified node is not available` is shown when the ODB does not contain any field or history results for the node set you are trying to display (in your case the set **LAST**).  
+This happens when the step that creates the ODB
+
+* has **no loads or boundary conditions** (so the solver does nothing), **and**
+* has **no output requests** (no *OUTPUT, FIELD* or *OUTPUT, HISTORY* cards).
+
+A static step without loads therefore writes only the default, essentially empty, output. When you later ask Abaqus/CAE to plot a displacement, stress, reaction force, etc. for the nodes in `LAST`, the program looks for that data in the ODB, finds nothing, and issues the error.
+
+---
+
+## How to fix it – complete checklist
+
+| # | Action | What to do | Why it matters |
+|---|--------|------------|----------------|
+| 1 | **Add a load or a boundary condition** (even a dummy one) to the step | ```*STEP<br>*STATIC<br>*CLOAD, NSET=LAST, DOF=1<br>0.0<br>*END STEP``` (or a pressure, displacement, gravity, etc.) | Forces the solver to compute a response, so results are generated. |
+| 2 | **Request the output you need** (field, history, or both) | ```*OUTPUT, FIELD<br>*NODE PRINT, NSET=LAST<br>U<br>*END STEP```<br>or for history: ```*OUTPUT, HISTORY<br>*NODE PRINT, NSET=LAST<br>U<br>*END STEP``` | Tells Abaqus to write the variable(s) (U, S, RF, etc.) for the nodes in `LAST` into the ODB. |
+| 3 | **Specify the variables you really need** (displacements, stresses, reaction forces, etc.) | Add the variable names after the *NODE PRINT* line, e.g. `U, RF, S`. | Prevents “missing‑data” errors for variables you never asked Abaqus to store. |
+| 4 | **Re‑run the analysis** | Submit the job again (`abaqus job=… interactive` or through CAE). | Generates a new ODB that now contains the requested data. |
+| 5 | **Verify the ODB** (optional but recommended) | Open the ODB in the Visualization module → **Tools → Query** → select the node set `LAST` and the variable you requested. | Confirms that the data are present before you try to plot them. |
+| 6 | **Plot the results** | In the Visualization module, create a contour, XY‑data, or animation for the variable (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example
+
+Below is a tiny, self‑contained input file that reproduces the fix.  
+It defines a simple 2‑node beam, applies a dummy vertical load to node 2, and requests displacement output for the node set `LAST` (which contains node 2).
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static
+*Cload
+2, 2, -100.0          ; vertical load on node 2 (dummy load)
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Running this job (`abaqus job=beam`) produces an ODB that contains `U` for node 2. When you open the ODB and request the displacement of the set `LAST`, Abaqus will display the values without any error.
+
+---
+
+## Common pitfalls & how to avoid them
+
+| Symptom | Cause | Remedy |
+|---------|-------|--------|
+| Still “data not available” after adding a load | No *OUTPUT* card for the variable you are trying to view. | Add the appropriate *NODE PRINT* (or *ELEMENT PRINT*) line for that variable. |
+| ODB is empty even with a load | The step ends before the load is applied (e.g., `*STATIC` with zero time). | Give the step a non‑zero total time (`*STATIC, time=1.0`) or use an *RAMP* load. |
+| Only a subset of nodes have data | Output request uses a different node set or a typo in the set name. | Verify the set name (`*Nset, nset=LAST`) and that the same name is used in the *OUTPUT* card. |
+| Too many variables → huge ODB | Requesting every possible field variable for a large model. | Request only the variables you need; use `*OUTPUT, FIELD, FREQUENCY=1` to limit frequency. |
+| Want results for a *static* analysis but only *history* output is defined | Trying to plot a contour (field) when only history data exist. | Use *OUTPUT, FIELD* for contour plots; use *OUTPUT, HISTORY* for XY‑data over time. |
+
+---
+
+## TL;DR (one‑sentence answer)
+
+The error occurs because the step has no loads and no output requests, so the ODB contains no results for the node set `LAST`; fix it by adding a load (or dummy load) and explicitly requesting the desired field or history output for that set, then rerun the job.
+
+=== 2026-04-17 21:56:36 ===
+Q: **Why the message appears**
+
+`the data for the specified node is not available` is shown when the ODB does not contain any field or history results for the node set you are trying to display (in your case the set **LAST**).  
+In the input file the only step you have is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+which contains **no loads or boundary conditions** and **no output requests**.  
+A static step without loads therefore writes only the default, essentially empty, output. When you later ask Abaqus/CAE to plot a displacement, stress, reaction force, etc. for the nodes in `LAST`, the program looks for that data in the ODB, finds nothing, and issues the error.
+
+---
+
+## How to fix it – complete checklist
+
+| # | Action | What to do | Why it matters |
+|---|--------|------------|----------------|
+| 1 | **Add a load or a boundary condition** (even a dummy one) to the step | ```*STEP<br>*STATIC<br>*CLOAD, NSET=LAST, DOF=1<br>0.0<br>*END STEP``` (or a pressure, displacement, gravity, etc.) | Forces the solver to compute a response, so results are generated. |
+| 2 | **Request the output you need** (field, history, or both) | **Field output** (contour, animation):<br>```*OUTPUT, FIELD<br>*NODE PRINT, NSET=LAST<br>U```<br>**History output** (XY‑data):<br>```*OUTPUT, HISTORY<br>*NODE PRINT, NSET=LAST<br>U``` | Tells Abaqus to write the variable(s) (U, S, RF, etc.) for the nodes in `LAST` into the ODB. |
+| 3 | **Specify the variables you really need** (displacements, stresses, reaction forces, etc.) | Add the variable names after the *NODE PRINT* line, e.g. `U, RF, S`. | Prevents “missing‑data” errors for variables you never asked Abaqus to store. |
+| 4 | **Re‑run the analysis** | Submit the job again (`abaqus job=… interactive` or through CAE). | Generates a new ODB that now contains the requested data. |
+| 5 | **Verify the ODB** (optional) | Open the ODB → **Tools → Query** → select the node set `LAST` and the variable you requested. | Confirms that the data are present before you try to plot them. |
+| 6 | **Plot the results** | In the Visualization module, create a contour, XY‑data, or animation for the variable (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (demonstrates the fix)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Running this job (`abaqus job=beam`) creates an ODB that contains the displacement `U` for node 2. When you open the ODB and request the displacement of the set `LAST`, Abaqus will display the values without any error.
+
+---
+
+## Common pitfalls & how to avoid them
+
+| Symptom | Cause | Remedy |
+|---------|-------|--------|
+| Still “data not available” after adding a load | No *OUTPUT* card for the variable you are trying to view. | Add the appropriate *NODE PRINT* (or *ELEMENT PRINT*) line for that variable. |
+| ODB is empty even with a load | The step ends before the load is applied (e.g., `*STATIC` with zero time). | Give the step a non‑zero total time (`*STATIC, time=1.0`) or use an *RAMP* load. |
+| Only a subset of nodes have data | Output request uses a different node set or a typo in the set name. | Verify the set name (`*Nset, nset=LAST`) and that the same name is used in the *OUTPUT* card. |
+| Too many variables → huge ODB | Requesting every possible field variable for a large model. | Request only the variables you need; use `*OUTPUT, FIELD, FREQUENCY=1` to limit frequency. |
+| Want results for a *static* analysis but only *history* output is defined | Trying to plot a contour (field) when only history data exist. | Use *OUTPUT, FIELD* for contour plots; use *OUTPUT, HISTORY* for XY‑data over time. |
+
+---
+
+### TL;DR (one‑sentence answer)
+
+The error occurs because the step has no loads and no output requests, so the ODB contains no results for the node set `LAST`; fix it by adding a load (or dummy load) and explicitly requesting the desired field or history output for that set, then rerun the job.
+A: **Why the message appears**
+
+`the data for the specified node is not available` is shown when the ODB does not contain any field‑ or history‑output for the node set you are trying to display (in your case the set **LAST**).  
+
+In the input file you posted the only step you defined is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that has **no loads, no boundary conditions and no output requests** produces an ODB that contains only the default, essentially empty, results. When you later ask Abaqus/CAE to plot a displacement, stress, reaction force, etc. for the nodes in `LAST`, the program looks for that data, finds nothing, and raises the error.
+
+---
+
+## How to fix it – complete checklist
+
+| # | Action | What to do | Why it matters |
+|---|--------|------------|----------------|
+| 1 | **Give the step something to solve** | Add at least one load, boundary condition, or prescribed displacement. <br>Example: <br>`*CLOAD, NSET=LAST, DOF=2`<br>`-100.` (vertical load on node set `LAST`) | Forces the solver to compute a response, which creates results. |
+| 2 | **Ask Abaqus to write the results you need** | Insert an *OUTPUT* card for the variable(s) you will later plot. <br>**Field output (contour/animation):** <br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U` <br>**History output (XY‑data):** <br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Without an explicit request Abaqus does not store the variable, so it cannot be displayed later. |
+| 3 | **Specify the exact variable names** | After the `*NODE PRINT` line list the variables you need, e.g. `U, RF, S`. | Prevents “missing‑data” errors for variables you never asked to be written. |
+| 4 | **Give the step a non‑zero duration** (optional but recommended) | `*STATIC, TIME=1.0` or `*STATIC, NLGEOM=NO` | Guarantees that the load is actually applied during the analysis. |
+| 5 | **Re‑run the job** | Submit the job again (`abaqus job=… interactive` or through CAE). | Generates a new ODB that now contains the requested data. |
+| 6 | **Verify the ODB (optional but useful)** | Open the ODB → **Tools → Query** → select node set `LAST` and the variable you requested. | Confirms that the data are present before you try to plot them. |
+| 7 | **Plot the results** | In the Visualization module create a contour, XY‑data, or animation for the variable (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (shows the fix)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement `U` for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Common pitfalls & how to avoid them
+
+| Symptom | Typical cause | How to fix it |
+|---------|----------------|---------------|
+| **Still “data not available” after adding a load** | No *OUTPUT* card for the variable you are trying to view. | Add the appropriate `*NODE PRINT` (or `*ELEMENT PRINT`) line for that variable. |
+| **ODB is empty even though a load is present** | The step ends before the load is applied (e.g., `*STATIC` with zero time). | Give the step a non‑zero total time (`*STATIC, TIME=1.0`) or use a ramped load. |
+| **Only a subset of nodes have data** | Output request uses a different node set or a typo in the set name. | Verify the set name (`*Nset, nset=LAST`) and that the same name is used in the `*OUTPUT` card. |
+| **ODB becomes huge** | Requesting every possible field variable for a large model. | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+| **Trying to plot a contour but only history data exist** | You defined only `*OUTPUT, HISTORY`. | Use `*OUTPUT, FIELD` for contour/animation; use `*OUTPUT, HISTORY` for XY‑data over time. |
+| **Error when plotting reaction forces** | Reaction forces are stored as `RF` and only for nodes with constraints. | Ensure the node set includes constrained nodes and that `RF` is listed in the `*NODE PRINT` line. |
+
+---
+
+### TL;DR (one‑sentence answer)
+
+The error occurs because the step contains no loads and no output requests, so the ODB has no results for the node set `LAST`; fix it by adding a load (or dummy load) and explicitly requesting the desired field or history output for that set, then rerun the job.
+
+=== 2026-04-17 21:57:14 ===
+Q: **Why the message appears**
+
+`the data for the specified node is not available` is shown when the ODB does not contain any field‑ or history‑output for the node (or node set) you are trying to display.  
+
+In the input file you posted the only step you defined is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+That step has **no loads, no boundary conditions and no output requests**.  
+A static step without loads writes only the default (essentially empty) output, so the ODB contains no results for the node set **LAST**. When you later ask CAE to plot a displacement, stress, reaction force, etc. for those nodes, the program looks for the data, finds nothing, and raises the error.
+
+---
+
+## How to fix it – complete checklist
+
+| # | Action | What to do | Why it matters |
+|---|--------|------------|----------------|
+| 1 | **Give the step something to solve** | Add at least one load, prescribed displacement, or constraint. <br>Example (dummy vertical load on the nodes in `LAST`):<br>`*CLOAD, NSET=LAST, DOF=2`<br>`-1.0e‑5` | Forces the solver to compute a response, which creates results. |
+| 2 | **Request the output you need** (field, history, or both) | **Field output** (contour/animation):<br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U` <br>**History output** (XY‑data):<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Without an explicit request Abaqus does not store the variable, so it cannot be displayed later. |
+| 3 | **Specify the exact variable names** | After the `*NODE PRINT` line list the variables you will plot, e.g. `U, RF, S`. | Prevents “missing‑data” errors for variables you never asked to be written. |
+| 4 | **Give the step a non‑zero duration** (optional but recommended) | `*STATIC, TIME=1.0` (or any positive time) | Guarantees that the load is actually applied during the analysis. |
+| 5 | **Re‑run the analysis** | Submit the job again (`abaqus job=… interactive` or through CAE). | Generates a new ODB that now contains the requested data. |
+| 6 | **Verify the ODB (optional)** | Open the ODB → **Tools → Query** → select node set `LAST` and the variable you requested. | Confirms that the data are present before you try to plot them. |
+| 7 | **Plot the results** | In the Visualization module create a contour, XY‑data, or animation for the variable (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (demonstrates the fix)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement `U` for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Common pitfalls & how to avoid them
+
+| Symptom | Typical cause | Fix |
+|---------|----------------|-----|
+| Still “data not available” after adding a load | No *OUTPUT* card for the variable you are trying to view. | Add the appropriate `*NODE PRINT` (or `*ELEMENT PRINT`) line for that variable. |
+| ODB empty even with a load | Step ends before the load is applied (e.g., `*STATIC` with zero time). | Give the step a non‑zero total time (`*STATIC, TIME=1.0`) or use a ramped load. |
+| Only some nodes have data | Output request uses a different node set or a typo in the set name. | Verify the set name (`*Nset, nset=LAST`) and that the same name is used in the `*OUTPUT` card. |
+| ODB becomes huge | Requesting every possible field variable for a large model. | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+| Trying to plot a contour but only history data exist | You defined only `*OUTPUT, HISTORY`. | Use `*OUTPUT, FIELD` for contour/animation; use `*OUTPUT, HISTORY` for XY‑data over time. |
+| Reaction forces not plotted | Reaction forces are stored as `RF` and only for constrained nodes. | Ensure the node set includes constrained nodes and list `RF` in the `*NODE PRINT` line. |
+
+---
+
+### TL;DR (one‑sentence answer)
+
+The error occurs because the step has no loads and no output requests, so the ODB contains no results for the node set `LAST`; fix it by adding a load (or dummy load) and explicitly requesting the desired field or history output for that set, then rerun the job.
+A: **Why you get the message**
+
+`the data for the specified node is not available` appears when the ODB does not contain any results for the node (or node set) you are trying to display.  
+In the input you posted the only step you defined is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that has **no loads, no boundary conditions and no output requests** produces an empty ODB – Abaqus writes only the default, essentially‑zero output. Consequently, when you later ask CAE to plot a displacement, stress, reaction force, etc. for the node set **LAST**, the program looks for that data, finds nothing, and raises the error.
+
+---
+
+## How to solve the problem – step‑by‑step checklist
+
+| # | What to do | How to do it | Why it matters |
+|---|------------|--------------|----------------|
+| 1 | **Give the step something to solve** | Add at least one load, prescribed displacement, or constraint. <br>Example (vertical point load on the nodes in `LAST`):<br>`*CLOAD, NSET=LAST, DOF=2`<br>`-1.0e‑5` | Forces the solver to compute a response, which creates results. |
+| 2 | **Request the output you need** | **Field output** (contour/animation):<br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U` <br>**History output** (XY‑data):<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Without an explicit request Abaqus does not store the variable, so it cannot be displayed later. |
+| 3 | **Specify the exact variable names** | After the `*NODE PRINT` line list the variables you will plot, e.g. `U, RF, S`. | Prevents “missing‑data” errors for variables you never asked to be written. |
+| 4 | **Give the step a non‑zero duration** (optional but recommended) | `*STATIC, TIME=1.0` (or any positive time) | Guarantees that the load is actually applied during the analysis. |
+| 5 | **Re‑run the analysis** | Submit the job again (`abaqus job=… interactive` or through CAE). | Generates a new ODB that now contains the requested data. |
+| 6 | **Verify the ODB (optional)** | Open the ODB → **Tools → Query** → select node set `LAST` and the variable you requested. | Confirms that the data are present before you try to plot them. |
+| 7 | **Plot the results** | In the Visualization module create a contour, XY‑data, or animation for the variable (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (shows the fix)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement `U` for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Common pitfalls and quick fixes
+
+| Symptom | Typical cause | Quick fix |
+|---------|----------------|-----------|
+| Still “data not available” after adding a load | No `*OUTPUT` card for the variable you are trying to view. | Add the appropriate `*NODE PRINT` (or `*ELEMENT PRINT`) line for that variable. |
+| ODB empty even with a load | Step ends before the load is applied (e.g., `*STATIC` with zero time). | Give the step a non‑zero total time (`*STATIC, TIME=1.0`) or use a ramped load. |
+| Only some nodes have data | Output request uses a different node set or a typo in the set name. | Verify the set name (`*Nset, nset=LAST`) and that the same name is used in the `*OUTPUT` card. |
+| ODB becomes huge | Requesting every possible field variable for a large model. | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+| Trying to plot a contour but only history data exist | You defined only `*OUTPUT, HISTORY`. | Use `*OUTPUT, FIELD` for contour/animation; use `*OUTPUT, HISTORY` for XY‑data over time. |
+| Reaction forces not plotted | Reaction forces are stored as `RF` and only for constrained nodes. | Ensure the node set includes constrained nodes and list `RF` in the `*NODE PRINT` line. |
+
+---
+
+### TL;DR
+
+The error occurs because the step you defined has no loads and no output requests, so the ODB contains no results for the node set `LAST`. Add a load (or even a dummy load) and explicitly request the desired field or history output for that set, then rerun the job. The ODB will now contain the data and the plot will appear without the “data not available” message.
+
+=== 2026-04-17 21:57:53 ===
+Q: **Why the message appears**
+
+`the data for the specified node is not available` is shown when the **ODB does not contain any results for the node (or node set) you are trying to display**.  
+
+In the input file you posted the only step you defined is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that has **no loads, no boundary conditions and no output requests** writes an ODB that contains only the default (essentially empty) results. Consequently, when you later ask CAE to plot a displacement, stress, reaction force, etc. for the node set **LAST**, the program looks for that data, finds nothing, and raises the error.
+
+---
+
+## How to fix it – complete checklist
+
+| # | Action | What to do | Why it matters |
+|---|--------|------------|----------------|
+| 1 | **Give the step something to solve** | Add at least one load, prescribed displacement, or constraint. <br>Example (dummy vertical load on the nodes in `LAST`):<br>`*CLOAD, NSET=LAST, DOF=2`<br>`-1.0e‑5` | Forces the solver to compute a response, which creates results. |
+| 2 | **Request the output you need** (field, history, or both) | **Field output (contour/animation):**<br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U` <br>**History output (XY‑data):**<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Without an explicit request Abaqus does not store the variable, so it cannot be displayed later. |
+| 3 | **Specify the exact variable names** | After the `*NODE PRINT` line list the variables you will plot, e.g. `U, RF, S`. | Prevents “missing‑data” errors for variables you never asked to be written. |
+| 4 | **Give the step a non‑zero duration** (optional but recommended) | `*STATIC, TIME=1.0` (or any positive time) | Guarantees that the load is actually applied during the analysis. |
+| 5 | **Re‑run the analysis** | Submit the job again (`abaqus job=… interactive` or through CAE). | Generates a new ODB that now contains the requested data. |
+| 6 | **Verify the ODB (optional)** | Open the ODB → **Tools → Query** → select node set `LAST` and the variable you requested. | Confirms that the data are present before you try to plot them. |
+| 7 | **Plot the results** | In the Visualization module create a contour, XY‑data, or animation for the variable (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (demonstrates the fix)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement **U** for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Common pitfalls and quick fixes
+
+| Symptom | Typical cause | Quick fix |
+|---------|----------------|-----------|
+| Still “data not available” after adding a load | No `*OUTPUT` card for the variable you are trying to view. | Add the appropriate `*NODE PRINT` (or `*ELEMENT PRINT`) line for that variable. |
+| ODB empty even with a load | Step ends before the load is applied (e.g., `*STATIC` with zero time). | Give the step a non‑zero total time (`*STATIC, TIME=1.0`) or use a ramped load. |
+| Only some nodes have data | Output request uses a different node set or a typo in the set name. | Verify the set name (`*Nset, nset=LAST`) and that the same name is used in the `*OUTPUT` card. |
+| ODB becomes huge | Requesting every possible field variable for a large model. | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+| Trying to plot a contour but only history data exist | You defined only `*OUTPUT, HISTORY`. | Use `*OUTPUT, FIELD` for contour/animation; use `*OUTPUT, HISTORY` for XY‑data over time. |
+| Reaction forces not plotted | Reaction forces are stored as `RF` and only for constrained nodes. | Ensure the node set includes constrained nodes and list `RF` in the `*NODE PRINT` line. |
+
+---
+
+### TL;DR (one‑sentence answer)
+
+The error occurs because the step you defined has no loads and no output requests, so the ODB contains no results for the node set **LAST**; add a load (even a dummy one) and explicitly request the desired field or history output for that set, then rerun the job. The ODB will now contain the data and the plot will appear without the “data not available” message.
+A: **Why you get the message**
+
+`the data for the specified node is not available` appears because the ODB that Abaqus created contains **no results** for the node (or node set) you are trying to display.  
+In the input you posted the only step you defined is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that has **no loads, no boundary conditions and no output requests** writes an ODB that is essentially empty. When the Visualization module later looks for a variable (U, S, RF, …) on the node set **LAST**, it finds nothing and raises the error.
+
+---
+
+## How to solve the problem – complete checklist
+
+| # | What to do | How to do it (example) | Why it matters |
+|---|------------|------------------------|----------------|
+| 1 | **Give the step something to solve** | Add at least one load, prescribed displacement or constraint. <br>`*CLOAD, NSET=LAST, DOF=2`<br>`-1.0e‑5` | Forces the solver to compute a response, which creates results. |
+| 2 | **Specify a non‑zero step duration** (optional but recommended) | `*STATIC, TIME=1.0` (or any positive time) | Guarantees the load is actually applied during the analysis. |
+| 3 | **Request the output you need** | **Field output (contours/animations)**<br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U, S, RF` <br>**History output (XY‑data)**<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Abaqus only writes variables that are explicitly requested. Without this request the data simply do not exist in the ODB. |
+| 4 | **Use the correct node‑set name** | Define the set once and reuse the same name: <br>`*NSET, NSET=LAST, GENERATE`<br>`2, 2, 1` | A typo or a different set name makes the output request point to a set that contains no nodes, producing the same error. |
+| 5 | **Run the job again** | `abaqus job=your_model` (or submit from CAE) | Generates a new ODB that now contains the requested results. |
+| 6 | **Verify that the data are present** (optional) | In the Visualization module: **Tools → Query → Node Set = LAST → Variable = U** | Confirms that the ODB actually holds the data before you try to plot them. |
+| 7 | **Plot the results** | Create a contour, XY‑data, or animation for the variable you requested (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (the “fixed” version)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement **U** for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Quick‑reference “cheat sheet”
+
+| Symptom | Typical cause | Fix |
+|---------|----------------|-----|
+| “data not available” after adding a load | No `*OUTPUT` request for the variable you are trying to view | Add `*NODE PRINT` (or `*ELEMENT PRINT`) with the variable name (U, S, RF, …). |
+| ODB still empty | Step has zero time or no load | Give the step a non‑zero duration (`*STATIC, TIME=1.0`) and at least one load/BC. |
+| Only some nodes have data | Output request uses a different or miss‑spelled node set | Verify the `*NSET` definition and use the same name in the `*OUTPUT` card. |
+| Reaction forces missing | `RF` not requested or node set does not contain constrained nodes | Include `RF` in the `*NODE PRINT` line and make sure the set contains the constrained nodes. |
+| Very large ODB | Requesting every possible field variable for a big model | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+
+---
+
+### TL;DR
+
+The error occurs because the step you defined has **no loads and no output requests**, so the ODB contains no results for the node set **LAST**. Add a load (even a dummy one) and explicitly request the desired field or history output for that set, then rerun the job. The ODB will now contain the data and the plot will appear without the “data not available” message.
+
+=== 2026-04-17 21:58:30 ===
+Q: **Why you get the message**
+
+`the data for the specified node is not available` is shown when the ODB that Abaqus created **does not contain any results for the node (or node set) you are trying to display**.  
+
+In the input you posted the only step you defined is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that has **no loads, no boundary conditions and no output requests** writes an ODB that is essentially empty – Abaqus stores only the default, zero‑output fields. Consequently, when the Visualization module later looks for a variable (U, S, RF, …) on the node set **LAST**, it finds nothing and raises the error.
+
+---
+
+## How to solve the problem – complete checklist
+
+| # | What to do | How to do it (example) | Why it matters |
+|---|------------|------------------------|----------------|
+| 1 | **Give the step something to solve** | Add at least one load, prescribed displacement or constraint. <br>`*CLOAD, NSET=LAST, DOF=2`<br>`-1.0e‑5` | Forces the solver to compute a response, which creates results. |
+| 2 | **Give the step a non‑zero duration** (optional but recommended) | `*STATIC, TIME=1.0` (or any positive time) | Guarantees the load is actually applied during the analysis. |
+| 3 | **Request the output you need** | **Field output (contours/animations)**<br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U, S, RF` <br>**History output (XY‑data)**<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Abaqus only writes variables that are explicitly requested. Without this request the data simply do not exist in the ODB. |
+| 4 | **Use the correct node‑set name** | Define the set once and reuse the same name: <br>`*NSET, NSET=LAST, GENERATE`<br>`2, 2, 1` | A typo or a different set name makes the output request point to a set that contains no nodes, producing the same error. |
+| 5 | **Run the job again** | `abaqus job=your_model` (or submit from CAE) | Generates a new ODB that now contains the requested results. |
+| 6 | **Verify that the data are present** (optional) | In the Visualization module: **Tools → Query → Node Set = LAST → Variable = U** | Confirms that the ODB actually holds the data before you try to plot them. |
+| 7 | **Plot the results** | Create a contour, XY‑data, or animation for the variable you requested (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (the “fixed” version)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement **U** for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Quick‑reference “cheat sheet”
+
+| Symptom | Typical cause | Fix |
+|---------|----------------|-----|
+| “data not available” after adding a load | No `*OUTPUT` request for the variable you are trying to view | Add `*NODE PRINT` (or `*ELEMENT PRINT`) with the variable name (U, S, RF, …). |
+| ODB still empty | Step has zero time or no load | Give the step a non‑zero duration (`*STATIC, TIME=1.0`) and at least one load/BC. |
+| Only some nodes have data | Output request uses a different or miss‑spelled node set | Verify the `*NSET` definition and use the same name in the `*OUTPUT` card. |
+| Reaction forces missing | `RF` not requested or node set does not contain constrained nodes | Include `RF` in the `*NODE PRINT` line and make sure the set contains the constrained nodes. |
+| Very large ODB | Requesting every possible field variable for a big model | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+
+---
+
+### TL;DR
+
+The error occurs because the step you defined has **no loads and no output requests**, so the ODB contains no results for the node set **LAST**. Add a load (even a dummy one) and explicitly request the desired field or history output for that set, then rerun the job. The ODB will now contain the data and the plot will appear without the “data not available” message.
+A: **Why the message appears**
+
+`the data for the specified node is not available` is shown when the ODB that Abaqus created **does not contain any results for the node (or node set) you are trying to display**.  
+In the input you posted the only step you defined is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that has **no loads, no boundary conditions and no output requests** writes an ODB that is essentially empty – Abaqus stores only the default, zero‑output fields. Consequently, when the Visualization module later looks for a variable (U, S, RF, …) on the node set **LAST**, it finds nothing and raises the error.
+
+---
+
+## How to solve the problem – complete checklist
+
+| # | Action | How to do it (example) | Why it matters |
+|---|--------|------------------------|----------------|
+| 1 | **Give the step something to solve** | Add at least one load, prescribed displacement or constraint. <br>`*CLOAD, NSET=LAST, DOF=2`<br>`-1.0e‑5` | Forces the solver to compute a response, which creates results. |
+| 2 | **Give the step a non‑zero duration** (optional but recommended) | `*STATIC, TIME=1.0` (or any positive time) | Guarantees the load is actually applied during the analysis. |
+| 3 | **Request the output you need** | **Field output** (contours/animations) <br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U, S, RF` <br>**History output** (XY‑data) <br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Abaqus only writes variables that are explicitly requested. Without this request the data simply do not exist in the ODB. |
+| 4 | **Use the correct node‑set name** | Define the set once and reuse the same name: <br>`*NSET, NSET=LAST, GENERATE`<br>`2, 2, 1` | A typo or a different set name makes the output request point to a set that contains no nodes, producing the same error. |
+| 5 | **Run the job again** | `abaqus job=your_model` (or submit from CAE) | Generates a new ODB that now contains the requested results. |
+| 6 | **Verify that the data are present** (optional) | In the Visualization module: **Tools → Query → Node Set = LAST → Variable = U** | Confirms that the ODB actually holds the data before you try to plot them. |
+| 7 | **Plot the results** | Create a contour, XY‑data, or animation for the variable you requested (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (the “fixed” version)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement **U** for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Quick‑reference “cheat sheet”
+
+| Symptom | Typical cause | Fix |
+|---------|----------------|-----|
+| “data not available” after adding a load | No `*OUTPUT` request for the variable you are trying to view | Add `*NODE PRINT` (or `*ELEMENT PRINT`) with the variable name (U, S, RF, …). |
+| ODB still empty | Step has zero time or no load | Give the step a non‑zero duration (`*STATIC, TIME=1.0`) and at least one load/BC. |
+| Only some nodes have data | Output request uses a different or miss‑spelled node set | Verify the `*NSET` definition and use the same name in the `*OUTPUT` card. |
+| Reaction forces missing | `RF` not requested or node set does not contain constrained nodes | Include `RF` in the `*NODE PRINT` line and make sure the set contains the constrained nodes. |
+| Very large ODB | Requesting every possible field variable for a big model | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+
+---
+
+### TL;DR
+
+The error occurs because the step you defined has **no loads and no output requests**, so the ODB contains no results for the node set **LAST**.  
+**Fix:** add a load (even a dummy one), give the step a non‑zero time, and explicitly request the variable(s) you want (`*NODE PRINT … U, S, RF …`) for the correct node set. Rerun the job – the ODB will now contain the data and the plot will appear without the “data not available” message.
+
+=== 2026-04-17 21:59:07 ===
+Q: **Why the message appears**
+
+`the data for the specified node is not available` is shown when the ODB that Abaqus created **does not contain any results for the node (or node set) you are trying to display**.  
+
+In the input you posted the only step you defined is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that has **no loads, no boundary conditions and no output requests** writes an ODB that is essentially empty – Abaqus stores only the default, zero‑output fields. Consequently, when the Visualization module later looks for a variable (U, S, RF, …) on the node set **LAST**, it finds nothing and raises the error.
+
+---
+
+## How to solve the problem – complete checklist
+
+| # | What to do | How to do it (example) | Why it matters |
+|---|------------|------------------------|----------------|
+| 1 | **Give the step something to solve** | Add at least one load, prescribed displacement or constraint. <br>`*CLOAD, NSET=LAST, DOF=2`<br>`-1.0e‑5` | Forces the solver to compute a response, which creates results. |
+| 2 | **Give the step a non‑zero duration** (optional but recommended) | `*STATIC, TIME=1.0` (or any positive time) | Guarantees the load is actually applied during the analysis. |
+| 3 | **Request the output you need** | **Field output (contours/animations)**<br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U, S, RF` <br>**History output (XY‑data)**<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Abaqus only writes variables that are explicitly requested. Without this request the data simply do not exist in the ODB. |
+| 4 | **Use the correct node‑set name** | Define the set once and reuse the same name: <br>`*NSET, NSET=LAST, GENERATE`<br>`2, 2, 1` | A typo or a different set name makes the output request point to a set that contains no nodes, producing the same error. |
+| 5 | **Run the job again** | `abaqus job=your_model` (or submit from CAE) | Generates a new ODB that now contains the requested results. |
+| 6 | **Verify that the data are present** (optional) | In the Visualization module: **Tools → Query → Node Set = LAST → Variable = U** | Confirms that the ODB actually holds the data before you try to plot them. |
+| 7 | **Plot the results** | Create a contour, XY‑data, or animation for the variable you requested (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (the “fixed” version)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement **U** for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Quick‑reference “cheat sheet”
+
+| Symptom | Typical cause | Fix |
+|---------|----------------|-----|
+| “data not available” after adding a load | No `*OUTPUT` request for the variable you are trying to view | Add `*NODE PRINT` (or `*ELEMENT PRINT`) with the variable name (U, S, RF, …). |
+| ODB still empty | Step has zero time or no load | Give the step a non‑zero duration (`*STATIC, TIME=1.0`) and at least one load/BC. |
+| Only some nodes have data | Output request uses a different or miss‑spelled node set | Verify the `*NSET` definition and use the same name in the `*OUTPUT` card. |
+| Reaction forces missing | `RF` not requested or node set does not contain constrained nodes | Include `RF` in the `*NODE PRINT` line and make sure the set contains the constrained nodes. |
+| Very large ODB | Requesting every possible field variable for a big model | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+
+---
+
+### TL;DR (one‑sentence answer)
+
+The error occurs because the step you defined has **no loads and no output requests**, so the ODB contains no results for the node set **LAST**; add a (even dummy) load, give the step a non‑zero time, and explicitly request the variable(s) you need (`*NODE PRINT … U, S, RF …`) for the correct node set, then rerun the job. The ODB will now contain the data and the plot will appear without the “data not available” message.
+A: **Why the message appears**
+
+`the data for the specified node is not available` is shown when the ODB that Abaqus created **does not contain any results for the node (or node set) you are trying to display**.  
+In the input you posted the only step you defined is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that has **no loads, no boundary conditions and no output requests** writes an ODB that is essentially empty – Abaqus stores only the default, zero‑output fields. Consequently, when the Visualization module later looks for a variable (U, S, RF, …) on the node set **LAST**, it finds nothing and raises the error.
+
+---
+
+## How to solve the problem – complete checklist
+
+| # | Action | How to do it (example) | Reason |
+|---|--------|------------------------|--------|
+| 1 | **Give the step something to solve** | Add at least one load, prescribed displacement or constraint. <br>`*CLOAD, NSET=LAST, DOF=2`<br>`-1.0e‑5` | Forces the solver to compute a response, which creates results. |
+| 2 | **Give the step a non‑zero duration** (optional but recommended) | `*STATIC, TIME=1.0` (or any positive time) | Guarantees the load is actually applied during the analysis. |
+| 3 | **Request the output you need** | **Field output** (contours/animations) <br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U, S, RF` <br>**History output** (XY‑data) <br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Abaqus only writes variables that are explicitly requested. Without this request the data simply do not exist in the ODB. |
+| 4 | **Use the correct node‑set name** | Define the set once and reuse the same name: <br>`*NSET, NSET=LAST, GENERATE`<br>`2, 2, 1` | A typo or a different set name makes the output request point to a set that contains no nodes, producing the same error. |
+| 5 | **Run the job again** | `abaqus job=your_model` (or submit from CAE) | Generates a new ODB that now contains the requested results. |
+| 6 | **Verify that the data are present** (optional) | In the Visualization module: **Tools → Query → Node Set = LAST → Variable = U** | Confirms that the ODB actually holds the data before you try to plot them. |
+| 7 | **Plot the results** | Create a contour, XY‑data, or animation for the variable you requested (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (the “fixed” version)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement **U** for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Quick‑reference “cheat sheet”
+
+| Symptom | Typical cause | Fix |
+|---------|----------------|-----|
+| “data not available” after adding a load | No `*OUTPUT` request for the variable you are trying to view | Add `*NODE PRINT` (or `*ELEMENT PRINT`) with the variable name (U, S, RF, …). |
+| ODB still empty | Step has zero time or no load | Give the step a non‑zero duration (`*STATIC, TIME=1.0`) and at least one load/BC. |
+| Only some nodes have data | Output request uses a different or miss‑spelled node set | Verify the `*NSET` definition and use the same name in the `*OUTPUT` card. |
+| Reaction forces missing | `RF` not requested or node set does not contain constrained nodes | Include `RF` in the `*NODE PRINT` line and make sure the set contains the constrained nodes. |
+| Very large ODB | Requesting every possible field variable for a big model | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+
+---
+
+### TL;DR (one‑sentence answer)
+
+The error occurs because the step you defined has **no loads and no output requests**, so the ODB contains no results for the node set **LAST**; add a (even dummy) load, give the step a non‑zero time, and explicitly request the variable(s) you need (`*NODE PRINT … U, S, RF …`) for the correct node set, then rerun the job. The ODB will now contain the data and the plot will appear without the “data not available” message.
+
+=== 2026-04-17 21:59:45 ===
+Q: **Why the message appears**
+
+`the data for the specified node is not available` means that the result file (ODB) does not contain any results for the node (or node set) you are trying to plot.  
+In the input you posted the only step you defined is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that has **no loads, no boundary conditions and no output requests** writes an ODB that is essentially empty – only the default, zero‑output fields are stored. Consequently, when the Visualization module later looks for a variable (U, S, RF, …) on the node set **LAST**, it finds nothing and raises the error.
+
+---
+
+## How to solve the problem – complete checklist
+
+| # | What to do | How (example) | Why it matters |
+|---|------------|---------------|----------------|
+| 1 | **Give the step something to solve** | Add at least one load, prescribed displacement or constraint. <br>`*CLOAD, NSET=LAST, DOF=2`<br>`-1.0e‑5` | Forces the solver to compute a response, which creates results. |
+| 2 | **Give the step a non‑zero duration** (optional but recommended) | `*STATIC, TIME=1.0` (or any positive time) | Guarantees the load is actually applied during the analysis. |
+| 3 | **Request the output you need** | **Field output** (contours/animations) <br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U, S, RF` <br>**History output** (XY‑data) <br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Abaqus only writes variables that are explicitly requested. Without this request the data simply do not exist in the ODB. |
+| 4 | **Use the correct node‑set name** | Define the set once and reuse the same name: <br>`*NSET, NSET=LAST, GENERATE`<br>`2, 2, 1` | A typo or a different set name makes the output request point to a set that contains no nodes, producing the same error. |
+| 5 | **Run the job again** | `abaqus job=your_model` (or submit from CAE) | Generates a new ODB that now contains the requested results. |
+| 6 | **Verify that the data are present** (optional) | In the Visualization module: **Tools → Query → Node Set = LAST → Variable = U** | Confirms that the ODB actually holds the data before you try to plot them. |
+| 7 | **Plot the results** | Create a contour, XY‑data, or animation for the variable you requested (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (the “fixed” version)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement **U** for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Quick‑reference “cheat sheet”
+
+| Symptom | Typical cause | Fix |
+|---------|----------------|-----|
+| “data not available” after adding a load | No `*OUTPUT` request for the variable you are trying to view | Add `*NODE PRINT` (or `*ELEMENT PRINT`) with the variable name (U, S, RF, …). |
+| ODB still empty | Step has zero time or no load | Give the step a non‑zero duration (`*STATIC, TIME=1.0`) and at least one load/BC. |
+| Only some nodes have data | Output request uses a different or miss‑spelled node set | Verify the `*NSET` definition and use the same name in the `*OUTPUT` card. |
+| Reaction forces missing | `RF` not requested or node set does not contain constrained nodes | Include `RF` in the `*NODE PRINT` line and make sure the set contains the constrained nodes. |
+| Very large ODB | Requesting every possible field variable for a big model | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+
+---
+
+### TL;DR (one‑sentence answer)
+
+The error occurs because the step you defined has **no loads and no output requests**, so the ODB contains no results for the node set **LAST**; add a (even dummy) load, give the step a non‑zero time, and explicitly request the variable(s) you need (`*NODE PRINT … U, S, RF …`) for the correct node set, then rerun the job. The ODB will now contain the data and the plot will appear without the “data not available” message.
+A: **Why the error appears**
+
+`the data for the specified node is not available` is raised by the Visualization module when the ODB does **not** contain any results for the node (or node set) you are trying to display.  
+In the model you posted the only step is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that has **no loads, no boundary conditions and no output requests** produces an ODB that is essentially empty – only the default, zero‑output fields are stored. When you later ask Abaqus/CAE to plot a variable (U, S, RF, …) on the node set **LAST**, the variable simply does not exist in the file, and the above message is shown.
+
+---
+
+## Complete checklist to eliminate the error
+
+| # | Action | How (example) | Reason |
+|---|--------|---------------|--------|
+| 1 | **Give the step something to solve** | ```*STATIC, TIME=1.0```<br>`*CLOAD, NSET=LAST, DOF=2`<br>`-1.0e‑5` | A load (or prescribed displacement/BC) forces the solver to compute a response, which creates results. |
+| 2 | **Make the step duration non‑zero** (optional but recommended) | `*STATIC, TIME=1.0` | Guarantees the load is applied during the analysis. |
+| 3 | **Request the output you need** | **Field output** (contours/animations) <br>`*OUTPUT, FIELD`<br>`*NODE PRINT, NSET=LAST`<br>`U, S, RF` <br>**History output** (XY‑data) <br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST`<br>`U` | Abaqus writes only the variables that are explicitly requested. Without this request the data simply do not exist in the ODB. |
+| 4 | **Define and use the correct node‑set name** | ```*NSET, NSET=LAST, GENERATE```<br>`2, 2, 1` | A typo or a different set name makes the output request point to a set that contains no nodes, producing the same error. |
+| 5 | **Run the job again** | `abaqus job=your_model` (or submit from CAE) | Generates a new ODB that now contains the requested results. |
+| 6 | **Verify that the data are present** (optional) | In the Visualization module: **Tools → Query → Node Set = LAST → Variable = U** | Confirms that the ODB actually holds the data before you try to plot them. |
+| 7 | **Plot the results** | Create a contour, XY‑data, or animation for the variable you requested (e.g., `U` on `LAST`). | The error disappears because the data now exist. |
+
+---
+
+## Minimal working example (the “fixed” model)
+
+```abaqus
+*Heading
+** Simple 2‑node beam – demonstration of output request
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Part, name=BEAM
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=B31
+1, 1, 2
+*Nset, nset=LAST, generate
+2, 2, 1
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=BEAM-1, part=BEAM
+*End Instance
+*End Assembly
+
+*Step, name=STEP-1, nlgeom=NO
+*Static, time=1.0
+*Cload
+2, 2, -100.0          ; dummy vertical load on node 2
+*Output, field
+*Node Print, nset=LAST
+U                     ; write displacements for nodes in LAST
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=beam
+```
+
+The resulting `beam.odb` now contains the displacement **U** for node 2 (the only member of the set `LAST`). Opening the ODB and requesting `U` for `LAST` will display the values without any error.
+
+---
+
+## Quick‑reference “cheat sheet”
+
+| Symptom | Typical cause | Fix |
+|---------|----------------|-----|
+| “data not available” after adding a load | No `*OUTPUT` request for the variable you are trying to view | Add `*NODE PRINT` (or `*ELEMENT PRINT`) with the variable name (U, S, RF, …). |
+| ODB still empty | Step has zero time or no load | Give the step a non‑zero duration (`*STATIC, TIME=1.0`) and at least one load/BC. |
+| Only some nodes have data | Output request uses a different or miss‑spelled node set | Verify the `*NSET` definition and use the same name in the `*OUTPUT` card. |
+| Reaction forces missing | `RF` not requested or node set does not contain constrained nodes | Include `RF` in the `*NODE PRINT` line and make sure the set contains the constrained nodes. |
+| Very large ODB | Requesting every possible field variable for a big model | Request only the variables you need; limit frequency (`*OUTPUT, FIELD, FREQUENCY=1`). |
+
+---
+
+### TL;DR (one‑sentence answer)
+
+The error occurs because the defined step has **no loads and no output requests**, so the ODB contains no results for the node set **LAST**; add a (even dummy) load, give the step a non‑zero time, and explicitly request the variable(s) you need (`*NODE PRINT … U, S, RF …`) for the correct node set, then rerun the job – the ODB will now hold the data and the plot will appear without the “data not available” message.
+
+=== 2026-04-17 22:00:13 ===
+Q: The error appears because the defined step has no loads (or prescribed BCs) and no output requests, so the ODB contains no results for the node set **LAST**; adding even a dummy load, giving the step a non‑zero duration, and explicitly requesting the desired variable(s) (e.g., *NODE PRINT … U, S, RF …) for that set will generate the needed results and eliminate the “data for the specified node is not available” message.
+A: **Why the error occurs**
+
+In Abaqus the results that can be read from the *.odb* file are only written for those
+steps that actually **do something** (apply loads or boundary conditions) and for
+the **output variables that have been requested**.  
+
+If a step
+
+* has no loads / prescribed BCs (so the model does not change), **and**
+* has a zero‑length duration (or the step is “static, General” with *TIME=0*), **and**
+* contains no output requests for the node set **LAST** (or for any node set),
+
+then Abaqus finishes the step without writing any field or history data.  
+Consequently the ODB contains no entries for the node set **LAST**, and any
+post‑processing command such as  
+
+```python
+odb.rootAssembly.nodeSets['LAST'].nodes[0].fieldOutputs['U']
+```  
+
+or the GUI “Query → Node → LAST” returns the message  
+
+> *“Data for the specified node is not available.”*
+
+---
+
+**How to eliminate the error – complete checklist**
+
+| # | Action | Why it matters | Example syntax |
+|---|--------|----------------|----------------|
+| 1 | **Give the step a non‑zero duration** (or a non‑zero increment) | A zero‑time step is considered “inactive” and no results are written. | `*STEP, NLGEOM=NO, INC=1000`<br>`*STATIC`<br>`0.1, 1., 1., 1.` |
+| 2 | **Apply at least one load or prescribed BC** (even a dummy one) | Abaqus only writes results when the model is loaded or constrained. | `*CLOAD`<br>`NODE, 1, 1, 0.0`  *(zero‑magnitude load – “dummy”)* |
+| 3 | **Create the node set “LAST”** (if not already defined) | The output request must refer to an existing set. | `*NSET, NSET=LAST`<br>`12345` |
+| 4 | **Request the needed output for that set** (field or history) | Without an explicit request the variable is not stored in the ODB. | **Field output** (written each increment):<br>`*OUTPUT, FIELD, VARIABLE=PRESELECT`<br>`*NODE PRINT, NSET=LAST, FREQUENCY=1`<br>`U, S, RF`<br>**History output** (if you need a time history):<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST, FREQUENCY=1`<br>`U, S, RF` |
+| 5 | **Run the analysis** | The ODB will now contain data for the node set. | `abaqus job=MyJob cpus=4 interactive` |
+| 6 | **Verify the results** | Use the Visualization module or a Python script to confirm that data exist. | `odb = session.openOdb('MyJob.odb')`<br>`odb.rootAssembly.nodeSets['LAST'].nodes[0].fieldOutputs['U']` |
+
+---
+
+### Minimal working example (complete input file)
+
+```abaqus
+*Heading
+** Simple model that generates output for node set LAST
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+** PART & MESH (replace with your geometry)
+*Part, name=PART-1
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=C3D8R, elset=EALL
+1, 1, 2, 2, 2, 2, 2, 2, 2
+*End Part
+
+** -------------------------------------------------
+** ASSEMBLY
+*Assembly, name=ASSEMBLY
+*Instance, name=PART-1-1, part=PART-1
+*End Instance
+*End Assembly
+
+** -------------------------------------------------
+** MATERIAL & SECTION (dummy)
+*Material, name=STEEL
+*Elastic
+210000., 0.3
+*Solid Section, elset=EALL, material=STEEL
+
+** -------------------------------------------------
+** BOUNDARY CONDITIONS (dummy – zero load)
+*Boundary
+PART-1-1.1, 1, 1, 0.0   ; fix X‑translation of node 1
+*Boundary
+PART-1-1.1, 2, 2, 0.0   ; fix Y‑translation of node 1
+*Boundary
+PART-1-1.1, 3, 3, 0.0   ; fix Z‑translation of node 1
+
+** -------------------------------------------------
+** STEP – must have non‑zero time and an output request
+*Step, name=Step-1, nlgeom=NO, inc=1000
+*Static
+0.1, 1., 1., 1.          ; total time = 0.1 s (non‑zero)
+
+** Dummy load (zero magnitude) – forces the step to be “active”
+*Cload
+PART-1-1.2, 1, 1, 0.0
+
+** Node set that we will query
+*Nset, nset=LAST, instance=PART-1-1
+2                       ; node 2 is the “last” node
+
+** Output request for that set
+*Output, field, variable=PRESELECT
+*Node Print, nset=LAST, frequency=1
+U, S, RF                ; displacement, stress, reaction force
+
+*End Step
+```
+
+Running this file (`abaqus job=Dummy`) produces an ODB that contains
+`U`, `S`, and `RF` for node set **LAST** at every increment.  
+Now any post‑processing command that asks for those variables will succeed
+without the “data for the specified node is not available” message.
+
+---
+
+### TL;DR (quick fix)
+
+1. **Give the step a non‑zero time** (e.g., `0.1` s).  
+2. **Add a dummy load or BC** (even a zero‑magnitude `*CLOAD`).  
+3. **Create the node set `LAST`** (if it does not exist).  
+4. **Add an output request** for the variables you need, e.g.:
+
+   ```abaqus
+   *Node Print, NSET=LAST, FREQUENCY=1
+   U, S, RF
+   ```
+
+5. Re‑run the job – the ODB will now contain the data and the error disappears.
+
+=== 2026-04-17 22:00:54 ===
+Q: **Why the message appears**
+
+`the data for the specified node is not available` is generated by the
+Visualization module when the result file (`*.odb*`) does **not** contain any
+results for the node (or node set) you are trying to plot.  
+
+In the model you posted the only step is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that
+
+* has **no loads or prescribed boundary conditions** (so the model does not
+  change),
+* has a **zero‑length duration** (or a static step with `TIME=0`), and
+* contains **no output requests** for the node set **LAST** (or for any node set),
+
+produces an ODB that is essentially empty – only the default, zero‑output
+fields are stored. Consequently, when you later ask Abaqus/CAE to plot a
+variable (U, S, RF, …) on the node set **LAST**, the variable simply does not
+exist in the file and the above message is shown.
+
+---
+
+## Complete checklist to eliminate the error
+
+| # | Action | Why it matters | Example syntax |
+|---|--------|----------------|----------------|
+| 1 | **Give the step a non‑zero duration** (or a non‑zero increment) | A zero‑time step is considered inactive and no results are written. | `*STATIC`<br>`0.1, 1., 1., 1.` |
+| 2 | **Apply at least one load or prescribed BC** (even a dummy one) | Abaqus writes results only when the model is loaded or constrained. | `*CLOAD`<br>`NODE, 2, 1, 0.0`  *(zero‑magnitude load – dummy)* |
+| 3 | **Create the node set “LAST”** (if it does not already exist) | The output request must refer to an existing set. | `*NSET, NSET=LAST`<br>`2` |
+| 4 | **Request the needed output for that set** (field or history) | Without an explicit request the variable is not stored in the ODB. | **Field output** (written each increment):<br>`*OUTPUT, FIELD, VARIABLE=PRESELECT`<br>`*NODE PRINT, NSET=LAST, FREQUENCY=1`<br>`U, S, RF`<br>**History output** (if a time history is required):<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST, FREQUENCY=1`<br>`U, S, RF` |
+| 5 | **Run the analysis** | The ODB will now contain data for the node set. | `abaqus job=MyJob interactive` |
+| 6 | **Verify the results** | Use the Visualization module or a Python script to confirm that data exist. | `odb = session.openOdb('MyJob.odb')`<br>`odb.rootAssembly.nodeSets['LAST'].nodes[0].fieldOutputs['U']` |
+
+---
+
+## Minimal working example (complete input file)
+
+```abaqus
+*Heading
+** Simple model that generates output for node set LAST
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+** PART (replace with your geometry)
+*Part, name=PART-1
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=C3D8R, elset=EALL
+1, 1, 2, 2, 2, 2, 2, 2, 2
+*End Part
+
+** -------------------------------------------------
+** ASSEMBLY
+*Assembly, name=ASSEMBLY
+*Instance, name=PART-1-1, part=PART-1
+*End Instance
+*End Assembly
+
+** -------------------------------------------------
+** MATERIAL & SECTION (dummy)
+*Material, name=STEEL
+*Elastic
+210000., 0.3
+*Solid Section, elset=EALL, material=STEEL
+
+** -------------------------------------------------
+** BOUNDARY CONDITIONS (fix node 1)
+*Boundary
+PART-1-1.1, 1, 3, 0.0   ; fix all DOFs of node 1
+
+** -------------------------------------------------
+** STEP – must have non‑zero time and an output request
+*Step, name=Step-1, nlgeom=NO, inc=1000
+*Static
+0.1, 1., 1., 1.          ; total time = 0.1 s (non‑zero)
+
+** Dummy load (zero magnitude) – forces the step to be “active”
+*Cload
+PART-1-1.2, 1, 1, 0.0
+
+** Node set that we will query
+*Nset, nset=LAST, instance=PART-1-1
+2                       ; node 2 is the “last” node
+
+** Output request for that set
+*Output, field, variable=PRESELECT
+*Node Print, nset=LAST, frequency=1
+U, S, RF                ; displacement, stress, reaction force
+
+*End Step
+```
+
+Running this file (`abaqus job=Dummy`) creates an ODB that contains `U`,
+`S`, and `RF` for node set **LAST** at every increment.  Any post‑processing
+command that asks for those variables will now succeed without the
+“data for the specified node is not available” message.
+
+---
+
+### TL;DR (quick fix)
+
+1. **Give the step a non‑zero time** (e.g., `0.1` s).  
+2. **Add a dummy load or BC** (even a zero‑magnitude `*CLOAD`).  
+3. **Create the node set `LAST`** (if it does not already exist).  
+4. **Add an output request** for the variables you need, e.g.:
+
+   ```abaqus
+   *Node Print, NSET=LAST, FREQUENCY=1
+   U, S, RF
+   ```
+
+5. Re‑run the job – the ODB will now contain the data and the error disappears.
+A: **Why the message appears**
+
+`the data for the specified node is not available` is generated by the
+Visualization module when the ODB does **not** contain any results for the
+node (or node set) you are trying to plot.  
+In the input you posted the only step is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that
+
+* has **no loads or prescribed boundary conditions** (so the model never
+  changes),
+* has a **zero‑length duration** (or a static step with `TIME = 0`), and
+* contains **no output requests** for the node set **LAST** (or for any
+  node set),
+
+produces an ODB that is essentially empty – only the default, zero‑output
+fields are stored. Consequently, when you later ask CAE to plot a variable
+(U, S, RF, …) on the node set **LAST**, the variable simply does not exist in
+the file and the above message is shown.
+
+---
+
+## Complete checklist to eliminate the error
+
+| # | What you must do | Why it matters | Example syntax |
+|---|------------------|----------------|----------------|
+| 1 | **Give the step a non‑zero duration** (or a non‑zero increment) | A zero‑time step is considered inactive and no results are written. | `*STATIC`<br>`0.1, 1., 1., 1.` |
+| 2 | **Apply at least one load or prescribed BC** (even a dummy one) | Abaqus writes results only when the model is loaded or constrained. | `*CLOAD`<br>`PART-1-1.2, 1, 1, 0.0`  *(zero‑magnitude load – dummy)* |
+| 3 | **Create the node set “LAST”** (if it does not already exist) | The output request must refer to an existing set. | `*NSET, NSET=LAST, INSTANCE=PART-1-1`<br>`2` |
+| 4 | **Request the needed output for that set** (field or history) | Without an explicit request the variable is not stored in the ODB. | **Field output** (written each increment):<br>`*OUTPUT, FIELD, VARIABLE=PRESELECT`<br>`*NODE PRINT, NSET=LAST, FREQUENCY=1`<br>`U, S, RF`<br>**History output** (if a time history is required):<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST, FREQUENCY=1`<br>`U, S, RF` |
+| 5 | **Run the analysis** | The ODB will now contain data for the node set. | `abaqus job=MyJob interactive` |
+| 6 | **Verify the results** | Use the Visualization module or a short Python script to confirm that data exist. | ```python<br>odb = session.openOdb('MyJob.odb')<br>odb.rootAssembly.nodeSets['LAST'].nodes[0].fieldOutputs['U']<br>``` |
+
+Follow the table in order; once steps 1‑4 are satisfied the ODB will contain
+the requested fields and the warning disappears.
+
+---
+
+## Minimal working example (complete input file)
+
+Below is a **self‑contained** Abaqus input file that demonstrates every item
+in the checklist.  Replace the geometry, material, etc. with your own model
+if needed; the important parts are the step definition, dummy load, node‑set
+definition, and output request.
+
+```abaqus
+*Heading
+** Simple model that generates output for node set LAST
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+** PART (replace with your geometry)
+*Part, name=PART-1
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=C3D8R, elset=EALL
+1, 1, 2, 2, 2, 2, 2, 2, 2
+*End Part
+
+** -------------------------------------------------
+** ASSEMBLY
+*Assembly, name=ASSEMBLY
+*Instance, name=PART-1-1, part=PART-1
+*End Instance
+*End Assembly
+
+** -------------------------------------------------
+** MATERIAL & SECTION (dummy)
+*Material, name=STEEL
+*Elastic
+210000., 0.3
+*Solid Section, elset=EALL, material=STEEL
+
+** -------------------------------------------------
+** BOUNDARY CONDITIONS (fix node 1)
+*Boundary
+PART-1-1.1, 1, 3, 0.0   ; fix all DOFs of node 1
+
+** -------------------------------------------------
+** STEP – must have non‑zero time and an output request
+*Step, name=Step-1, nlgeom=NO, inc=1000
+*Static
+0.1, 1., 1., 1.          ; total time = 0.1 s (non‑zero)
+
+** Dummy load (zero magnitude) – forces the step to be “active”
+*Cload
+PART-1-1.2, 1, 1, 0.0
+
+** Node set that we will query
+*Nset, nset=LAST, instance=PART-1-1
+2                       ; node 2 is the “last” node
+
+** Output request for that set
+*Output, field, variable=PRESELECT
+*Node Print, nset=LAST, frequency=1
+U, S, RF                ; displacement, stress, reaction force
+
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=Dummy interactive
+```
+
+The resulting `Dummy.odb` now contains `U`, `S`, and `RF` for the node set
+**LAST** at every increment.  Any post‑processing command that asks for those
+variables will succeed – the “data for the specified node is not available”
+message disappears.
+
+---
+
+### TL;DR (quick fix)
+
+1. **Give the step a non‑zero time** (e.g., `0.1` s).  
+2. **Add a dummy load or BC** (even a zero‑magnitude `*CLOAD`).  
+3. **Create the node set `LAST`** (if it does not already exist).  
+4. **Add an output request** for the variables you need, e.g.:
+
+   ```abaqus
+   *Node Print, NSET=LAST, FREQUENCY=1
+   U, S, RF
+   ```
+
+5. Re‑run the job – the ODB will now contain the data and the error disappears.
+
+=== 2026-04-17 22:01:35 ===
+Q: **Why the message appears**
+
+`the data for the specified node is not available` is shown by the
+Visualization module when the result file (`*.odb*`) does **not** contain any
+entries for the node (or node set) you are trying to query.  
+
+In the input you posted the only step is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that
+
+* has **no loads or prescribed boundary conditions** (the model never
+  changes),
+* has a **zero‑length duration** (or a static step with `TIME = 0`), and
+* contains **no output requests** for the node set **LAST** (or for any
+  node set),
+
+produces an ODB that is essentially empty – only the default, zero‑output
+fields are stored. Consequently, when you later ask CAE to plot a variable
+(U, S, RF, …) on the node set **LAST**, the variable simply does not exist in
+the file and the above message is shown.
+
+---
+
+## Complete checklist to eliminate the error
+
+| # | What you must do | Why it matters | Example syntax |
+|---|------------------|----------------|----------------|
+| 1 | **Give the step a non‑zero duration** (or a non‑zero increment) | A zero‑time step is considered inactive and no results are written. | `*STATIC`<br>`0.1, 1., 1., 1.` |
+| 2 | **Apply at least one load or prescribed BC** (even a dummy one) | Abaqus writes results only when the model is loaded or constrained. | `*CLOAD`<br>`PART-1-1.2, 1, 1, 0.0`  *(zero‑magnitude load – dummy)* |
+| 3 | **Create the node set “LAST”** (if it does not already exist) | The output request must refer to an existing set. | `*NSET, NSET=LAST, INSTANCE=PART-1-1`<br>`2` |
+| 4 | **Request the needed output for that set** (field or history) | Without an explicit request the variable is not stored in the ODB. | **Field output** (written each increment):<br>`*OUTPUT, FIELD, VARIABLE=PRESELECT`<br>`*NODE PRINT, NSET=LAST, FREQUENCY=1`<br>`U, S, RF`<br>**History output** (if a time history is required):<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST, FREQUENCY=1`<br>`U, S, RF` |
+| 5 | **Run the analysis** | The ODB will now contain data for the node set. | `abaqus job=MyJob interactive` |
+| 6 | **Verify the results** | Use the Visualization module or a short Python script to confirm that data exist. | ```python<br>odb = session.openOdb('MyJob.odb')<br>odb.rootAssembly.nodeSets['LAST'].nodes[0].fieldOutputs['U']<br>``` |
+
+When steps 1‑4 are satisfied the ODB will contain the requested fields and the warning disappears.
+
+---
+
+## Minimal working example (complete input file)
+
+The following input file demonstrates every item in the checklist.  
+Replace the geometry, material, etc. with your own model if needed; the
+important parts are the step definition, dummy load, node‑set definition,
+and output request.
+
+```abaqus
+*Heading
+** Simple model that generates output for node set LAST
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** PART (replace with your geometry)
+*Part, name=PART-1
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=C3D8R, elset=EALL
+1, 1, 2, 2, 2, 2, 2, 2, 2
+*End Part
+
+** ASSEMBLY
+*Assembly, name=ASSEMBLY
+*Instance, name=PART-1-1, part=PART-1
+*End Instance
+*End Assembly
+
+** MATERIAL & SECTION (dummy)
+*Material, name=STEEL
+*Elastic
+210000., 0.3
+*Solid Section, elset=EALL, material=STEEL
+
+** BOUNDARY CONDITIONS (fix node 1)
+*Boundary
+PART-1-1.1, 1, 3, 0.0   ; fix all DOFs of node 1
+
+** STEP – must have non‑zero time and an output request
+*Step, name=Step-1, nlgeom=NO, inc=1000
+*Static
+0.1, 1., 1., 1.          ; total time = 0.1 s (non‑zero)
+
+** Dummy load (zero magnitude) – forces the step to be “active”
+*Cload
+PART-1-1.2, 1, 1, 0.0
+
+** Node set that we will query
+*Nset, nset=LAST, instance=PART-1-1
+2                       ; node 2 is the “last” node
+
+** Output request for that set
+*Output, field, variable=PRESELECT
+*Node Print, nset=LAST, frequency=1
+U, S, RF                ; displacement, stress, reaction force
+
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=Dummy interactive
+```
+
+The resulting `Dummy.odb` now contains `U`, `S`, and `RF` for the node set
+**LAST** at every increment.  Any post‑processing command that asks for those
+variables will succeed without the “data for the specified node is not
+available” message.
+
+---
+
+### TL;DR (quick fix)
+
+1. **Give the step a non‑zero time** (e.g., `0.1` s).  
+2. **Add a dummy load or BC** (even a zero‑magnitude `*CLOAD`).  
+3. **Create the node set `LAST`** (if it does not already exist).  
+4. **Add an output request** for the variables you need, e.g.:
+
+   ```abaqus
+   *Node Print, NSET=LAST, FREQUENCY=1
+   U, S, RF
+   ```
+
+5. Re‑run the job – the ODB will now contain the data and the error
+   disappears.
+A: **Why the message appears**
+
+`the data for the specified node is not available` is shown by the
+Visualization module when the ODB does **not** contain any field or history
+output for the node (or node set) you are trying to plot.  
+In the input you posted the only step is
+
+```abaqus
+*STEP
+*END STEP
+```
+
+A step that
+
+* has **no loads or prescribed boundary conditions** (the model never
+  changes),
+* has a **zero‑length duration** (or a static step with `TIME = 0`), and
+* contains **no output requests** for the node set **LAST** (or for any
+  node set),
+
+produces an ODB that is essentially empty – only the default, zero‑output
+fields are stored. Consequently, when you later ask CAE to plot a variable
+(U, S, RF, …) on the node set **LAST**, the variable simply does not exist in
+the file and the above message is shown.
+
+---
+
+## Complete checklist to eliminate the error
+
+| # | Action you must take | Reason it matters | Example syntax |
+|---|----------------------|-------------------|----------------|
+| 1 | **Give the step a non‑zero duration** (or a non‑zero increment) | A zero‑time step is considered inactive and no results are written. | `*STATIC`<br>`0.1, 1., 1., 1.` |
+| 2 | **Apply at least one load or prescribed BC** (even a dummy one) | Abaqus writes results only when the model is loaded or constrained. | `*CLOAD`<br>`PART-1-1.2, 1, 1, 0.0`  *(zero‑magnitude load – dummy)* |
+| 3 | **Create the node set “LAST”** (if it does not already exist) | The output request must refer to an existing set. | `*NSET, NSET=LAST, INSTANCE=PART-1-1`<br>`2` |
+| 4 | **Request the needed output for that set** (field or history) | Without an explicit request the variable is not stored in the ODB. | **Field output** (written each increment):<br>`*OUTPUT, FIELD, VARIABLE=PRESELECT`<br>`*NODE PRINT, NSET=LAST, FREQUENCY=1`<br>`U, S, RF`<br>**History output** (if a time history is required):<br>`*OUTPUT, HISTORY`<br>`*NODE PRINT, NSET=LAST, FREQUENCY=1`<br>`U, S, RF` |
+| 5 | **Run the analysis** | The ODB will now contain data for the node set. | `abaqus job=MyJob interactive` |
+| 6 | **Verify the results** | Use the Visualization module or a short Python script to confirm that data exist. | ```python<br>odb = session.openOdb('MyJob.odb')<br>odb.rootAssembly.nodeSets['LAST'].nodes[0].fieldOutputs['U']<br>``` |
+
+When steps 1‑4 are satisfied the ODB will contain the requested fields and the warning disappears.
+
+---
+
+## Minimal working example (complete input file)
+
+Below is a **self‑contained** input file that demonstrates every item in the
+checklist.  Replace the geometry, material, etc. with your own model if
+necessary; the important parts are the step definition, dummy load, node‑set
+definition, and output request.
+
+```abaqus
+*Heading
+** Simple model that generates output for node set LAST
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+** PART (replace with your geometry)
+*Part, name=PART-1
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+*Element, type=C3D8R, elset=EALL
+1, 1, 2, 2, 2, 2, 2, 2, 2
+*End Part
+** -------------------------------------------------
+
+** ASSEMBLY
+*Assembly, name=ASSEMBLY
+*Instance, name=PART-1-1, part=PART-1
+*End Instance
+*End Assembly
+
+** MATERIAL & SECTION (dummy)
+*Material, name=STEEL
+*Elastic
+210000., 0.3
+*Solid Section, elset=EALL, material=STEEL
+
+** BOUNDARY CONDITIONS (fix node 1)
+*Boundary
+PART-1-1.1, 1, 3, 0.0   ; fix all DOFs of node 1
+
+** -------------------------------------------------
+** STEP – must have non‑zero time and an output request
+*Step, name=Step-1, nlgeom=NO, inc=1000
+*Static
+0.1, 1., 1., 1.          ; total time = 0.1 s (non‑zero)
+
+** Dummy load (zero magnitude) – forces the step to be “active”
+*Cload
+PART-1-1.2, 1, 1, 0.0
+
+** Node set that we will query
+*Nset, nset=LAST, instance=PART-1-1
+2                       ; node 2 is the “last” node
+
+** Output request for that set
+*Output, field, variable=PRESELECT
+*Node Print, nset=LAST, frequency=1
+U, S, RF                ; displacement, stress, reaction force
+*End Step
+```
+
+Run it with  
+
+```bash
+abaqus job=Dummy interactive
+```
+
+The resulting `Dummy.odb` now contains `U`, `S`, and `RF` for the node set
+**LAST** at every increment.  Any post‑processing command that asks for those
+variables will succeed without the “data for the specified node is not
+available” message.
+
+---
+
+### TL;DR (quick fix)
+
+1. **Give the step a non‑zero time** (e.g., `0.1` s).  
+2. **Add a dummy load or BC** (even a zero‑magnitude `*CLOAD`).  
+3. **Create the node set `LAST`** (if it does not already exist).  
+4. **Add an output request** for the variables you need, e.g.:
+
+   ```abaqus
+   *Node Print, NSET=LAST, FREQUENCY=1
+   U, S, RF
+   ```
+
+5. Re‑run the job – the ODB will now contain the data and the error
+   disappears.
+

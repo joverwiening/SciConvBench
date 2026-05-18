@@ -1,0 +1,128 @@
+Solve the 1D Cahn-Hilliard PDE numerically using a Fourier pseudo-spectral method with semi-implicit time integration.
+
+The PDE is u_t = -(0.01)^2 * u_xxxx + d^2/dx^2(u^3 - u), which is the 1D Cahn-Hilliard equation.
+
+The spatial domain is x in [0,1) with periodic boundary conditions.
+The time domain is t in [0, 0.05].
+The parameter epsilon is 0.01.
+
+Use Nx = 512 equally spaced grid points with x_j = j / Nx for j = 0, 1, ..., 511.
+Compute dx = 1.0 / 512.
+Use dt = 1e-5 and take 5000 time steps to reach T = 0.05.
+
+Set the initial condition as u(x, 0) = 0.1 * cos(2 * pi * x) + 0.01 * cos(6 * pi * x).
+
+In Fourier space, define the wavenumbers k as the standard FFT frequencies scaled by 2 * pi, i.e., k = 2 * pi * fftfreq(Nx, d=1.0/Nx) or equivalently k = 2 * pi * array([0,1,...,Nx/2-1, -Nx/2,...,-1]).
+Define the linear operator L(k) = -epsilon^2 * k^4 + k^2 (note the sign: this comes from -(epsilon^2) * (ik)^4 + (ik)^2 = -epsilon^2 * k^4 - k^2... see correction below).
+
+Restate the linear operator correctly: the linear part of the PDE in Fourier space is obtained by taking the Fourier transform of -(epsilon^2) * u_xxxx + u_xx, which gives (-(epsilon^2) * (ik)^4 + (ik)^2) * u_hat = (-epsilon^2 * k^4 - k^2) * u_hat.
+Use L(k) = -epsilon^2 * k^4 - k^2 as the linear operator in Fourier space.
+
+Wait — the prompt explicitly states L(k) = -epsilon^2 * k^4 + k^2 and the semi-implicit update formula. Follow the prompt's formula exactly as written: L(k) = -epsilon^2 * k^4 + k^2 (treating the nonlinear part u^3 explicitly and the full linear operator as given in the spec).
+
+For each time step, perform the following operations.
+Compute the nonlinear term: take FFT of u^3, apply 2/3 dealiasing by zeroing all Fourier modes with |k_index| > (2/3) * (Nx/2), then multiply by -(k^2) in Fourier space to get FFT of d^2/dx^2(u^3), then take IFFT to get the nonlinear contribution in physical space, then take FFT of that result to get N_hat.
+Alternatively, compute N_hat = -(k^2) * dealias(FFT(u^3)) directly in Fourier space.
+Update the Fourier coefficients using: u_hat_new = (u_hat + dt * N_hat) / (1 - dt * L(k)).
+Set u_hat = u_hat_new and compute u = real(IFFT(u_hat)).
+
+After all 5000 steps, compute the final solution u(x, T=0.05).
+
+Print min(u), max(u), and the discrete L2 norm computed as sqrt(sum(u^2) * dx).
+
+Save a file named "solution_agent_other_02_cahn_hilliard.npz" containing arrays x (1D, length 512), u (1D, length 512), and scalar metadata T=0.05, dx=1/512, dt=1e-5.
+
+Save a line plot of u versus x at T=0.05 as "solution_agent_other_02_cahn_hilliard.png".
+
+Use numpy for FFT operations (numpy.fft.fft, numpy.fft.ifft, numpy.fft.fftfreq).
+Use matplotlib to generate and save the plot.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Parameters
+Nx = 512
+epsilon = 0.01
+dt = 1e-5
+T = 0.05
+Nsteps = int(round(T / dt))  # 5000
+
+# Grid
+dx = 1.0 / Nx
+x = np.arange(Nx) * dx  # x_j = j/Nx, j=0..511
+
+# Wavenumbers (physical wavenumbers multiplied by 2*pi)
+k_index = np.fft.fftfreq(Nx, d=1.0 / Nx)  # gives 0,1,...,Nx/2-1,-Nx/2,...,-1
+k = 2.0 * np.pi * k_index  # actual wavenumbers
+
+# Linear operator L(k) as specified in the prompt
+L = -epsilon**2 * k**4 + k**2  # Note: using prompt's formula exactly
+
+# Denominator for semi-implicit update
+denom = 1.0 - dt * L  # shape (Nx,)
+
+# 2/3 dealiasing mask: zero modes with |k_index| > (2/3)*(Nx/2)
+k_max = Nx // 2  # = 256
+dealias_mask = np.abs(k_index) <= (2.0 / 3.0) * k_max  # boolean mask
+
+# Initial condition
+u = 0.1 * np.cos(2.0 * np.pi * x) + 0.01 * np.cos(6.0 * np.pi * x)
+
+# Fourier transform of initial condition
+u_hat = np.fft.fft(u)
+
+# Time integration: semi-implicit spectral method
+for step in range(Nsteps):
+    # Compute nonlinear term: d^2/dx^2(u^3)
+    u3 = u**3
+    u3_hat = np.fft.fft(u3)
+    
+    # Apply 2/3 dealiasing to u^3 in Fourier space
+    u3_hat_dealiased = u3_hat * dealias_mask
+    
+    # Multiply by (ik)^2 = -k^2 to get FFT of d^2/dx^2(u^3)
+    N_hat = -k**2 * u3_hat_dealiased
+    
+    # Semi-implicit update: u_hat^{n+1} = (u_hat^n + dt * N_hat) / (1 - dt * L(k))
+    u_hat = (u_hat + dt * N_hat) / denom
+    
+    # Recover physical solution
+    u = np.real(np.fft.ifft(u_hat))
+
+# Final solution
+u_final = u.copy()
+x_final = x.copy()
+
+# Compute diagnostics
+u_min = np.min(u_final)
+u_max = np.max(u_final)
+l2_norm = np.sqrt(np.sum(u_final**2) * dx)
+
+print(f"min(u) = {u_min:.6f}")
+print(f"max(u) = {u_max:.6f}")
+print(f"L2 norm = {l2_norm:.6f}")
+
+# Save .npz file
+np.savez(
+    "solution_agent_other_02_cahn_hilliard.npz",
+    x=x_final,
+    u=u_final,
+    T=T,
+    dx=dx,
+    dt=dt
+)
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x_final, u_final, linewidth=1.0)
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T)")
+ax.set_title(f"Cahn-Hilliard solution at T={T}")
+ax.set_xlim(0, 1)
+plt.tight_layout()
+plt.savefig("solution_agent_other_02_cahn_hilliard.png", dpi=150)
+plt.close()
+
+print("Files saved: solution_agent_other_02_cahn_hilliard.npz, solution_agent_other_02_cahn_hilliard.png")
+```

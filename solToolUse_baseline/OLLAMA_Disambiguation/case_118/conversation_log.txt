@@ -1,0 +1,2102 @@
+=== 2026-04-20 16:57:45 ===
+Q: **The problem is the *MPC definition.**  
+
+You have written  
+
+```abaqus
+*MPC
+BEAM,105,125
+```
+
+but the **BEAM** type of multi‑point constraint can only be applied to a **beam element** (e.g. B31, B31R, B32, …).  
+In the model all of the elements are solid C3D20R elements (the set **Eall**), and the two nodes you are tying together (105 and 125) are interior nodes of those solid elements – there is no beam element in the model at all.
+
+Because Abaqus cannot find a beam element associated with node 105 (or node 125), the input file is invalid and the job aborts with an error such as “BEAM MPC requires a beam element”.
+
+**Fix**  
+Either:
+
+* create a proper beam element (e.g. `*ELEMENT, TYPE=B31, ELSET=Ebeam …`) that contains node 105 (or node 125) and then use the BEAM MPC, **or**
+* replace the BEAM MPC with another type of constraint that is appropriate for solid elements (e.g. a *MPC of type “EQUATION” or a *COUPLING, *TIE, etc.).
+
+In short, the error is that a BEAM MPC is being used with solid C3D20R elements – a BEAM MPC can only be used with beam elements.
+A: **Short answer** – The error occurs because a **BEAM** multi‑point constraint (MPC) can only be applied to **beam elements** (B31, B31R, B32, …). In your model the only elements are solid C3D20R elements, so Abaqus cannot find a beam element that contains node 105 or node 125. Replace the BEAM MPC with a constraint that works for solid elements (e.g. an *EQUATION MPC, a *COUPLING, or a *TIE) **or** introduce a beam element that actually contains the nodes you want to tie.
+
+Below is a **complete, step‑by‑step guide** that shows:
+
+1. Why the current input is illegal.  
+2. Three practical ways to achieve the same physical effect (tie the two interior nodes) – each with a ready‑to‑copy example.  
+3. Tips for checking that the fix works.
+
+---
+
+## 1. Why the current *MPC, BEAM* is illegal
+
+| Item | What you wrote | What Abaqus expects |
+|------|----------------|---------------------|
+| `*MPC` line | `*MPC`<br>`BEAM,105,125` | The keyword **BEAM** tells Abaqus “create a beam‑type MPC”. Abaqus then looks for a **beam element** that contains node 105 (or node 125). |
+| Elements in the model | All are `C3D20R` (solid) in set `Eall` | No beam element exists → Abaqus throws *“BEAM MPC requires a beam element”* and aborts. |
+
+A **beam MPC** is essentially a kinematic constraint that forces the translational and rotational degrees of freedom of a node to follow those of a *beam* element’s local axis. Solid elements have no beam‑type orientation, so the constraint cannot be defined.
+
+---
+
+## 2. How to achieve the intended node‑to‑node coupling
+
+### Option A – Use a *TIE constraint (recommended for most “glue” situations)
+
+A *TIE* creates a perfectly bonded interface between two node sets (or surfaces). It works for any element type, including solids.
+
+```abaqus
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+**How to create the node sets**
+
+```abaqus
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+```
+
+* `adjust=yes` lets Abaqus slide the slave nodes (the second set) to the master nodes if they are not exactly coincident (useful for interior nodes that may be slightly offset).  
+* `position=average` forces the slave nodes to adopt the average position of the master nodes – this is the usual way to “tie” two interior nodes together.
+
+### Option B – Use an *EQUATION MPC (general linear constraint)
+
+If you need a pure kinematic relationship (e.g. enforce that the two nodes have identical displacement vectors) without the extra bookkeeping of a *TIE, an *EQUATION* MPC is the way to go.
+
+```abaqus
+*Equation
+  3, 105, 1.0, 125, -1.0   ;  Ux105 - Ux125 = 0
+  3, 105, 1.0, 125, -1.0   ;  Uy105 - Uy125 = 0
+  3, 105, 1.0, 125, -1.0   ;  Uz105 - Uz125 = 0
+```
+
+Explanation:
+
+* The first integer on each line (`3`) tells Abaqus that the equation contains three terms: a coefficient, a node number, and a DOF direction (default is the first translational DOF, i.e., **U1**).  
+* To constrain all three translational DOFs you repeat the line three times, each time adding the optional `, DOF` field (1,2,3) if you want to be explicit:
+
+```abaqus
+*Equation
+  3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105) - U1(125) = 0
+  3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105) - U2(125) = 0
+  3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105) - U3(125) = 0
+```
+
+* If you also need to tie the rotational DOFs (for beam or shell elements) you would add four more equations for `UR1`, `UR2`, `UR3`. For pure solid elements only the translational DOFs exist.
+
+### Option C – Use a *COUPLING constraint (kinematic coupling)
+
+A *COUPLING* can be used to tie a **single slave node** to a **master node set** (or a master surface). It is essentially a *TIE* but with the option to enforce a *kinematic* (zero relative motion) or *elastic* (spring) relationship.
+
+```abaqus
+*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105
+   Nset125
+```
+
+* `ref node=105` makes node 105 the reference (master) node.  
+* All nodes in `Nset125` (here just node 125) are forced to follow the reference node’s motion.
+
+---
+
+## 3. Full example – from node‑set definition to constraint
+
+Below is a **self‑contained snippet** you can paste into your input file (replace the existing `*MPC, BEAM…` block).
+
+```abaqus
+*Node
+   105, 0.0, 0.0, 0.0
+   125, 0.0, 0.0, 0.0
+*Element, type=C3D20R, elset=Eall
+   1, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20
+   ... (rest of your solid mesh)
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+If you prefer the *EQUATION* route, replace the `*Tie` block with:
+
+```abaqus
+*Equation
+  3, 105, 1.0, 1, 125, -1.0, 1
+  3, 105, 1.0, 2, 125, -1.0, 2
+  3, 105, 1.0, 3, 125, -1.0, 3
+```
+
+---
+
+## 4. Verifying that the fix works
+
+1. **Run a short test job** (e.g., a static step with a small load) and watch the *Message* file.  
+   * No “BEAM MPC requires a beam element” error should appear.  
+   * For a *TIE* you will see a line like `TIE: Tie_105_125 – 2 slave nodes, 1 master nodes`.  
+
+2. **Post‑process** the results:  
+   * Plot the displacement of node 105 and node 125 on the same graph – they should be identical (within numerical tolerance).  
+   * If you used *EQUATION*, you can also check the reaction forces at the constrained nodes; they should be equal and opposite.
+
+3. **If the nodes are not exactly coincident** (e.g., due to mesh tolerances), the `adjust=yes` option in *TIE* will automatically move the slave node to the master node’s location before the analysis starts. For *EQUATION* you must ensure the coordinates are identical; otherwise you may get a “singular matrix” warning.
+
+---
+
+## 5. When you *actually* need a **beam MPC**
+
+If your design truly requires a beam‑type MPC (for example, you have a slender beam element that must carry a rotational constraint), you must:
+
+1. **Create a beam element** that contains the node(s) you want to constrain, e.g.:
+
+   ```abaqus
+   *Element, type=B31, elset=Ebeam
+      2001, 105, 126   ; a B31 element from node 105 to some other node
+   ```
+
+2. **Assign a beam section** (e.g., *Beam Section, material=Steel, ...*).  
+
+3. Then the original `*MPC, BEAM, 105, 125` will be valid because node 105 now belongs to a beam element.
+
+---
+
+## 6. TL;DR (quick cheat‑sheet)
+
+| Goal | Recommended constraint | Input snippet |
+|------|------------------------|---------------|
+| Glue two interior solid nodes (most common) | `*Tie` | `*Tie, name=Tie_105_125, adjust=yes, position=average`<br>`Nset105, Nset125` |
+| Enforce identical translational DOFs (pure kinematic) | `*Equation` | `*Equation`<br>`3, 105, 1.0, 1, 125, -1.0, 1`<br>`3, 105, 1.0, 2, 125, -1.0, 2`<br>`3, 105, 1.0, 3, 125, -1.0, 3` |
+| Couple a slave node to a master node (alternative to Tie) | `*Coupling` | `*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105`<br>`Nset125` |
+| Actually need a beam‑type MPC | Add a beam element (B31, B32, …) that contains the node(s) | `*Element, type=B31, elset=Ebeam`<br>`2001, 105, 126` |
+
+---
+
+**Bottom line:** The error is caused by using a **BEAM** MPC with solid elements. Replace it with a *TIE*, *EQUATION*, or *COUPLING* constraint (or add a real beam element) and the job will run without the “BEAM MPC requires a beam element” abort.
+
+=== 2026-04-20 16:58:36 ===
+Q: **Short answer** – The abort occurs because a **BEAM** multi‑point constraint (MPC) can only be used with **beam elements** (B31, B31R, B32, …).  
+Your model contains only solid C3D20R elements, so Abaqus cannot find a beam element that contains node 105 or node 125 and stops with the error *“BEAM MPC requires a beam element.”*  
+
+Replace the BEAM MPC with a constraint that works for solid elements (e.g. a *TIE, *EQUATION, or *COUPLING) **or** introduce a real beam element that actually contains the nodes you want to tie.
+
+---
+
+## Complete step‑by‑step guide
+
+### 1. Why the current `*MPC, BEAM` is illegal
+| What you wrote | What Abaqus expects |
+|----------------|---------------------|
+| `*MPC`<br>`BEAM,105,125` | The keyword **BEAM** tells Abaqus “create a beam‑type MPC”. Abaqus then looks for a **beam element** that contains node 105 (or node 125). |
+| Elements in the model | All are `C3D20R` (solid) in set `Eall` | No beam element exists → Abaqus aborts with *“BEAM MPC requires a beam element.”* |
+
+A beam‑type MPC forces a node to follow the translational and rotational DOFs of a **beam** element’s local axis. Solid elements have no beam orientation, so the constraint cannot be defined.
+
+---
+
+### 2. Practical ways to tie the two interior nodes
+
+#### Option A – **TIE constraint** (most common “glue” operation)
+
+```abaqus
+*Node
+   105, …
+   125, …
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+* `adjust=yes` slides the slave node (125) onto the master node (105) if they are not exactly coincident.  
+* Works for any element type, including solids.
+
+---
+
+#### Option B – **EQUATION MPC** (pure kinematic equality of DOFs)
+
+```abaqus
+*Equation
+  3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105) – U1(125) = 0
+  3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105) – U2(125) = 0
+  3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105) – U3(125) = 0
+```
+
+*Each line forces the corresponding translational DOF of node 105 to be identical to that of node 125.*
+
+---
+
+#### Option C – **COUPLING constraint** (kinematic coupling)
+
+```abaqus
+*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105
+   Nset125
+```
+
+Node 105 becomes the reference (master) node; all nodes in `Nset125` (here only 125) follow its motion.
+
+---
+
+### 3. Full example you can paste into the input file  
+(Replace the existing `*MPC, BEAM…` block.)
+
+```abaqus
+*Node
+   105, 0.0, 0.0, 0.0
+   125, 0.0, 0.0, 0.0
+*Element, type=C3D20R, elset=Eall
+   1, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20
+   ... (rest of your solid mesh)
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+If you prefer the *Equation* method, replace the `*Tie` block with the three `*Equation` lines shown above.
+
+---
+
+### 4. How to verify the fix
+
+1. **Run a short test job** – the abort message about “BEAM MPC requires a beam element” should disappear.  
+2. **Check the .msg file** – you will see a line like `TIE: Tie_105_125 – 2 slave nodes, 1 master nodes`.  
+3. **Post‑process** – plot the displacement of node 105 and node 125; they should be identical (within numerical tolerance).  
+
+If the nodes are not exactly coincident, the `adjust=yes` option in *TIE* will automatically move the slave node to the master node’s location before the analysis starts. For *Equation* you must ensure the coordinates are identical; otherwise you may get a singular‑matrix warning.
+
+---
+
+### 5. When you really need a **beam‑type MPC**
+
+If the physics of your model truly requires a beam‑type MPC (e.g., you have a slender beam that must carry a rotational constraint), you must add a beam element that contains the node(s):
+
+```abaqus
+*Element, type=B31, elset=Ebeam
+   2001, 105, 126   ; a B31 element from node 105 to some other node
+*Beam Section, material=Steel, ...
+```
+
+After a beam element exists, the original `*MPC, BEAM, 105, 125` becomes legal.
+
+---
+
+### 6. TL;DR cheat‑sheet
+
+| Goal | Recommended constraint | Input snippet |
+|------|------------------------|---------------|
+| Glue two interior solid nodes (most common) | `*Tie` | `*Tie, name=Tie_105_125, adjust=yes, position=average`<br>`Nset105, Nset125` |
+| Enforce identical translational DOFs (pure kinematic) | `*Equation` | `*Equation`<br>`3, 105, 1.0, 1, 125, -1.0, 1`<br>`3, 105, 1.0, 2, 125, -1.0, 2`<br>`3, 105, 1.0, 3, 125, -1.0, 3` |
+| Couple a slave node to a master node (alternative to Tie) | `*Coupling` | `*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105`<br>`Nset125` |
+| Actually need a beam‑type MPC | Add a beam element (B31, B32, …) that contains the node(s) | `*Element, type=B31, elset=Ebeam`<br>`2001, 105, 126` |
+
+**Bottom line:** The abort is caused by using a **BEAM** MPC with solid C3D20R elements. Replace it with a *TIE*, *EQUATION*, or *COUPLING* constraint (or add a real beam element) and the analysis will run without the “BEAM MPC requires a beam element” error.
+A: **Why Abaqus aborts**
+
+`*MPC, BEAM, 105, 125` tells Abaqus to create a **beam‑type** multi‑point constraint.  
+A beam‑type MPC can only be attached to a **beam element** (B31, B31R, B32, …).  
+Your model contains only solid elements (`C3D20R`). Because no beam element contains node 105 or node 125, Abaqus stops with the message  
+
+```
+BEAM MPC requires a beam element.
+```
+
+---
+
+## How to solve the problem  
+
+You have three practical alternatives:
+
+| What you need | Constraint that works with solid elements | Minimal input snippet |
+|---------------|-------------------------------------------|-----------------------|
+| **Glue / “make the two nodes move together”** (most common) | `*Tie` | ```abaqus<br>*Nset, nset=Nset105<br>105<br>*Nset, nset=Nset125<br>125<br>*Tie, name=Tie_105_125, adjust=yes, position=average<br>Nset105, Nset125<br>``` |
+| **Force the three translational DOFs of the nodes to be identical** | `*Equation` (pure kinematic equality) | ```abaqus<br>*Equation<br>3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)<br>3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)<br>3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)<br>``` |
+| **Couple a slave node to a master node** (alternative to Tie) | `*Coupling` (kinematic) | ```abaqus<br>*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105<br>Nset125<br>``` |
+
+All three work with any element type, including `C3D20R`.
+
+---
+
+## If you really need a **beam‑type** MPC  
+
+Only then should you add a beam element that contains the node(s) you want to constrain, e.g.:
+
+```abaqus
+*Element, type=B31, elset=Ebeam
+2001, 105, 126          ; a B31 element from node 105 to some other node
+*Beam Section, material=Steel, ...
+```
+
+After a beam element exists, the original `*MPC, BEAM, 105, 125` becomes legal.
+
+---
+
+## Quick “cheat‑sheet” to copy‑paste
+
+```abaqus
+*Node
+   105, 0.,0.,0.
+   125, 0.,0.,0.
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+*Replace the `*Tie` block with the three `*Equation` lines or the `*Coupling` block if you prefer those formulations.*
+
+---
+
+## How to verify the fix
+
+1. **Run a short test job** – the abort message about “BEAM MPC requires a beam element” should disappear.  
+2. **Check the `.msg` file** – you will see a line such as `TIE: Tie_105_125 – 2 slave nodes, 1 master nodes`.  
+3. **Post‑process** – plot the displacement of node 105 and node 125; they should be identical (within numerical tolerance).  
+
+If the nodes are not exactly coincident, the `adjust=yes` option in `*Tie` will automatically move the slave node onto the master node before the analysis starts. For the `*Equation` method you must ensure the coordinates are identical; otherwise you may get a singular‑matrix warning.
+
+---
+
+### Bottom line
+The abort is caused by using a **BEAM** MPC with only solid elements. Replace that keyword with a `*Tie`, `*Equation`, or `*Coupling` constraint (or add a real beam element if a beam‑type MPC is truly required) and the analysis will run without the error.
+
+=== 2026-04-20 16:59:12 ===
+Q: **Why Abaqus aborts**
+
+The line  
+
+```abaqus
+*MPC, BEAM, 105, 125
+```  
+
+tells Abaqus to create a **beam‑type** multi‑point constraint (MPC).  
+A *beam* MPC can be attached **only to a beam element** (B31, B31R, B32, …).  
+In the model you posted **all the elements are solid C3D20R** (the only element set is *Eall*).  
+Because no beam element contains node 105 or node 125, Abaqus cannot satisfy the request and stops with the message  
+
+```
+BEAM MPC requires a beam element.
+```
+
+---
+
+## How to fix the problem
+
+You have three practical ways to “tie” the two interior nodes when the model consists of solid elements.
+
+| What you want to achieve | Constraint that works with solids | Minimal input you can copy‑paste |
+|--------------------------|-----------------------------------|---------------------------------|
+| **Make the two nodes move together** (most common “glue” operation) | `*Tie` | ```abaqus<br>*Nset, nset=Nset105<br>105<br>*Nset, nset=Nset125<br>125<br>*Tie, name=Tie_105_125, adjust=yes, position=average<br>Nset105, Nset125<br>``` |
+| **Force the three translational DOFs of the nodes to be identical** (pure kinematic equality) | `*Equation` | ```abaqus<br>*Equation<br>3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)<br>3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)<br>3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)<br>``` |
+| **Couple a slave node to a master node** (alternative to Tie) | `*Coupling` (kinematic) | ```abaqus<br>*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105<br>Nset125<br>``` |
+
+All three work with any element type, including the `C3D20R` solid elements you are using.
+
+### Full example (replace the `*MPC, BEAM…` block)
+
+```abaqus
+*Node
+   105, 0.0, 0.0, 0.0
+   125, 0.0, 0.0, 0.0
+
+*Element, type=C3D20R, elset=Eall
+   1, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20
+   ... (rest of your solid mesh)
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+If you prefer the *Equation* formulation, replace the `*Tie` block with the three `*Equation` lines shown above.  
+If you prefer the *Coupling* formulation, replace the `*Tie` block with the `*Coupling` block.
+
+---
+
+## How to verify that the fix works
+
+1. **Run a short test job** – the abort message about “BEAM MPC requires a beam element” should disappear.  
+2. **Check the .msg file** – you will see a line such as  
+   `TIE: Tie_105_125 – 2 slave nodes, 1 master nodes` (or the corresponding message for *Equation* or *Coupling*).  
+3. **Post‑process** – plot the displacement of node 105 and node 125 on the same graph; they should be identical (within numerical tolerance).  
+
+If the nodes are not exactly coincident, the `adjust=yes` option in `*Tie` will automatically move the slave node onto the master node before the analysis starts. For the *Equation* method you must ensure the coordinates are identical; otherwise you may get a singular‑matrix warning.
+
+---
+
+## When you really need a **beam‑type** MPC
+
+Only if the physics of your model truly requires a beam‑type MPC should you add a beam element that contains the node(s) you want to constrain, e.g.:
+
+```abaqus
+*Element, type=B31, elset=Ebeam
+2001, 105, 126          ; a B31 element from node 105 to some other node
+*Beam Section, material=Steel, ...
+```
+
+After a beam element exists, the original line  
+
+```abaqus
+*MPC, BEAM, 105, 125
+```  
+
+becomes legal because node 105 now belongs to a beam element.
+
+---
+
+### TL;DR (cheat‑sheet)
+
+| Goal | Recommended constraint | Input snippet |
+|------|------------------------|---------------|
+| Glue two interior solid nodes (most common) | `*Tie` | `*Tie, name=Tie_105_125, adjust=yes, position=average`<br>`Nset105, Nset125` |
+| Enforce identical translational DOFs (pure kinematic) | `*Equation` | `*Equation`<br>`3, 105, 1.0, 1, 125, -1.0, 1`<br>`3, 105, 1.0, 2, 125, -1.0, 2`<br>`3, 105, 1.0, 3, 125, -1.0, 3` |
+| Couple a slave node to a master node (alternative to Tie) | `*Coupling` | `*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105`<br>`Nset125` |
+| Actually need a beam‑type MPC | Add a beam element (B31, B32, …) that contains the node(s) | `*Element, type=B31, elset=Ebeam`<br>`2001, 105, 126` |
+
+**Bottom line:** The abort is caused by using a **BEAM** MPC with only solid C3D20R elements. Replace it with a `*Tie`, `*Equation`, or `*Coupling` constraint (or add a real beam element if a beam‑type MPC is truly required) and the analysis will run without the “BEAM MPC requires a beam element” error.
+A: **Why Abaqus aborts**
+
+`*MPC, BEAM, 105, 125` tells Abaqus to create a **beam‑type** multi‑point constraint (MPC).  
+A beam‑type MPC can be attached **only to a beam element** (B31, B31R, B32, …).  
+
+In the model you posted **all the elements are solid C3D20R** (the only element set is *Eall*).  
+Because no beam element contains node 105 or node 125, Abaqus cannot satisfy the request and stops with the error
+
+```
+BEAM MPC requires a beam element.
+```
+
+---
+
+## How to solve the problem
+
+You have three practical ways to “tie” two interior nodes when the model consists of solid elements.
+
+| What you want to achieve | Constraint that works with solids | Minimal input you can copy‑paste |
+|--------------------------|-----------------------------------|----------------------------------|
+| **Make the two nodes move together** (most common “glue” operation) | `*Tie` | ```abaqus<br>*Nset, nset=Nset105<br>105<br>*Nset, nset=Nset125<br>125<br>*Tie, name=Tie_105_125, adjust=yes, position=average<br>Nset105, Nset125<br>``` |
+| **Force the three translational DOFs of the nodes to be identical** (pure kinematic equality) | `*Equation` | ```abaqus<br>*Equation<br>3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)<br>3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)<br>3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)<br>``` |
+| **Couple a slave node to a master node** (alternative to Tie) | `*Coupling` (kinematic) | ```abaqus<br>*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105<br>Nset125<br>``` |
+
+All three work with any element type, including the `C3D20R` solid elements you are using.
+
+### Full example (replace the `*MPC, BEAM…` line)
+
+```abaqus
+*Node
+   105, 0.0, 0.0, 0.0
+   125, 0.0, 0.0, 0.0
+
+*Element, type=C3D20R, elset=Eall
+   1, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20
+   … (rest of your solid mesh)
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+If you prefer the *Equation* formulation, replace the `*Tie` block with the three `*Equation` lines shown above.  
+If you prefer the *Coupling* formulation, replace the `*Tie` block with the `*Coupling` block.
+
+---
+
+## How to verify that the fix works
+
+1. **Run a short test job** – the abort message about “BEAM MPC requires a beam element” should disappear.  
+2. **Check the *.msg* file** – you will see a line such as  
+   `TIE: Tie_105_125 – 2 slave nodes, 1 master nodes` (or the corresponding message for *Equation* or *Coupling*).  
+3. **Post‑process** – plot the displacement of node 105 and node 125 on the same graph; they should be identical (within numerical tolerance).  
+
+The `adjust=yes` option in `*Tie` automatically moves the slave node onto the master node before the analysis starts, so you do not need to edit the coordinates manually. For the *Equation* method the coordinates must already be the same; otherwise you may get a singular‑matrix warning.
+
+---
+
+## When you really need a **beam‑type** MPC
+
+Only if the physics of your model truly requires a beam‑type MPC should you add a beam element that contains the node(s) you want to constrain, e.g.:
+
+```abaqus
+*Element, type=B31, elset=Ebeam
+2001, 105, 126          ; a B31 element from node 105 to some other node
+*Beam Section, material=Steel, …
+```
+
+After a beam element exists, the original line
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+becomes legal because node 105 now belongs to a beam element.
+
+---
+
+## TL;DR (cheat‑sheet)
+
+| Goal | Recommended constraint | Input snippet |
+|------|------------------------|---------------|
+| Glue two interior solid nodes (most common) | `*Tie` | `*Tie, name=Tie_105_125, adjust=yes, position=average`<br>`Nset105, Nset125` |
+| Enforce identical translational DOFs (pure kinematic) | `*Equation` | `*Equation`<br>`3, 105, 1.0, 1, 125, -1.0, 1`<br>`3, 105, 1.0, 2, 125, -1.0, 2`<br>`3, 105, 1.0, 3, 125, -1.0, 3` |
+| Couple a slave node to a master node (alternative to Tie) | `*Coupling` | `*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105`<br>`Nset125` |
+| Actually need a beam‑type MPC | Add a beam element (B31, B32, …) that contains the node(s) | `*Element, type=B31, elset=Ebeam`<br>`2001, 105, 126` |
+
+**Bottom line:** The abort is caused by using a **BEAM** MPC with only solid C3D20R elements. Replace it with a `*Tie`, `*Equation`, or `*Coupling` constraint (or add a real beam element if a beam‑type MPC is truly required) and the analysis will run without the “BEAM MPC requires a beam element” error.
+
+=== 2026-04-20 16:59:54 ===
+Q: **Why Abaqus aborts**
+
+```
+*MPC, BEAM, 105, 125
+```
+
+creates a **beam‑type** multi‑point constraint (MPC).  
+A beam‑type MPC can be attached **only to a beam element** (B31, B31R, B32, …).  
+
+In the model you posted **all the elements are solid C3D20R** (the only element set is *Eall*).  
+Because no beam element contains node 105 or node 125, Abaqus cannot satisfy the request and stops with the message
+
+```
+BEAM MPC requires a beam element.
+```
+
+---
+
+## How to solve the problem
+
+You need a constraint that works with solid elements.  
+Three common choices are shown below; each works with any element type, including C3D20R.
+
+| What you want to achieve | Constraint that works with solids | Minimal input (copy‑paste) |
+|--------------------------|-----------------------------------|----------------------------|
+| **Make the two nodes move together** (most common “glue” operation) | `*Tie` | ```abaqus<br>*Nset, nset=Nset105<br>105<br>*Nset, nset=Nset125<br>125<br>*Tie, name=Tie_105_125, adjust=yes, position=average<br>Nset105, Nset125<br>``` |
+| **Force the three translational DOFs of the nodes to be identical** (pure kinematic equality) | `*Equation` | ```abaqus<br>*Equation<br>3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)<br>3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)<br>3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)<br>``` |
+| **Couple a slave node to a master node** (alternative to Tie) | `*Coupling` (kinematic) | ```abaqus<br>*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105<br>Nset125<br>``` |
+
+### Full example (replace the `*MPC, BEAM…` line)
+
+```abaqus
+*Node
+   105, 0.,0.,0.
+   125, 0.,0.,0.
+
+*Element, type=C3D20R, elset=Eall
+   1, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20
+   … (rest of your solid mesh)
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+If you prefer the *Equation* formulation, replace the `*Tie` block with the three `*Equation` lines shown above.  
+If you prefer the *Coupling* formulation, replace the `*Tie` block with the `*Coupling` block.
+
+---
+
+## How to verify that the fix works
+
+1. **Run a short test job** – the abort message about “BEAM MPC requires a beam element” should disappear.  
+2. **Check the *.msg* file** – you will see a line such as  
+   `TIE: Tie_105_125 – 2 slave nodes, 1 master nodes` (or the corresponding message for *Equation* or *Coupling*).  
+3. **Post‑process** – plot the displacement of node 105 and node 125 on the same graph; they should be identical (within numerical tolerance).  
+
+The `adjust=yes` option in `*Tie` automatically moves the slave node onto the master node before the analysis starts, so you do not need to edit the coordinates manually. For the *Equation* method the coordinates must already be the same; otherwise you may get a singular‑matrix warning.
+
+---
+
+## When you really need a **beam‑type** MPC
+
+Only if the physics of your model truly requires a beam‑type MPC should you add a beam element that contains the node(s) you want to constrain, e.g.:
+
+```abaqus
+*Element, type=B31, elset=Ebeam
+2001, 105, 126          ; a B31 element from node 105 to some other node
+*Beam Section, material=Steel, …
+```
+
+After a beam element exists, the original line
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+becomes legal because node 105 now belongs to a beam element.
+
+---
+
+## TL;DR (cheat‑sheet)
+
+| Goal | Recommended constraint | Input snippet |
+|------|------------------------|---------------|
+| Glue two interior solid nodes (most common) | `*Tie` | `*Tie, name=Tie_105_125, adjust=yes, position=average`<br>`Nset105, Nset125` |
+| Enforce identical translational DOFs (pure kinematic) | `*Equation` | `*Equation`<br>`3, 105, 1.0, 1, 125, -1.0, 1`<br>`3, 105, 1.0, 2, 125, -1.0, 2`<br>`3, 105, 1.0, 3, 125, -1.0, 3` |
+| Couple a slave node to a master node (alternative to Tie) | `*Coupling` | `*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105`<br>`Nset125` |
+| Actually need a beam‑type MPC | Add a beam element (B31, B32, …) that contains the node(s) | `*Element, type=B31, elset=Ebeam`<br>`2001, 105, 126` |
+
+**Bottom line:** The abort is caused by using a **BEAM** MPC with only solid C3D20R elements. Replace it with a `*Tie`, `*Equation`, or `*Coupling` constraint (or add a real beam element if a beam‑type MPC is truly required) and the analysis will run without the “BEAM MPC requires a beam element” error.
+A: **Why the job aborts**
+
+`*MPC, BEAM, 105, 125` tells Abaqus to create a **beam‑type** multi‑point constraint (MPC).  
+A beam‑type MPC can be attached **only to a beam element** (B31, B31R, B32, …).  
+
+In the model you posted **all the elements are solid C3D20R** (the only element set is *Eall*).  
+Since no beam element contains node 105 or node 125, Abaqus cannot satisfy the request and stops with the error
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## How to fix it
+
+You have three practical ways to couple two nodes when the surrounding mesh is solid. Choose the one that best matches the physics you want to impose.
+
+| What you want to achieve | Abaqus keyword that works with solids | Minimal input (copy‑paste) |
+|--------------------------|---------------------------------------|----------------------------|
+| **Glue the two nodes together** (most common “make them move as one”) | `*Tie` | ```abaqus<br>*Nset, nset=Nset105<br>105<br>*Nset, nset=Nset125<br>125<br>*Tie, name=Tie_105_125, adjust=yes, position=average<br>Nset105, Nset125<br>``` |
+| **Force the three translational DOFs of the nodes to be identical** (pure kinematic equality) | `*Equation` | ```abaqus<br>*Equation<br>3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)<br>3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)<br>3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)<br>``` |
+| **Couple a slave node to a master node** (alternative to Tie) | `*Coupling` (kinematic) | ```abaqus<br>*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105<br>Nset125<br>``` |
+
+### Full example (replace the offending `*MPC` line)
+
+```abaqus
+*Node
+   105, 0.,0.,0.
+   125, 0.,0.,0.
+
+*Element, type=C3D20R, elset=Eall
+   1, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20
+   … (rest of your solid mesh)
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+*If you prefer the `*Equation` formulation, replace the `*Tie` block with the three `*Equation` lines shown above.*  
+*If you prefer the `*Coupling` formulation, replace the `*Tie` block with the `*Coupling` block.*
+
+---
+
+## How to verify that the fix works
+
+1. **Run a short test job** – the abort message about “BEAM MPC requires a beam element” should disappear.  
+2. **Check the *.msg* file** – you will see a line such as  
+   `TIE: Tie_105_125 – 2 slave nodes, 1 master node` (or the corresponding message for *Equation* or *Coupling*).  
+3. **Post‑process** – plot the displacement of node 105 and node 125 on the same graph; they should be identical (within numerical tolerance).  
+
+The `adjust=yes` option in `*Tie` automatically moves the slave node onto the master node before the analysis starts, so you do not need to edit the coordinates manually. For the *Equation* method the coordinates must already be the same; otherwise you may get a singular‑matrix warning.
+
+---
+
+## When you really need a **beam‑type** MPC
+
+Only if the physics of your model truly requires a beam‑type MPC should you add a **beam element** that contains the node(s) you want to constrain, e.g.:
+
+```abaqus
+*Element, type=B31, elset=Ebeam
+2001, 105, 126          ; a B31 element from node 105 to some other node
+*Beam Section, material=Steel, …
+```
+
+After a beam element exists, the original line
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+becomes legal because node 105 now belongs to a beam element.
+
+---
+
+## TL;DR (cheat‑sheet)
+
+| Goal | Recommended constraint | Input snippet |
+|------|------------------------|---------------|
+| Glue two interior solid nodes (most common) | `*Tie` | `*Tie, name=Tie_105_125, adjust=yes, position=average`<br>`Nset105, Nset125` |
+| Enforce identical translational DOFs (pure kinematic) | `*Equation` | `*Equation`<br>`3, 105, 1.0, 1, 125, -1.0, 1`<br>`3, 105, 1.0, 2, 125, -1.0, 2`<br>`3, 105, 1.0, 3, 125, -1.0, 3` |
+| Couple a slave node to a master node (alternative to Tie) | `*Coupling` | `*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105`<br>`Nset125` |
+| Actually need a beam‑type MPC | Add a beam element (B31, B32, …) that contains the node(s) | `*Element, type=B31, elset=Ebeam`<br>`2001, 105, 126` |
+
+**Bottom line:** The abort is caused by using a **BEAM** MPC with only solid C3D20R elements. Replace it with a `*Tie`, `*Equation`, or `*Coupling` constraint (or add a real beam element if a beam‑type MPC is truly required) and the analysis will run without the “BEAM MPC requires a beam element” error.
+
+=== 2026-04-20 17:00:36 ===
+Q: **Why the job aborts**
+
+```
+*MPC, BEAM, 105, 125
+```
+
+creates a **beam‑type** multi‑point constraint (MPC).  
+A beam‑type MPC can be attached **only to a beam element** (B31, B31R, B32, …).  
+
+In the model you posted **all the elements are solid C3D20R** (the only element set is *Eall*).  
+Since no beam element contains node 105 or node 125, Abaqus cannot satisfy the request and aborts with
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## How to fix it
+
+Use a constraint that works with solid elements. Three common choices are:
+
+| What you want to impose | Abaqus keyword (works with solids) | Minimal input (copy‑paste) |
+|------------------------|------------------------------------|----------------------------|
+| **Glue the two nodes together** (make them move as one) | `*Tie` | ```abaqus<br>*Nset, nset=Nset105<br>105<br>*Nset, nset=Nset125<br>125<br>*Tie, name=Tie_105_125, adjust=yes, position=average<br>Nset105, Nset125<br>``` |
+| **Force the three translational DOFs of the nodes to be identical** (pure kinematic equality) | `*Equation` | ```abaqus<br>*Equation<br>3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)<br>3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)<br>3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)<br>``` |
+| **Couple a slave node to a master node** (alternative to Tie) | `*Coupling` (kinematic) | ```abaqus<br>*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105<br>Nset125<br>``` |
+
+### Example (replace the offending `*MPC` line)
+
+```abaqus
+*Node
+   105, 0.,0.,0.
+   125, 0.,0.,0.
+
+*Element, type=C3D20R, elset=Eall
+   1, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20
+   … (rest of your solid mesh)
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+*If you prefer the `*Equation` formulation, replace the `*Tie` block with the three `*Equation` lines shown above.*  
+*If you prefer the `*Coupling` formulation, replace the `*Tie` block with the `*Coupling` block.*
+
+---
+
+## How to verify the fix
+
+1. Run a short test job – the “BEAM MPC requires a beam element” abort should disappear.  
+2. Check the *.msg* file – you will see a line such as  
+   `TIE: Tie_105_125 – 2 slave nodes, 1 master node` (or the corresponding message for *Equation* or *Coupling*).  
+3. Post‑process – the displacements of nodes 105 and 125 should be identical (within numerical tolerance).
+
+The `adjust=yes` option in `*Tie` automatically moves the slave node onto the master node before the analysis starts, so no manual coordinate change is needed. For the `*Equation` method the coordinates must already be the same; otherwise a singular‑matrix warning may appear.
+
+---
+
+## When a **beam‑type** MPC is really needed
+
+If the physics truly requires a beam‑type MPC, add a **beam element** that contains the node(s) you wish to constrain, e.g.:
+
+```abaqus
+*Element, type=B31, elset=Ebeam
+2001, 105, 126          ; a B31 element from node 105 to some other node
+*Beam Section, material=Steel, …
+```
+
+After a beam element exists, the original line
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+becomes legal because node 105 now belongs to a beam element.
+
+---
+
+## TL;DR (cheat‑sheet)
+
+| Goal | Recommended constraint | Input snippet |
+|------|------------------------|---------------|
+| Glue two interior solid nodes (most common) | `*Tie` | `*Tie, name=Tie_105_125, adjust=yes, position=average`<br>`Nset105, Nset125` |
+| Enforce identical translational DOFs (pure kinematic) | `*Equation` | `*Equation`<br>`3, 105, 1.0, 1, 125, -1.0, 1`<br>`3, 105, 1.0, 2, 125, -1.0, 2`<br>`3, 105, 1.0, 3, 125, -1.0, 3` |
+| Couple a slave node to a master node (alternative to Tie) | `*Coupling` | `*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105`<br>`Nset125` |
+| Actually need a beam‑type MPC | Add a beam element (B31, B32, …) that contains the node(s) | `*Element, type=B31, elset=Ebeam`<br>`2001, 105, 126` |
+
+**Bottom line:** The abort is caused by using a **BEAM** MPC with only solid C3D20R elements. Replace it with a `*Tie`, `*Equation`, or `*Coupling` constraint (or add a real beam element if a beam‑type MPC is truly required) and the analysis will run without the “BEAM MPC requires a beam element” error.
+A: **Why the job aborts**
+
+`*MPC, BEAM, 105, 125` tells Abaqus to create a **beam‑type** multi‑point constraint (MPC).  
+A beam‑type MPC can be applied **only to nodes that belong to a beam element** (B31, B31R, B32, …).  
+
+In the model you posted every element is a solid element (`C3D20R`).  
+Consequently nodes 105 and 125 are not part of any beam element, so Abaqus cannot satisfy the request and stops with the message  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## How to fix it
+
+Replace the beam‑type MPC with a constraint that works for solid elements, or add a real beam element if a beam‑type MPC is really required.
+
+### 1. Most common – glue the two nodes together  
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   125, x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+`*Tie` creates a kinematic “glue” between the master node (105) and the slave node (125).  
+`adjust=yes` automatically moves the slave node onto the master node before the analysis starts, so you do not have to edit the coordinates.
+
+---
+
+### 2. Enforce identical translational DOFs (pure kinematic equality)
+
+```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105) = U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105) = U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105) = U3(125)
+```
+
+Each line creates an equation that forces the corresponding displacement component of node 105 to be equal to that of node 125.
+
+---
+
+### 3. Couple a slave node to a master node (alternative to *Tie*)
+
+```abaqus
+*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105
+   Nset125
+```
+
+The master (reference) node is 105; all nodes in `Nset125` follow its motion.
+
+---
+
+### 4. If you really need a **beam‑type** MPC
+
+Add a beam element that contains the node(s) you want to constrain, e.g.:
+
+```abaqus
+*Element, type=B31, elset=Ebeam
+2001, 105, 126          ; a B31 element from node 105 to some other node
+*Beam Section, material=Steel, …
+```
+
+Now node 105 belongs to a beam element, and the original line
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+will be accepted.
+
+---
+
+## Quick cheat‑sheet
+
+| Desired behaviour | Recommended keyword | Minimal input (replace the `*MPC` line) |
+|-------------------|--------------------|------------------------------------------|
+| Glue two interior solid nodes (most common) | `*Tie` | `*Tie, name=Tie_105_125, adjust=yes, position=average`<br>`Nset105, Nset125` |
+| Make translational DOFs identical | `*Equation` | `*Equation`<br>`3, 105, 1.0, 1, 125, -1.0, 1`<br>`3, 105, 1.0, 2, 125, -1.0, 2`<br>`3, 105, 1.0, 3, 125, -1.0, 3` |
+| Couple a slave node to a master node | `*Coupling` | `*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105`<br>`Nset125` |
+| Actually need a beam‑type MPC | Add a beam element (B31, B32, …) that contains the node(s) | `*Element, type=B31, elset=Ebeam`<br>`2001, 105, 126` |
+
+---
+
+### How to verify the fix
+
+1. **Run a short test job** – the “BEAM MPC requires a beam element” abort should disappear.  
+2. **Check the *.msg* file** – you will see a line such as  
+   `TIE: Tie_105_125 – 2 slave nodes, 1 master node` (or the corresponding message for *Equation* or *Coupling*).  
+3. **Post‑process** – the displacements of nodes 105 and 125 should be identical (within numerical tolerance).
+
+---
+
+**Bottom line:** The abort is caused by using a **BEAM** MPC with only solid `C3D20R` elements. Replace it with a `*Tie`, `*Equation`, or `*Coupling` constraint (or add a real beam element if a beam‑type MPC is truly required) and the analysis will run without the “BEAM MPC requires a beam element” error.
+
+=== 2026-04-20 17:01:11 ===
+Q: **Why the job aborts**  
+
+`*MPC, BEAM, 105, 125` creates a *beam‑type* multi‑point constraint.  
+A beam‑type MPC can be applied only to nodes that belong to a **beam element** (B31, B31R, B32, …).  
+All the elements in your model are solid (`C3D20R`), so nodes 105 and 125 are not part of any beam element.  
+Because the required beam element is missing Abaqus stops with  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## How to fix it  
+
+You have two options:
+
+1. **Replace the beam‑type MPC with a constraint that works for solid meshes** (most common).  
+2. **Add a real beam element** if a beam‑type MPC is truly required.
+
+Below are three solid‑compatible ways to couple the two nodes. Choose the one that best matches the physics you want to impose.
+
+| Desired behaviour | Abaqus keyword (works with solids) | Minimal input (replace the `*MPC` line) |
+|-------------------|-----------------------------------|------------------------------------------|
+| **Glue the two nodes together** (make them move as one) | `*Tie` | ```abaqus
+*Node
+   105, x105, y105, z105
+   125, x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+``` |
+| **Force the three translational DOFs of the nodes to be identical** (pure kinematic equality) | `*Equation` | ```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)
+``` |
+| **Couple a slave node to a master node** (alternative to *Tie*) | `*Coupling` (kinematic) | ```abaqus
+*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105
+   Nset125
+``` |
+| **Actually need a beam‑type MPC** | Add a beam element that contains the node(s) | ```abaqus
+*Element, type=B31, elset=Ebeam
+2001, 105, 126          ; a B31 element from node 105 to some other node
+*Beam Section, material=Steel, …
+``` |
+
+*If you add the beam element, the original line `*MPC, BEAM, 105, 125` becomes legal because node 105 now belongs to a beam element.*
+
+---
+
+## Quick verification
+
+1. **Run a short test job** – the abort about “BEAM MPC requires a beam element” should disappear.  
+2. **Check the *.msg* file** – you will see a line such as  
+   `TIE: Tie_105_125 – 2 slave nodes, 1 master node` (or the corresponding message for *Equation* or *Coupling*).  
+3. **Post‑process** – the displacements of nodes 105 and 125 should be identical (within numerical tolerance).  
+
+The `adjust=yes` option in `*Tie` automatically moves the slave node onto the master node before the analysis starts, so no manual coordinate change is needed. For the `*Equation` method the coordinates must already be the same; otherwise a singular‑matrix warning may appear.
+
+---
+
+**Bottom line:** The abort is caused by using a **BEAM** MPC with only solid `C3D20R` elements. Replace it with a `*Tie`, `*Equation`, or `*Coupling` constraint (or add a real beam element if a beam‑type MPC is truly required) and the analysis will run without the “BEAM MPC requires a beam element” error.
+A: **Why the job aborts**
+
+`*MPC, BEAM, 105, 125` creates a **beam‑type multi‑point constraint**.  
+A beam‑type MPC can only be applied to nodes that belong to a **beam element** (B31, B31R, B32, …).  
+
+In your model every element is a solid (`C3D20R`). Consequently nodes 105 and 125 are not part of any beam element, so Abaqus stops with  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## How to solve the problem  
+
+You have two mutually exclusive routes:
+
+| What you really need | How to achieve it | What you must change in the input file |
+|----------------------|-------------------|----------------------------------------|
+| **A solid‑compatible constraint** (most common) | Use a constraint that works with solid meshes – `*Tie`, `*Equation`, or `*Coupling`. | Replace the `*MPC, BEAM, …` line with one of the blocks below. |
+| **A genuine beam‑type MPC** | Add a real beam element that contains the node(s) you want to constrain. | Keep the `*MPC, BEAM, …` line, but first create a beam element (e.g. B31) that uses node 105 (or 125). |
+
+Below are ready‑to‑copy snippets for each solid‑compatible option and for the beam‑type alternative.
+
+---
+
+### 1. Glue the two nodes together – `*Tie`
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   125, x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+* `adjust=yes` moves the slave node onto the master node before the analysis starts, so you do not have to edit the coordinates manually.  
+* The two nodes will have identical translational DOFs (and, if you request it, rotational DOFs for beam/ shell nodes).
+
+---
+
+### 2. Enforce exact equality of the three translational DOFs – `*Equation`
+
+```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105) = U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105) = U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105) = U3(125)
+```
+
+* Each line creates a linear equation that forces the corresponding displacement component of node 105 to be equal to that of node 125.  
+* No additional sets are required.
+
+---
+
+### 3. Couple a slave node to a master node – `*Coupling` (kinematic)
+
+```abaqus
+*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105
+   Nset125
+```
+
+* `ref node` is the master (here node 105). All nodes in the following line (`Nset125`) become slaves.  
+* The slave node follows the master in all translational DOFs (and rotations if the master is a beam/ shell node).
+
+---
+
+### 4. Keep a beam‑type MPC – add a beam element
+
+If the physics you are modelling truly requires a **beam‑type MPC** (e.g. you need a rotational constraint that only a beam element can provide), you must introduce at least one beam element that contains the node you are constraining.
+
+```abaqus
+*Element, type=B31, elset=Ebeam
+2001, 105, 126          ; a B31 element from node 105 to any other node (126)
+
+*Beam Section, material=Steel, profile=RECT, …
+   Ebeam
+```
+
+Now node 105 belongs to a beam element, so the original line
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+becomes legal and the job will run.
+
+---
+
+## Quick sanity‑check after the change
+
+1. **Run a short test job** – the abort about “BEAM MPC requires a beam element” should disappear.  
+2. **Inspect the *.msg* file** – you will see a line such as  
+   `TIE: Tie_105_125 – 2 slave nodes, 1 master node` (or the corresponding message for *Equation* or *Coupling*).  
+3. **Post‑process** – the displacement values of nodes 105 and 125 should be identical (within numerical tolerance).  
+
+If you used `*Tie` with `adjust=yes`, the coordinates of node 125 will be automatically moved onto node 105 before the first increment, so no singular‑matrix warnings appear.
+
+---
+
+### Bottom line
+
+The abort is caused by applying a **BEAM** MPC to nodes that belong only to solid elements.  
+Replace the `*MPC, BEAM, 105, 125` line with a solid‑compatible constraint (`*Tie`, `*Equation`, or `*Coupling`) **or** add a real beam element that contains the node(s) if a beam‑type MPC is truly required. After making one of these changes the analysis will start without the “BEAM MPC requires a beam element” error.
+
+=== 2026-04-20 17:01:46 ===
+Q: **为什么会报错**  
+`*MPC, BEAM, 105, 125` 产生的是 **beam‑type 多点约束**。  
+Abaqus 只允许把这种约束加在 **属于梁单元（B31、B31R、B32…）的节点** 上。  
+你的模型里所有单元都是实心单元 `C3D20R`，因此 105、125 这两个节点不属于任何梁单元，Abaqus 在读取到该指令时找不到对应的梁单元，于是直接 **ABORT**，报错信息为  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## 解决思路
+
+### 1️⃣ 用适用于实心网格的约束（最常用）
+
+| 需求 | Abaqus 关键字 | 示例（替换 `*MPC, BEAM, 105, 125`） |
+|------|--------------|-----------------------------------|
+| **把两个节点“粘在一起”**（相同位移） | `*Tie` | ```abaqus
+*Node
+   105, x105, y105, z105
+   125, x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+``` |
+| **强制三个平移自由度完全相等**（纯等式） | `*Equation` | ```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)
+``` |
+| **把 125 设为 105 的从属节点**（等效于 *Tie*） | `*Coupling`（KINEMATIC） | ```abaqus
+*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105
+   Nset125
+``` |
+
+- `*Tie` 中的 `adjust=yes` 会在分析开始前把从属节点（125）自动移动到主节点（105）的位置，无需手动改坐标。  
+- `*Equation` 只约束平移自由度，若需要约束转动自由度，需要使用梁/壳单元并配合相应的约束。  
+- `*Coupling` 与 `*Tie` 类似，只是写法不同，适用于需要显式指定主从关系的情况。
+
+### 2️⃣ 若真的需要 **beam‑type MPC**，必须先加入梁单元
+
+```abaqus
+*Element, type=B31, elset=Ebeam
+2001, 105, 126          ; 任选一个与 105 相连的节点 126，形成 B31 梁单元
+
+*Beam Section, material=Steel, profile=RECT, …
+   Ebeam
+```
+
+随后保留原来的
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+此时 105 已经属于梁单元，Abaqus 能正常创建 beam‑type MPC。
+
+---
+
+## 验证步骤
+
+1. **运行一次短步分析**，确认不再出现 “BEAM MPC requires a beam element” 的 abort。  
+2. **查看 *.msg* 文件**，应出现类似 `TIE: Tie_105_125 – 2 slave nodes, 1 master node`（或 `EQUATION`、`COUPLING` 的相应信息）。  
+3. **后处理**：节点 105 与 125 的位移（以及转角，如适用）应在数值容差范围内完全相同。  
+
+---
+
+### 小结
+
+- **报错根本原因**：对仅属于实心单元的节点使用了 **BEAM** 类型的 MPC。  
+- **解决办法**：  
+  1. 用 `*Tie`、`*Equation` 或 `*Coupling` 替代 `*MPC, BEAM,…`（推荐），或  
+  2. 若模型确实需要梁约束，先在输入文件中加入至少一个包含该节点的梁单元（B31、B32 等），再保留 `*MPC, BEAM,…`。  
+
+完成上述任意一种修改后，作业即可正常启动，不再出现 “BEAM MPC requires a beam element” 的错误。
+A: **问题根源**  
+`*MPC, BEAM, 105, 125` 只能作用在 **梁单元（B31、B31R、B32 …）的节点** 上。  
+在你的模型里所有单元都是实心体单元 `C3D20R`，因此节点 **105、125** 并不属于任何梁单元。Abaqus 在读取到该指令时找不到对应的梁单元，于是直接 **ABORT**，报错信息为  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## 两种根本的解决思路  
+
+| 方案 | 何时使用 | 关键关键字 | 主要优点 |
+|------|----------|------------|----------|
+| **① 用适用于实心网格的约束**（推荐） | 只需要把两个节点的位移（或转动）“粘在一起”，模型中没有梁单元 | `*Tie`、`*Equation`、`*Coupling`（KINEMATIC） | 不必改动网格结构，操作最简；`*Tie` 还能自动把从属节点移动到主节点位置 |
+| **② 真正需要 **beam‑type MPC** 时** | 必须使用梁‑type 多点约束（例如想利用梁的刚度矩阵来传递约束） | 先在模型中加入 **至少一根包含节点 105（或 125）** 的梁单元（B31、B32 等），随后保留 `*MPC, BEAM,…` | 保持原有的 BEAM‑MPC 语义，适用于混合实心‑梁模型 |
+
+下面分别给出 **完整的实现步骤** 与 **示例代码**，你可以直接拷贝到 `.inp` 文件中使用。
+
+---
+
+## 方案①：使用实心网格专用约束（推荐）
+
+### 1. `*Tie`（最常用）
+
+```abaqus
+*Node
+   105,  x105, y105, z105
+   125,  x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+- `adjust=yes`：在分析开始前，Abaqus 会把 **从属节点（125）** 自动平移到 **主节点（105）** 的坐标，避免因几何不匹配导致的收敛问题。  
+- `position=average`（可选）在两节点坐标不完全相同的情况下取平均位置，亦可使用 `position=master` 或 `position=slave`。
+
+### 2. `*Equation`（仅约束平移自由度）
+
+如果你只想约束 **U1、U2、U3**（不涉及转动），可以写等式约束：
+
+```abaqus
+*Equation
+3, 105, 1, 1, 125, -1, 1   ; U1(105) = U1(125)
+3, 105, 1, 2, 125, -1, 2   ; U2(105) = U2(125)
+3, 105, 1, 3, 125, -1, 3   ; U3(105) = U3(125)
+```
+
+> **注意**：`*Equation` 只能约束 **位移**（或温度等标量），不能直接约束 **转动**。若模型中有转动自由度需要相等，请改用 `*Tie`（对壳/梁单元）或 `*Coupling`（见下）。
+
+### 3. `*Coupling`（KINEMATIC 方式）
+
+```abaqus
+*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105
+   Nset125
+```
+
+- `ref node=105` 为主节点，`Nset125` 为从属节点集合。  
+- 该约束等价于 `*Tie`，但在某些需要显式指定主/从关系的脚本中更直观。
+
+---
+
+## 方案②：保留 **BEAM‑type MPC**，先加入梁单元
+
+如果业务需求必须使用 `*MPC, BEAM,…`（例如想让约束利用梁的刚度矩阵），则必须让 **105 或 125** 成为 **梁单元的端点**。下面给出最小化改动的实现方式：
+
+### 步骤 1 – 在 105 处创建一根虚拟梁
+
+```abaqus
+*Node
+   105,  x105, y105, z105
+   126,  x126, y126, z126   ; 任意与 105 相邻的坐标点（可以是已有节点，也可以新建）
+
+*Element, type=B31, elset=Ebeam
+   2001, 105, 126
+```
+
+> **提示**：如果模型中已有与 105 相连的节点（比如 106），直接使用该节点即可，无需新建 126。
+
+### 步骤 2 – 为该梁指定截面（材料、几何）
+
+```abaqus
+*Material, name=Steel
+*Elastic
+210000., 0.3
+
+*Beam Section, material=Steel, profile=RECT, name=RectSec
+   0.01, 0.01   ; 例：宽 10 mm × 高 10 mm
+*Section Assignment, elset=Ebeam, section=RectSec
+```
+
+> **注意**：梁截面尺寸不影响约束本身，只要是合法的梁单元即可。
+
+### 步骤 3 – 保留原来的 BEAM‑MPC
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+此时 **105** 已经属于梁单元 `B31`，Abaqus 能正常创建 **beam‑type MPC**，不再出现 abort。
+
+---
+
+## 验证与后处理
+
+1. **快速跑一次线性静力分析**（或仅 `*Step, name=Check, nlgeom=NO`），观察 `.msg` 文件。  
+   - 若使用 `*Tie`，会出现类似 `TIE: Tie_105_125 – 1 master node, 1 slave node` 的信息。  
+   - 若使用 `*Equation`，会出现 `EQUATION: 3 equations defined`。  
+   - 若使用 `*MPC, BEAM` 并已加入梁单元，则会出现 `MPC: BEAM MPC between node 105 and node 125`。
+
+2. **后处理**：在 Abaqus/Viewer 中打开 **ODB**，检查节点 105 与 125 的位移（`U1, U2, U3`）以及（若有）转角是否在数值容差（如 1e‑8）内相等。  
+
+3. **若仍报错**：  
+   - 确认 **节点编号** 与 **集合名称** 在 `*Tie`、`*Equation`、`*Coupling` 中完全匹配。  
+   - 检查是否在 **同一 Step** 中混用了 `*MPC, BEAM` 与 `*Tie`（两者不冲突，但要确保约束对象不重复）。  
+
+---
+
+## 小结
+
+| 关键点 | 结论 |
+|--------|------|
+| **报错原因** | `*MPC, BEAM` 只能作用在梁单元的节点上，实心单元 `C3D20R` 的节点不满足条件。 |
+| **最简解决方案** | 用 `*Tie`（或 `*Equation`、`*Coupling`）代替 `*MPC, BEAM`，不需要改动网格。 |
+| **如果必须使用 BEAM‑MPC** | 必须在模型中加入至少一根包含该节点的梁单元（B31、B32 等），再保留 `*MPC, BEAM`。 |
+| **验证方式** | 运行一次短步分析，检查 `.msg` 中的约束创建信息，后处理确认节点位移相等。 |
+
+按照上述任意一种方案修改后，作业即可正常启动，**不再出现**  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+``` 
+
+祝你建模顺利！如果还有其他细节（如多点约束的方向、转动约束的实现等）需要进一步探讨，随时提问。
+
+=== 2026-04-20 17:02:34 ===
+Q: **报错原因**  
+`*MPC, BEAM, 105, 125` 是 **梁（beam）类型** 的多点约束。  
+Abaqus 只允许把这种约束加在 **属于梁单元（B31、B31R、B32 …）的节点** 上。  
+你的模型中所有单元都是实心体单元 `C3D20R`，因此节点 **105、125** 并不属于任何梁单元，Abaqus 在读取该指令时找不到对应的梁单元，于是直接 **ABORT**，报错信息为  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## 两种根本的解决思路  
+
+| 方案 | 何时使用 | 关键关键字 | 主要优点 |
+|------|----------|------------|----------|
+| **① 用适用于实心网格的约束（推荐）** | 只需要把两个节点的位移（或转动）“粘在一起”，模型中没有梁单元 | `*Tie`、`*Equation`、`*Coupling`（KINEMATIC） | 不必改动网格结构，操作最简；`*Tie` 还能自动把从属节点移动到主节点位置 |
+| **② 真正需要 **beam‑type MPC** 时** | 必须使用梁‑type 多点约束（例如想利用梁的刚度矩阵） | 先在模型中加入 **至少一根包含节点 105（或 125）** 的梁单元（B31、B32 等），随后保留 `*MPC, BEAM,…` | 保持原有的 BEAM‑MPC 语义，适用于混合实心‑梁模型 |
+
+下面分别给出 **完整的实现步骤** 与 **示例代码**，直接拷贝到 `.inp` 文件中即可。
+
+---
+
+## 方案①：使用实心网格专用约束（推荐）
+
+### 1. `*Tie`（最常用）
+
+```abaqus
+*Node
+   105,  x105, y105, z105
+   125,  x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+- `adjust=yes`：在分析开始前，Abaqus 会把 **从属节点（125）** 自动平移到 **主节点（105）** 的坐标，避免几何不匹配导致的收敛问题。  
+- `position=average`（可选）在两节点坐标不完全相同的情况下取平均位置，亦可使用 `position=master` 或 `position=slave`。
+
+### 2. `*Equation`（仅约束平移自由度）
+
+```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)
+```
+
+> **注意**：`*Equation` 只能约束位移（或温度等标量），不能直接约束转动自由度。
+
+### 3. `*Coupling`（KINEMATIC 方式）
+
+```abaqus
+*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105
+   Nset125
+```
+
+- `ref node=105` 为主节点，`Nset125` 为从属节点集合。该约束等价于 `*Tie`，但在需要显式指定主/从关系的脚本中更直观。
+
+---
+
+## 方案②：保留 **BEAM‑type MPC**，先加入梁单元
+
+如果业务需求必须使用 `*MPC, BEAM,…`，则必须让 **105 或 125** 成为 **梁单元的端点**。最小化改动的实现方式如下：
+
+### 步骤 1 – 在 105 处创建一根梁（B31）
+
+```abaqus
+*Node
+   105,  x105, y105, z105
+   126,  x126, y126, z126   ; 任意与 105 相邻的点（可以是已有节点，也可以新建）
+
+*Element, type=B31, elset=Ebeam
+   2001, 105, 126
+```
+
+> 如果模型中已有与 105 相连的节点（如 106），直接使用该节点即可，无需新建 126。
+
+### 步骤 2 – 为该梁指定截面（材料、几何）
+
+```abaqus
+*Material, name=Steel
+*Elastic
+210000., 0.3
+
+*Beam Section, material=Steel, profile=RECT, name=RectSec
+   0.01, 0.01   ; 例：宽 10 mm × 高 10 mm
+*Section Assignment, elset=Ebeam, section=RectSec
+```
+
+> 梁截面尺寸不影响约束本身，只要是合法的梁单元即可。
+
+### 步骤 3 – 保留原来的 BEAM‑MPC
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+此时 **105** 已经属于梁单元 `B31`，Abaqus 能正常创建 **beam‑type MPC**，不再出现 abort。
+
+---
+
+## 验证步骤
+
+1. **跑一次短步分析**（如仅 `*Step, name=Check, nlgeom=NO`），观察 `.msg` 文件。  
+   - 使用 `*Tie` 时会出现 `TIE: Tie_105_125 – 1 master node, 1 slave node`。  
+   - 使用 `*Equation` 时会出现 `EQUATION: 3 equations defined`。  
+   - 使用 `*MPC, BEAM` 并已加入梁单元时会出现 `MPC: BEAM MPC between node 105 and node 125`。
+
+2. **后处理**：在 Abaqus/Viewer 中检查节点 105 与 125 的位移（U1、U2、U3）以及（若有）转角是否在数值容差（如 1e‑8）内相等。
+
+---
+
+## 小结
+
+- **报错根本原因**：`*MPC, BEAM` 只能作用在梁单元的节点上，实心单元 `C3D20R` 的节点不满足条件。  
+- **最简解决方案**：用 `*Tie`（或 `*Equation`、`*Coupling`）代替 `*MPC, BEAM`，不需要改动网格。  
+- **如果必须使用 BEAM‑MPC**：在模型中加入至少一根包含该节点的梁单元（B31、B32 等），再保留 `*MPC, BEAM`。  
+
+完成上述任意一种修改后，作业即可正常启动，**不再出现**  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+``` 
+
+祝你建模顺利！如果还有其他细节（如多点约束的方向、转动约束的实现等）需要进一步探讨，随时提问。
+A: **问题根源**  
+`*MPC, BEAM, 105, 125` 是 **梁（beam）类型** 的多点约束（MPC）。  
+Abaqus 只允许把这种约束加在 **属于梁单元（B31、B31R、B32 …）的节点** 上。  
+你的模型全部由实心体单元 `C3D20R` 组成，节点 **105、125** 并不属于任何梁单元，因而在读取该指令时 Abaqus 找不到对应的梁单元，直接 **ABORT**，报错为  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## 两种根本的解决思路  
+
+| 方案 | 何时使用 | 关键关键字 | 主要优点 |
+|------|----------|------------|----------|
+| **① 用适用于实心网格的约束（推荐）** | 只需要把两个节点的位移（或转动）“粘在一起”，模型中没有梁单元 | `*Tie`、`*Equation`、`*Coupling`（KINEMATIC） | 不必改动网格结构，操作最简；`*Tie` 还能自动把从属节点移动到主节点位置 |
+| **② 真正需要 **beam‑type MPC** 时** | 必须使用梁‑type 多点约束（例如想利用梁的刚度矩阵） | 先在模型中加入 **至少一根包含节点 105（或 125）** 的梁单元（B31、B32 等），随后保留 `*MPC, BEAM,…` | 保持原有的 BEAM‑MPC 语义，适用于混合实心‑梁模型 |
+
+下面分别给出 **完整的实现步骤** 与 **示例代码**，直接拷贝到 `.inp` 文件中即可。
+
+---
+
+## 方案①：使用实心网格专用约束（推荐）
+
+### 1. `*Tie`（最常用、最稳健）
+
+```abaqus
+*Node
+   105,  x105, y105, z105
+   125,  x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+- **adjust=yes**：在分析开始前，Abaqus 会把 **从属节点（125）** 自动平移到 **主节点（105）** 的坐标，避免几何不匹配导致的收敛问题。  
+- **position=average**（可选）在两节点坐标不完全相同的情况下取平均位置，亦可使用 `position=master` 或 `position=slave`。
+
+> 这样相当于把 105 与 125 视为同一点，所有自由度（位移 + 转动）都被强制相等。
+
+### 2. `*Equation`（仅约束位移自由度）
+
+如果你只关心 **平移**（不需要约束转动），可以使用 `*Equation`：
+
+```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)
+```
+
+> `*Equation` 只能约束标量自由度（位移、温度等），不能直接约束转动自由度。
+
+### 3. `*Coupling`（KINEMATIC 方式）
+
+另一种写法是 `*Coupling`，效果与 `*Tie` 相同，只是语法不同：
+
+```abaqus
+*Coupling, constraint name=Couple_105_125, type=KINEMATIC, ref node=105
+   Nset125
+```
+
+- `ref node=105` 为主节点，`Nset125` 为从属节点集合。  
+- 适合在脚本里需要显式指定“主‑从”关系的情况。
+
+---
+
+## 方案②：保留 **BEAM‑type MPC**，先加入梁单元
+
+如果业务需求必须使用 `*MPC, BEAM,…`（例如想让约束使用梁的刚度矩阵），则必须让 **105 或 125** 成为 **梁单元的端点**。下面给出最小改动的实现方式。
+
+### 步骤 1 – 在 105 处创建一根梁（B31）
+
+```abaqus
+*Node
+   105,  x105, y105, z105
+   126,  x126, y126, z126   ; 任意与 105 相邻的点（可以是已有节点，也可以新建）
+
+*Element, type=B31, elset=Ebeam
+   2001, 105, 126
+```
+
+> 如果模型中已有与 105 相连的节点（如 106），直接使用该节点即可，无需新建 126。
+
+### 步骤 2 – 为该梁指定截面（材料、几何）
+
+```abaqus
+*Material, name=Steel
+*Elastic
+210000., 0.3
+
+*Beam Section, material=Steel, profile=RECT, name=RectSec
+   0.01, 0.01   ; 例：宽 10 mm × 高 10 mm
+
+*Section Assignment, elset=Ebeam, section=RectSec
+```
+
+> 梁截面尺寸不影响约束本身，只要是合法的梁单元即可。
+
+### 步骤 3 – 保留原来的 BEAM‑MPC
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+此时 **105** 已经属于梁单元 `B31`，Abaqus 能正常创建 **beam‑type MPC**，不再出现 abort。
+
+---
+
+## 验证步骤（两种方案通用）
+
+1. **跑一次短步分析**（如仅 `*Step, name=Check, nlgeom=NO`），观察 `.msg` 文件。  
+   - `*Tie` 时会出现 `TIE: Tie_105_125 – 1 master node, 1 slave node`。  
+   - `*Equation` 时会出现 `EQUATION: 3 equations defined`。  
+   - `*MPC, BEAM` 并已加入梁单元时会出现 `MPC: BEAM MPC between node 105 and node 125`。
+
+2. **后处理**：在 Abaqus/Viewer 中检查节点 105 与 125 的位移（U1、U2、U3）以及（若有）转角是否在数值容差（如 1e‑8）内相等。
+
+---
+
+## 小结
+
+- **报错根本原因**：`*MPC, BEAM` 只能作用在梁单元的节点上，实心单元 `C3D20R` 的节点不满足条件。  
+- **最简解决方案**：用 `*Tie`（或 `*Equation`、`*Coupling`）代替 `*MPC, BEAM`，不需要改动网格。  
+- **如果必须使用 BEAM‑MPC**：在模型中加入至少一根包含该节点的梁单元（B31、B32 等），再保留 `*MPC, BEAM`。  
+
+完成上述任意一种修改后，作业即可正常启动，**不再出现**  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```  
+
+祝你建模顺利！如果还有其他细节（如多点约束的方向、转动约束的实现、混合实心‑梁模型的注意事项等）需要进一步探讨，随时提问。
+
+=== 2026-04-20 17:03:14 ===
+Q: **Why the job aborts**
+
+`*MPC, BEAM, 105, 125` creates a **beam‑type multi‑point constraint (MPC)**.  
+Abaqus allows a *beam* MPC only on nodes that belong to a **beam element** (B31, B31R, B32, …).  
+All the elements in your model are solid 20‑node bricks (`C3D20R`).  
+Therefore nodes 105 and 125 are not attached to any beam element, so when Abaqus reads the *MPC, BEAM* line it cannot find a required beam element and aborts with  
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## How to fix it
+
+### 1. Replace the beam MPC with a constraint that works for solid elements  
+(usually the simplest and most robust choice)
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   125, x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+- `adjust=yes` moves node 125 onto node 105 before the step starts, so the two points behave as a single point.  
+- All translational and rotational DOFs of the two nodes are forced to be equal.  
+
+If you only need to tie translational DOFs, you can use an equation instead:
+
+```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)
+```
+
+(Or `*Coupling, type=KINEMATIC` – same effect as *Tie.)
+
+### 2. Keep the beam‑type MPC, but add a beam element that contains the node  
+
+If the analysis truly requires a *beam* MPC (e.g., you need the constraint to use the beam stiffness matrix), make node 105 (or 125) part of a beam element first:
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   126, x126, y126, z126   ; any node that is geometrically adjacent
+
+*Element, type=B31, elset=Ebeam
+   2001, 105, 126
+
+*Material, name=Steel
+*Elastic
+210000., 0.3
+
+*Beam Section, material=Steel, profile=RECT, name=RectSec
+   0.01, 0.01
+*Section Assignment, elset=Ebeam, section=RectSec
+```
+
+Now the original line works:
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+Because node 105 now belongs to a beam element, Abaqus can create the beam‑type MPC and the job will not abort.
+
+---
+
+## Quick check
+
+Run a short static step (or just a dummy step) and look at the `.msg` file:
+
+* `*Tie` → `TIE: Tie_105_125 – 1 master node, 1 slave node`
+* `*Equation` → `EQUATION: 3 equations defined`
+* `*MPC, BEAM` with a beam element → `MPC: BEAM MPC between node 105 and node 125`
+
+In the viewer, the displacements (and rotations, if tied) of nodes 105 and 125 should be identical within numerical tolerance.
+
+---
+
+### Bottom line
+*The abort occurs because a beam‑type MPC needs a beam element.*  
+Use a *Tie* (or *Equation*/*Coupling*) for solid‑element models, or add at least one beam element that contains the node before using `*MPC, BEAM`. After applying either fix, the analysis will run without the “BEAM MPC requires a beam element” error.
+A: **Why the job aborts**
+
+`*MPC, BEAM, 105, 125` tells Abaqus to create a **beam‑type multi‑point constraint (MPC)** between node 105 and node 125.  
+A beam‑type MPC can only be applied when **both nodes belong to at least one beam element** (B31, B31R, B32, …).  
+
+In your model every element is a solid 20‑node brick (`C3D20R`). Consequently nodes 105 and 125 are attached only to solid elements, not to any beam element. When Abaqus reads the line it cannot find a required beam element and aborts with
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## How to fix the problem  
+
+You have two logical routes:
+
+| Option | When to use it | What you have to do |
+|--------|----------------|---------------------|
+| **A – Replace the beam‑type MPC with a constraint that works for solid elements** | You only need the two nodes to move together (same translations, optionally same rotations). | Use `*Tie`, `*Coupling` (kinematic), or an `*Equation` set. |
+| **B – Keep the beam‑type MPC, but give the nodes a beam element** | The analysis really requires a *beam* MPC (e.g., you need the beam stiffness matrix to be part of the constraint). | Insert at least one beam element that contains one of the two nodes, then the original `*MPC, BEAM` line will be valid. |
+
+Below are the concrete steps for each option.
+
+---
+
+### A. Use a constraint that works for solid elements  
+
+#### 1. Tie constraint (most straightforward)
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   125, x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+* `adjust=yes` moves node 125 onto node 105 before the first step, so the two points become coincident.  
+* All translational **and rotational** DOFs of the master (105) and slave (125) are forced to be identical.
+
+#### 2. Equation constraints (if you only need translational DOFs)
+
+```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105) = U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105) = U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105) = U3(125)
+```
+
+*Each line creates an equation of the form* `c1·U(i,105) + c2·U(i,125) = 0`.  
+*Only the three translational DOFs are tied; rotations remain free.*
+
+#### 3. Kinematic coupling (alternative to *Tie*)
+
+```abaqus
+*Coupling, type=KINEMATIC, ref node=105, surface=Surf125
+```
+
+*Define `Surf125` as a surface that contains node 125 (or a set of nodes that you want to couple to node 105). The kinematic coupling forces all DOFs of the slave surface to follow the reference node.*
+
+---
+
+### B. Keep the beam‑type MPC – add a beam element  
+
+1. **Create a beam element that contains one of the two nodes** (normally the master node, 105).
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   126, x126, y126, z126   ; any node that is geometrically adjacent to 105
+
+*Element, type=B31, elset=Ebeam
+   2001, 105, 126
+```
+
+2. **Assign material and section to the beam element** (required for a valid beam).
+
+```abaqus
+*Material, name=Steel
+*Elastic
+210000., 0.3
+
+*Beam Section, material=Steel, profile=RECT, name=RectSec
+   0.01, 0.01          ; width, height (example)
+
+*Section Assignment, elset=Ebeam, section=RectSec
+```
+
+3. **Now the original MPC line works**:
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+Because node 105 now belongs to a beam element, Abaqus can create the beam‑type MPC and the job will no longer abort.
+
+---
+
+## Quick verification after the fix  
+
+1. **Run a short dummy step** (e.g., a static step with no loads) and inspect the `.msg` file. You should see messages such as:
+
+   * For a *Tie*:  
+     `TIE: Tie_105_125 – 1 master node, 1 slave node`
+   * For an *Equation*:  
+     `EQUATION: 3 equations defined`
+   * For a *Coupling*:  
+     `COUPLING: KINEMATIC coupling between node 105 and surface Surf125`
+   * For a *Beam MPC*:  
+     `MPC: BEAM MPC between node 105 and node 125`
+
+2. **Post‑process**: In Abaqus/Viewer plot the displacement (or rotation) of nodes 105 and 125. They should be identical (within numerical tolerance) for the chosen constraint type.
+
+---
+
+## Bottom line  
+
+- **The abort occurs because a beam‑type MPC requires at least one beam element attached to the involved nodes.**  
+- **If you are modelling only solid bricks, replace the beam MPC with a *Tie*, *Coupling*, or *Equation* constraint.**  
+- **If you really need a beam MPC, insert a beam element that contains one of the nodes before using `*MPC, BEAM`.**  
+
+After applying either of the above fixes, the analysis will run without the “BEAM MPC requires a beam element” error.
+
+=== 2026-04-20 17:03:57 ===
+Q: **为什么作业会在 `*MPC, BEAM, 105, 125` 处中止**
+
+`*MPC, BEAM, 105, 125` 用来在 **节点 105 与节点 125 之间建立梁型多点约束（beam‑type MPC）**。  
+Abaqus 只允许 **梁型 MPC** 作用在 **至少属于一个梁单元（B31、B31R、B32 …）的节点** 上。  
+
+在你的模型里所有单元都是 20‑节点实心砖块（`C3D20R`），因此节点 105、125 只与实心单元相连，根本没有任何梁单元。  
+当 Abaqus 读取 `*MPC, BEAM` 这一行时找不到所需的梁单元，于是直接报错并中止：
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## 解决思路（两条路线）
+
+| 方案 | 适用情形 | 实现方式 |
+|------|----------|----------|
+| **A – 用适用于实心单元的约束代替 beam‑MPC** | 只需要让两个节点的自由度（位移/转动）保持相同，模型中没有梁单元。 | `*Tie`、`*Coupling`（kinematic）或 `*Equation`。 |
+| **B – 保留 beam‑MPC，先给节点加一根梁单元** | 必须使用 **beam‑type MPC**（例如希望约束使用梁的刚度矩阵）。 | 在节点 105（或 125）所在位置插入至少一根梁单元，然后原来的 `*MPC, BEAM` 行即可使用。 |
+
+下面给出两种方案的具体实现步骤，直接复制到 `.inp` 文件中即可。
+
+---
+
+### A. 用适用于实心单元的约束（推荐）
+
+#### 1. Tie 约束（最稳健、最常用）
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   125, x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+- `adjust=yes`：在第一步开始前把从属节点 125 移动到主节点 105 的位置，避免几何不匹配导致的收敛问题。  
+- `position=average`（可选）在两点坐标不完全相同的情况下取平均位置，也可以使用 `position=master` 或 `position=slave`。  
+- 该约束会把 **所有自由度（3 个平移 + 3 个转动）** 强制相等，等价于把 105 与 125 当作同一点。
+
+#### 2. 仅约束平移自由度的 Equation（如果不需要约束转动）
+
+```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)
+```
+
+`*Equation` 只能约束标量自由度（位移、温度等），不能直接约束转动。
+
+#### 3. Kinematic Coupling（与 *Tie* 效果相同，只是语法不同）
+
+```abaqus
+*Coupling, type=KINEMATIC, ref node=105, surface=Surf125
+```
+
+- 先把包含节点 125 的节点集合或表面定义为 `Surf125`（或 `Nset125`），然后该耦合把从属表面的所有 DOF 追随参考节点 105。
+
+---
+
+### B. 保留 beam‑type MPC，先给节点加一根梁单元
+
+如果分析真的需要 **beam‑type MPC**（例如希望约束使用梁的刚度矩阵），则必须让 **105 或 125** 至少属于一根梁单元。
+
+#### 步骤 1 – 在节点 105 处创建一根梁（B31）
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   126, x126, y126, z126   ; 任意与 105 相邻的点（可以是已有节点，也可以新建）
+*Element, type=B31, elset=Ebeam
+   2001, 105, 126
+```
+
+> 若模型中已有与 105 相连的节点（如 106），直接使用该节点即可，无需新建 126。
+
+#### 步骤 2 – 为该梁指定材料和截面（必须的）
+
+```abaqus
+*Material, name=Steel
+*Elastic
+210000., 0.3
+
+*Beam Section, material=Steel, profile=RECT, name=RectSec
+   0.01, 0.01          ; 示例：宽 10 mm × 高 10 mm
+
+*Section Assignment, elset=Ebeam, section=RectSec
+```
+
+> 梁截面的尺寸对约束本身没有影响，只要是合法的梁单元即可。
+
+#### 步骤 3 – 现在原来的 MPC 行可以正常使用
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+因为节点 105 已经属于梁单元 `B31`，Abaqus 能成功创建 **beam‑type MPC**，作业不再中止。
+
+---
+
+## 验证（两种方案通用）
+
+1. **运行一个短的空步**（如 `*Step, name=Check, nlgeom=NO`），在 `.msg` 文件中检查对应的提示信息：  
+
+   *Tie* → `TIE: Tie_105_125 – 1 master node, 1 slave node`  
+   *Equation* → `EQUATION: 3 equations defined`  
+   *Coupling* → `COUPLING: KINEMATIC coupling between node 105 and surface Surf125`  
+   *Beam MPC* → `MPC: BEAM MPC between node 105 and node 125`
+
+2. **后处理**：在 Abaqus/Viewer 中绘制节点 105 与节点 125 的位移（以及转角，若已耦合），它们应在数值容差（如 1e‑8）内完全相同。
+
+---
+
+## 小结
+
+- **错误根源**：`*MPC, BEAM` 只能在**至少有一根梁单元**的节点上使用。你的模型只有实心砖块，所以找不到所需的梁单元，导致作业中止。  
+- **最简解决方案**：对仅含实心单元的模型，用 `*Tie`（或 `*Coupling`、`*Equation`）代替 `*MPC, BEAM`，无需修改网格。  
+- **如果必须使用 beam‑type MPC**：在模型中加入至少一根包含其中一个节点的梁单元（如 B31），随后原来的 `*MPC, BEAM` 行即可正常工作。  
+
+完成上述任意一种修改后，作业将能够顺利运行，**不再出现 “BEAM MPC requires a beam element”** 的错误。祝你分析顺利！
+A: **原因**  
+`*MPC, BEAM, 105, 125` 用来在 **节点 105 与节点 125 之间建立梁型多点约束（beam‑type MPC）**。  
+Abaqus 只在 **至少有一根梁单元（B31、B31R、B32 …）的节点** 上允许这种约束。  
+
+在你的模型里所有单元都是 20‑节点实心砖块（`C3D20R`），因此节点 105、125 只与实心单元相连，根本没有任何梁单元。  
+当 Abaqus 读取 `*MPC, BEAM` 时找不到所需的梁单元，于是报错并中止：
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## 两种可行的解决办法  
+
+| 方案 | 何时使用 | 实现要点 |
+|------|----------|----------|
+| **A. 用适用于实心单元的约束代替 beam‑MPC** | 只需要让两个节点的自由度保持相同，模型中没有梁单元。 | `*Tie`、`*Coupling (KINEMATIC)` 或 `*Equation`。 |
+| **B. 保留 beam‑type MPC，先给节点加一根梁单元** | 必须使用 **beam‑type MPC**（例如想让约束使用梁的刚度矩阵）。 | 在节点 105（或 125）所在位置插入至少一根梁单元（B31、B31R、B32 …），再使用原来的 `*MPC, BEAM`。 |
+
+下面给出两种方案的 **完整、可直接复制到 *.inp* 文件中的实现代码**。
+
+---
+
+### A‑方案：使用 `*Tie`（最常用、最稳健）
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   125, x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+- `adjust=yes`：在分析开始前把从属节点 125 移动到主节点 105，避免几何不匹配。  
+- `position=average`（可选）在两点坐标不完全相同的情况下取平均位置。  
+- 该约束把 **所有 6 个自由度（3 位移 + 3 转动）** 强制相等，等价于把 105 与 125 当作同一点。
+
+> **如果只想约束平移自由度**（不需要转动），可以改用 `*Equation`：
+
+```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)
+```
+
+> **或者使用 kinematic coupling**（语法与 *Tie* 类似）：
+
+```abaqus
+*Surface, type=node, name=Surf125
+   125
+*Coupling, type=KINEMATIC, ref node=105, surface=Surf125
+```
+
+---
+
+### B‑方案：先在节点 105（或 125）上加入一根梁单元
+
+1. **创建梁单元（B31）**（任选一个与节点 105 相邻的已有节点，或新建一个临时节点 126）：
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   126, x126, y126, z126   ; 与 105 相邻的点，可使用已有节点
+
+*Element, type=B31, elset=Ebeam
+   2001, 105, 126
+```
+
+2. **定义梁材料和截面（必须的）**：
+
+```abaqus
+*Material, name=Steel
+*Elastic
+210000., 0.3
+
+*Beam Section, material=Steel, profile=RECT, name=RectSec
+   0.01, 0.01          ; 10 mm × 10 mm（仅示例，尺寸对约束本身无影响）
+
+*Section Assignment, elset=Ebeam, section=RectSec
+```
+
+3. **现在原来的 MPC 行可以正常使用**：
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+因为节点 105 已经属于梁单元 `B31`，Abaqus 能成功创建 **beam‑type MPC**，作业不再中止。
+
+---
+
+## 验证步骤（两种方案均适用）
+
+1. **运行一个短的空步**（如 `*Step, name=Check, nlgeom=NO`），在 `.msg` 文件中检查提示：  
+
+   - `*Tie` → `TIE: Tie_105_125 – 1 master node, 1 slave node`  
+   - `*Equation` → `EQUATION: 3 equations defined`  
+   - `*Coupling` → `COUPLING: KINEMATIC coupling between node 105 and surface Surf125`  
+   - `*MPC, BEAM`（方案 B） → `MPC: BEAM MPC between node 105 and node 125`
+
+2. **后处理**：在 Abaqus/Viewer 中绘制节点 105 与节点 125 的位移（以及转角，若已耦合），它们应在数值容差（如 1e‑8）内完全相同。
+
+---
+
+## 小结
+
+- **错误根源**：`*MPC, BEAM` 只能在至少有一根梁单元的节点上使用。模型中只有实心砖块单元，导致 Abaqus 报错 `BEAM MPC requires a beam element` 并中止。  
+- **最简解决方案**：对仅含实心单元的模型，用 `*Tie`（或 `*Coupling`、`*Equation`）代替 `*MPC, BEAM`，无需修改网格。  
+- **如果必须使用 beam‑type MPC**：在模型中加入至少一根包含其中一个节点的梁单元（如 B31），随后原来的 `*MPC, BEAM` 行即可正常工作。  
+
+完成上述任意一种修改后，作业将能够顺利运行，**不再出现 “BEAM MPC requires a beam element”** 的错误。祝你分析顺利！
+

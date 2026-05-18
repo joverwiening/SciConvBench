@@ -1,0 +1,39 @@
+Use FEniCS legacy (dolfin) to solve the 3‑D compressible neo‑Hookean displacement problem by minimizing the total potential energy with Newton’s method.
+
+1. Create the mesh: `mesh = UnitCubeMesh(24, 16, 16)`.
+2. Define the vector function space: `V = VectorFunctionSpace(mesh, "Lagrange", 1)`.
+3. Set material parameters: Young’s modulus `E = 10.0`, Poisson ratio `nu = 0.3`. Compute Lamé constants `mu = E/(2*(1+nu))` and `lmbda = E*nu/((1+nu)*(1-2*nu))`.
+4. Define the displacement trial and test functions: `u = Function(V)` (current iterate), `du = TrialFunction(V)`, `v = TestFunction(V)`.
+5. Kinematics: deformation gradient `F = Identity(3) + grad(u)`, right Cauchy‑Green tensor `C = F.T*F`, Jacobian `J = det(F)`.
+6. Strain‑energy density for a compressible neo‑Hookean material:  
+   `psi = (mu/2)*(tr(C) - 3) - mu*ln(J) + (lmbda/2)*(ln(J))**2`.
+7. Body force vector: `B = Constant((0.0, -0.5, 0.0))`.
+8. Natural traction on all free boundaries (all exterior facets except the Dirichlet faces): `T = Constant((0.1, 0.0, 0.0))`.
+9. Total potential energy:  
+   `Pi = assemble(psi*dx - dot(B, u)*dx - dot(T, u)*ds)`.
+10. Compute the first variation (residual) and its Jacobian:  
+    `R = derivative(Pi, u, v)`  
+    `J = derivative(R, u, du)`.
+11. Apply Dirichlet boundary conditions:
+    * Clamp the left face `x = 0`: `u = (0,0,0)` on the subdomain where `near(x[0], 0.0)`.
+    * Prescribed rotational displacement on the right face `x = 1`:
+        - Rotation axis: line parallel to the x‑axis through the centre `(y0, z0) = (0.5, 0.5)`.
+        - Rotation angle: `theta = 60° = pi/3` radians.
+        - For a point `(x, y, z)` on the face `x = 1`, compute the relative coordinates `yr = y - 0.5`, `zr = z - 0.5`.
+        - Rotate about the x‑axis:  
+          `y_rot = cos(theta)*yr - sin(theta)*zr`  
+          `z_rot = sin(theta)*yr + cos(theta)*zr`.
+        - Displacement vector (scaled by 0.5):  
+          `u_rot = 0.5*as_vector((0.0, y_rot - yr, z_rot - zr))`.
+        - Impose `u = u_rot` on the subdomain where `near(x[0], 1.0)`.
+12. Solve the nonlinear problem with Newton’s method:  
+    ```
+    problem = NonlinearVariationalProblem(R, u, bcs, J)
+    solver  = NonlinearVariationalSolver(problem)
+    prm = solver.parameters
+    prm['newton_solver']['absolute_tolerance'] = 1e-8
+    prm['newton_solver']['relative_tolerance'] = 1e-7
+    prm['newton_solver']['maximum_iterations'] = 25
+    solver.solve()
+    ```
+13. After convergence, output the displacement field `u` (e.g., write to XDMF or VTK for visualization) and optionally compute derived quantities such as stress `sigma = (1/J)*F*diff(psi, C)*F.T`.

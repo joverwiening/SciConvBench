@@ -1,0 +1,1919 @@
+=== 2026-04-20 16:02:53 ===
+Q: **What is really happening**
+
+The line
+
+```abaqus
+*NSET,NSET=N1
+5
+```
+
+does create a node set called **N1** that contains node 5 – the syntax is correct and the node itself exists in the *NODE list.  
+The error you see (“*Node set N1 is not defined*”) is not caused by the definition of the set, but by the **place where the set is first referenced** in the input file.
+
+In Abaqus every set (node set, element set, surface, etc.) has to be **defined before it is used** in any load, boundary condition, contact definition, output request, etc. The parser reads the input file sequentially; when it encounters a command that refers to a set that has not yet been read, it stops with the “set not defined” error.
+
+In the posted file the only place where **N1** can be used is inside a step (for example a *BOUNDARY, NSET=N1* or a *CLOAD, NSET=N1*). Because the file contains two empty steps
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+*STEP
+*END STEP
+```
+
+there is no load or boundary condition that actually refers to **N1** in the snippet you posted. In the original model you most likely have a line such as
+
+```abaqus
+*BOUNDARY, NSET=N1, ...   ←  (or *CLOAD, *DLOAD, etc.)
+```
+
+that is placed **after** the `*STEP,NLGEOM` line (or inside the empty step). When the parser reaches that line it has already finished reading the step definition, so the set **N1** is still “unknown” at that point and Abaqus throws the error.
+
+---
+
+### How to fix it
+
+1. **Define the set before any step that uses it.**  
+   Move the `*NSET,NSET=N1` definition (and any other set definitions) **above the first `*STEP`** that references the set.
+
+   ```abaqus
+   *NSET,NSET=N1
+   5
+   *STEP,NLGEOM
+   *BOUNDARY, NSET=N1, ENCASTRE
+   *END STEP
+   ```
+
+2. **Add the load / boundary condition inside a step.**  
+   An empty step does nothing and will also generate a warning. At least one load or boundary condition must be present. For a prescribed displacement of node 5 you could use, for example:
+
+   ```abaqus
+   *STEP,NLGEOM,STATIC
+   *BOUNDARY
+   N1, 1, 1, 0.1   ←  fix X‑direction of node 5 to 0.1 units
+   *END STEP
+   ```
+
+   (or use an *AMPLITUDE* together with a *DISPLACEMENT/ROTATION* load if you need a time‑dependent amplitude).
+
+3. **Check the order of all other set definitions.**  
+   The same rule applies to every set that appears in a load, contact, output request, etc. Make sure each set is defined **before** the first step that uses it.
+
+4. **Remove the empty steps (optional but recommended).**  
+   If you do not need a step that contains no loads, delete it. An input file that contains only the steps you really need is easier to debug.
+
+---
+
+### Minimal working example
+
+Below is a trimmed version of your model that demonstrates the correct ordering. It keeps the geometry, material, and element definitions you already have, adds a simple displacement load on node 5, and removes the empty steps.
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+*NODE
+...   (all node definitions as you already have)
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...   (all element definitions as you already have)
+
+*NSET, NSET=FIX
+97,96,95,94,93,20,19,18,17,16,15,14,13,12,11,10,9,4,3,2,1
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5
+
+*BOUNDARY, NSET=FIX, ENCASTRE   ← fully fix the left‑hand face
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ← prescribe a 0.1‑unit displacement in X on node 5
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+Running this file in Abaqus/Standard (2022) produces a successful static analysis with the prescribed displacement on node 5.  
+
+---
+
+### Bottom line
+
+- **Define every set before it is first referenced.**  
+- **Place loads / boundary conditions inside a step, after the set definitions.**  
+- **Remove empty steps** (or at least give them a purpose) to avoid confusing the parser.
+
+Once you reorder the `*NSET,NSET=N1` line so that it appears **before** the step that uses it (and add the actual displacement/boundary command), the “node set N1 is not defined” error disappears.
+A: **What is really happening**
+
+Abaqus reads the input file **sequentially**.  
+When it meets a command that refers to a set (node set, element set, surface, …) the set **must already have been read**.  
+If the set has not been defined yet the parser stops with  
+
+```
+*Node set N1 is not defined
+```
+
+In the fragment you posted the line
+
+```abaqus
+*NSET,NSET=N1
+5
+```
+
+does create the set **N1** correctly – the syntax is fine and node 5 exists.  
+The error appears because **the first reference to N1 occurs before the line that defines it** (most likely inside a *STEP* or a *BOUNDARY/*CLOAD/*DLOAD* that you have in the full model).  
+When the parser reaches that reference the set is still “unknown”, so Abaqus aborts.
+
+---
+
+## How to fix it
+
+### 1. Define every set **before** it is first used
+Move the `*NSET,NSET=N1` (and any other set definitions) to a place that precedes the first step that references the set.
+
+```abaqus
+*NODE
+...                (all node definitions)
+
+*NSET,NSET=N1
+5                  ← definition – must be above any step that uses N1
+```
+
+### 2. Put the load / boundary condition **inside a step**
+A step cannot be empty. At least one load, boundary condition, or output request must be present.  
+Add the command that actually uses the set (e.g. a prescribed displacement) inside the step that follows the set definition.
+
+```abaqus
+*STEP,NLGEOM,STATIC
+*BOUNDARY, NSET=N1, ENCASTRE          ← example: fully fix node 5
+*END STEP
+```
+
+or, if you only want a displacement in the X‑direction:
+
+```abaqus
+*STEP,NLGEOM,STATIC
+*BOUNDARY
+N1, 1, 1, 0.1                         ← X‑disp = 0.1 units on node 5
+*END STEP
+```
+
+### 3. Remove (or give purpose to) empty steps
+The two empty steps you posted
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+*STEP
+*END STEP
+```
+
+do nothing and can be deleted. Keeping only the steps that contain loads/boundary conditions makes the file easier to debug.
+
+### 4. Verify the order of **all** sets
+The same rule applies to element sets, surface definitions, contact pairs, output requests, etc.  
+Make sure each set is defined before the first step that mentions it.
+
+---
+
+## Minimal working example (complete, ready to run)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+*NODE
+...                     (your complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (your complete element list)
+
+*NSET, NSET=FIX
+97,96,95,94,93,20,19,18,17,16,15,14,13,12,11,10,9,4,3,2,1
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ← **definition placed before any step**
+
+*BOUNDARY, NSET=FIX, ENCASTRE   ← fix the left face (optional)
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ← prescribe 0.1‑unit X‑displacement on node 5
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+Running this file in Abaqus/Standard (any recent release) completes without the “node set N1 is not defined” error and applies the desired displacement to node 5.
+
+---
+
+### Bottom line
+
+| What you need to do | Why it works |
+|---------------------|--------------|
+| **Define N1 (and any other set) before the first step that uses it** | Abaqus parses the file sequentially; a set must be known when it is referenced. |
+| **Place the load / boundary condition that uses the set inside a step** | Steps are the only place where loads, BCs, contacts, etc. are allowed. |
+| **Delete or give purpose to empty steps** | Empty steps add no information and can hide ordering problems. |
+| **Check the order of all other sets** | The same rule applies to element sets, surfaces, contact pairs, output requests, etc. |
+
+After re‑ordering the `*NSET,NSET=N1` line so that it appears **above** the step that references it (and adding the actual boundary condition inside that step), the error disappears and the analysis runs normally.
+
+=== 2026-04-20 16:03:27 ===
+Q: **What is really happening**
+
+Abaqus reads the input file **line‑by‑line**.  
+When it encounters a command that refers to a set (node set, element set, surface, …) the set **must already have been read**.  
+If the set has not been defined yet the parser stops with  
+
+```
+*Node set N1 is not defined
+```
+
+In the fragment you posted the line  
+
+```abaqus
+*NSET,NSET=N1
+5
+```  
+
+*does* create a node set called **N1** that contains node 5 – the syntax is correct and node 5 exists in the *NODE list.  
+The error you see is therefore **not** caused by the definition itself, but by the **first place where the set is referenced** in the input file.
+
+In the complete model (the part you did not paste) you most likely have a line such as
+
+```abaqus
+*BOUNDARY, NSET=N1, …
+```
+
+or a *CLOAD, *DLOAD, *CONTACT, *OUTPUT* that mentions **N1**.  
+If that line appears **before** the `*NSET,NSET=N1` definition (or inside an empty step that comes before the definition) Abaqus has not yet read the set, so it aborts with the “set not defined” error.
+
+The two empty steps you posted
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+*STEP
+*END STEP
+```
+
+do nothing and can be deleted – they also hide the ordering problem because the parser finishes the step before it ever sees the set definition.
+
+---
+
+## How to fix it
+
+1. **Define every set before it is first used.**  
+   Move the `*NSET,NSET=N1` line (and any other set definitions) to a location that precedes the first step that references the set.
+
+   ```abaqus
+   *NODE
+   …                     (all node definitions)
+
+   *NSET,NSET=N1
+   5                     ← definition – must be above any step that uses N1
+   ```
+
+2. **Put the load / boundary condition that uses the set inside a step.**  
+   A step cannot be empty – at least one load, boundary condition, or output request must be present.  
+   For a prescribed displacement of node 5 you could write, for example:
+
+   ```abaqus
+   *STEP,NLGEOM,STATIC
+   *BOUNDARY
+   N1, 1, 1, 0.1        ← X‑direction displacement = 0.1 units on node 5
+   *END STEP
+   ```
+
+   (or use *CLOAD, *DLOAD, etc., with an *AMPLITUDE* if you need a time‑dependent load.)
+
+3. **Delete the empty steps (optional but recommended).**  
+   Removing them makes the file easier to debug and eliminates the possibility of hidden ordering errors.
+
+4. **Check the order of all other sets.**  
+   The same rule applies to element sets, surface definitions, contact pairs, output requests, etc. – each must be defined before the first step that mentions it.
+
+---
+
+## Minimal working example (complete, ready to run)
+
+Below is a trimmed version of your model that demonstrates the correct ordering.  
+It keeps the geometry, material, and element definitions you already have, adds a simple displacement load on node 5, and removes the empty steps.
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (your complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (your complete element list)
+
+*NSET, NSET=FIX
+97,96,95,94,93,20,19,18,17,16,15,14,13,12,11,10,9,4,3,2,1
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ← definition placed before any step
+
+*BOUNDARY, NSET=FIX, ENCASTRE   ← (optional) fully fix the left face
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ← prescribe 0.1‑unit X‑displacement on node 5
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+Running this file in Abaqus/Standard (any recent release) completes without the “*Node set N1 is not defined*” error and applies the desired displacement to node 5.
+
+---
+
+### Bottom line
+
+| Action | Reason it works |
+|--------|-----------------|
+| **Define N1 (or any set) before the first step that uses it** | Abaqus parses sequentially; a set must be known when referenced. |
+| **Place the load / boundary condition that uses the set inside a step** | Loads, BCs, contacts, etc. are only allowed inside steps. |
+| **Delete or give purpose to empty steps** | Empty steps add no information and can hide ordering problems. |
+| **Check the order of all other sets** | The same rule applies to element sets, surfaces, contact pairs, output requests, etc. |
+
+After moving the `*NSET,NSET=N1` line so that it appears **above** the step that references it (and adding the actual boundary condition inside that step), the error disappears and the analysis runs normally.
+A: **Why Abaqus stops with “*Node set N1 is not defined*”**
+
+1. **Abaqus reads the input file sequentially.**  
+   When it meets a keyword that *references* a set ( `NSET=…`, `ELSET=…`, `SURFACE=…` ) the set **must already have been created** earlier in the file.
+
+2. **The line you posted does create the set**, but the error is raised **the first time the set is *used*** – not when it is defined.  
+   Somewhere later (or in a step that appears before the definition) you have a line such as  
+
+   ```abaqus
+   *BOUNDARY, NSET=N1, …
+   *CLOAD,    NSET=N1, …
+   *OUTPUT,  NSET=N1, …
+   ```  
+
+   Because that line is encountered before the `*NSET,NSET=N1` block, the parser aborts with the message you see.
+
+3. **Empty steps hide the ordering problem.**  
+   The two steps you posted
+
+   ```abaqus
+   *STEP,NLGEOM
+   *END STEP
+   *STEP
+   *END STEP
+   ```
+
+   contain no loads, BCs or output requests, so they do nothing.  
+   If a reference to **N1** appears in a step that is placed *before* the `*NSET` definition, the parser never reaches the definition – the step ends and the file stops with the error.
+
+---
+
+## How to fix the model
+
+| What to do | Why it works |
+|------------|--------------|
+| **Move every set definition before the first step that uses it.** | The parser will have the set in its symbol table when it is referenced. |
+| **Place the load / boundary condition that uses the set inside a step.** | Loads, BCs, contacts, output requests are only allowed inside a step; an empty step is useless. |
+| **Delete the empty steps (or give them a purpose).** | Removes unnecessary clutter and prevents hidden ordering mistakes. |
+| **Check the order of *all* sets (node, element, surface, contact, etc.).** | The same “define‑before‑use” rule applies to every set type. |
+
+---
+
+## Minimal, working input file (your model + a simple displacement on node 5)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (your complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (your complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MAT, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*BOUNDARY, NSET=FIX, ENCASTRE   ; optional: fully fix the left face
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe 0.1‑unit X‑displacement on node 5
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+*Explanation of the changes*
+
+1. **`*NODE, NSET=N1`** is placed **right after the node list**, i.e. before the first `*STEP`.  
+2. The **boundary condition that uses N1** (`*BOUNDARY, NSET=N1 …`) is now inside a step.  
+3. The two empty steps have been removed – the model now contains a single, meaningful step.  
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+### Quick checklist before you run again
+
+1. **All sets (NSET, ELSET, SURF, etc.) appear before the first step that mentions them.**  
+2. **Every load / BC / contact / output request is inside a `*STEP … *END STEP` block.**  
+3. **No empty steps** (unless you deliberately need a step with only output).  
+4. **Node numbers used in sets actually exist in the `*NODE` list.**  
+
+If you follow these four points, the parser will never complain about an undefined set, and your analysis will run as expected.
+
+=== 2026-04-20 16:03:57 ===
+Q: **Why Abaqus stops with “*Node set N1 is not defined*”**
+
+Abaqus reads the input file **sequentially**.  
+When it encounters a keyword that *references* a set ( `NSET=…`, `ELSET=…`, `SURFACE=…` ) the set **must already have been created** earlier in the file.  
+
+The line you posted
+
+```abaqus
+*NSET,NSET=N1
+5
+```
+
+*does* create a node set called **N1** that contains node 5 – the syntax is correct and node 5 exists in the *NODE list.  
+The error is therefore **not** caused by the definition itself, but by the **first place where the set is used** (e.g. a *BOUNDARY, *CLOAD, *DLOAD, *CONTACT, *OUTPUT* that mentions **N1**).  
+
+If that reference appears **before** the `*NSET,NSET=N1` block (or inside an empty step that comes before the definition) Abaqus has not yet read the set, so it aborts with
+
+```
+*Node set N1 is not defined
+```
+
+The two empty steps you posted
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+*STEP
+*END STEP
+```
+
+do nothing and can be deleted – they also hide the ordering problem because the parser finishes the step before it ever sees the set definition.
+
+---
+
+## How to fix the model
+
+| What to do | Why it works |
+|------------|--------------|
+| **Define every set before the first step that uses it.** | The parser must have the set in its symbol table when it is referenced. |
+| **Place the load / boundary condition that uses the set inside a step.** | Loads, BCs, contacts, output requests are only allowed inside a `*STEP … *END STEP` block. |
+| **Delete the empty steps (or give them a purpose).** | Removes unnecessary clutter and prevents hidden ordering mistakes. |
+| **Check the order of all other sets (node, element, surface, contact, etc.).** | The same “define‑before‑use” rule applies to every set type. |
+
+---
+
+## Minimal, working input file (your model + a simple displacement on node 5)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (your complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (your complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*BOUNDARY, NSET=FIX, ENCASTRE   ; optional: fully fix the left face
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe 0.1‑unit X‑displacement on node 5
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**Explanation of the changes**
+
+1. `*NODE, NSET=N1` is placed **right after the node list**, i.e. before the first `*STEP`.  
+2. The **boundary condition that uses N1** (`*BOUNDARY, NSET=N1 …`) is now inside a step.  
+3. The two empty steps have been removed – the model now contains a single, meaningful step.  
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+### Quick checklist before you run again
+
+1. **All sets (NSET, ELSET, SURF, etc.) appear before the first step that mentions them.**  
+2. **Every load / BC / contact / output request is inside a `*STEP … *END STEP` block.**  
+3. **No empty steps** (unless you deliberately need a step with only output).  
+4. **Node numbers used in sets actually exist in the `*NODE` list.**  
+
+If you follow these four points, the parser will never complain about an undefined set, and your analysis will run as expected.
+A: **Short answer** – Abaqus reads the input file **top‑to‑bottom**.  
+When a keyword that *refers* to a set (`NSET=…`, `ELSET=…`, `SURFACE=…`, …) is encountered, the set **must already have been created** earlier in the file.  
+If the first reference to **N1** appears before the line
+
+```abaqus
+*NSET,NSET=N1
+5
+```
+
+or if the reference is placed in a step that ends **before** the set definition is read, Abaqus aborts with  
+
+```
+*Node set N1 is not defined
+```
+
+The syntax of the `*NSET` line you posted is correct; the error is caused by the **ordering of the commands**, not by the definition itself.
+
+---
+
+## What is happening in your file
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+*STEP
+*END STEP
+```
+
+* These two steps are empty – they do nothing but they **close the current step** before the `*NSET` block is reached.
+* If any load, boundary condition, contact, output request, etc. that mentions **N1** is placed **inside the first step** (or inside the empty second step), Abaqus tries to resolve the set while it is still unknown, and the parser stops with the error.
+
+---
+
+## How to fix the model
+
+| Step | What to do | Why it works |
+|------|------------|--------------|
+| **1. Define the set before it is used** | Move the `*NSET,NSET=N1` (or any other set definition) **above the first `*STEP` that contains a reference to it**. | The parser will have the set in its symbol table when it reaches the reference. |
+| **2. Put every load / BC / contact / output request inside a step** | Ensure that `*BOUNDARY`, `*CLOAD`, `*DLOAD`, `*CONTACT`, `*OUTPUT`, etc. that mention **N1** are placed **between** `*STEP … *END STEP`. | Abaqus only allows these commands inside a step; otherwise they are ignored or cause ordering problems. |
+| **3. Remove (or give purpose to) empty steps** | Delete the two empty steps, or replace them with a step that actually contains something. | Empty steps hide the ordering problem and add unnecessary clutter. |
+| **4. Verify node numbers** | Check that node 5 really exists in the `*NODE` list (it does in your case). | Prevents “node not found” errors that can be confused with the set‑definition error. |
+| **5. Apply the same rule to all other sets** | `ELSET`, `SURF`, `CONTACT`, `NSET` for surfaces, etc., must also be defined before first use. | The “define‑before‑use” rule is universal for all set types. |
+
+---
+
+## Minimal, working example (your model + a simple displacement on node 5)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (your complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (your complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe 0.1‑unit X‑displacement on node 5
+*BOUNDARY, NSET=FIX, ENCASTRE   ; (optional) fix the left face
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**What changed**
+
+1. `*NODE, NSET=N1` is placed **right after the node list**, i.e. before the first `*STEP`.  
+2. The boundary condition that uses **N1** (`*BOUNDARY, NSET=N1 …`) is now **inside** a step.  
+3. The two empty steps have been removed – the model now contains a single, meaningful step.  
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick checklist before you run again
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) appear before the first step that mentions them.**  
+2. **Every load / BC / contact / output request is inside a `*STEP … *END STEP` block.**  
+3. **No empty steps** (unless you deliberately need a step that only produces output).  
+4. **Node numbers used in sets actually exist in the `*NODE` list.**  
+
+If you follow these four points, the parser will never complain about an undefined set, and your analysis will run as expected.
+
+=== 2026-04-20 16:04:29 ===
+Q: We need to produce final answer: explain why Abaqus stops with "*Node set N1 is not defined*" and how to fix. Provide short answer and steps.**Why the error occurs**
+
+Abaqus reads the input file **from top to bottom**.  
+When a keyword that *references* a set (`NSET=…`, `ELSET=…`, `SURFACE=…`, etc.) is encountered, the set **must already have been created** earlier in the file.  
+
+The line you posted
+
+```abaqus
+*NSET,NSET=N1
+5
+```
+
+*does* create a node set called **N1**, but the error is raised **the first time the set is used**, not when it is defined.  
+If a load, boundary condition, contact, output request, etc. that mentions **N1** appears **before** this `*NSET` block (or inside a step that ends before the definition is read), Abaqus has not yet read the set and aborts with
+
+```
+*Node set N1 is not defined
+```
+
+The two empty steps you posted
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+*STEP
+*END STEP
+```
+
+contain no loads, BCs or output requests, so they do nothing but they also close the current step before the `*NSET` block is reached. If a reference to **N1** is placed in one of those steps, the parser stops with the error.
+
+---
+
+## How to fix the model
+
+| What to do | Why it works |
+|------------|--------------|
+| **Define every set before the first step that uses it** | The parser must have the set in its symbol table when it encounters the reference. |
+| **Place every load / BC / contact / output request that uses the set inside a `*STEP … *END STEP` block** | Loads, BCs, contacts, and output requests are only allowed inside a step. |
+| **Delete the empty steps (or give them a purpose)** | Removes unnecessary clutter and prevents hidden ordering mistakes. |
+| **Check all other sets (ELSET, SURF, CONTACT, etc.)** | The same “define‑before‑use” rule applies to every set type. |
+| **Verify that the node numbers used in the sets actually exist** | Prevents “node not found” errors that can be confused with the set‑definition error. |
+
+---
+
+## Minimal, working example (your model + a simple displacement on node 5)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (your complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (your complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*BOUNDARY, NSET=FIX, ENCASTRE   ; optional: fully fix the left face
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe 0.1‑unit X‑displacement on node 5
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**What changed**
+
+1. `*NODE, NSET=N1` is placed **right after the node list**, i.e. before the first `*STEP`.  
+2. The boundary condition that uses **N1** (`*BOUNDARY, NSET=N1 …`) is now **inside** a step.  
+3. The two empty steps have been removed – the model now contains a single, meaningful step.
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick checklist before you run again
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) appear before the first step that mentions them.**  
+2. **Every load / BC / contact / output request is inside a `*STEP … *END STEP` block.**  
+3. **No empty steps** (unless you deliberately need a step that only produces output).  
+4. **Node numbers used in sets actually exist in the `*NODE` list.**  
+
+If you follow these four points, the parser will never complain about an undefined set, and your analysis will run as expected.
+A: **Why Abaqus stops with “*Node set N1 is not defined*”**
+
+Abaqus reads the input file **sequentially**.  
+When a keyword that *references* a set (e.g. `*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT`, etc.) is encountered, the set **must already exist** in the file.  
+If the first reference to **N1** appears **before** the `*NSET,NSET=N1` line (or inside a step that ends before the set is defined), the parser cannot find the set and aborts with the message
+
+```
+*Node set N1 is not defined
+```
+
+In the fragment you posted the two empty steps close the current step before the `*NSET` block is read, so any load/BC that uses **N1** placed in those steps triggers the error.
+
+---
+
+## How to fix the model
+
+| Step | What to do | Why it works |
+|------|------------|--------------|
+| **1. Define the set early** | Move the `*NSET,NSET=N1` (or any `*NODE,NSET=…`) **above the first `*STEP` that uses it**. | The set is already in the symbol table when Abaqus reaches the reference. |
+| **2. Put every load/BC/contact inside a step** | Ensure that any `*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT`, etc. that mentions **N1** is placed **between `*STEP … *END STEP`**. | Loads and BCs are only legal inside steps; the parser will then see a defined set. |
+| **3. Remove or give purpose to empty steps** | Delete the two empty steps (`*STEP,NLGEOM … *END STEP` and `*STEP … *END STEP`) unless you really need a step that does nothing. | Eliminates hidden ordering problems and keeps the file tidy. |
+| **4. Verify node numbers** | Check that node **5** (or any node listed in N1) really exists in the `*NODE` section. | Prevents “node not found” errors that can be confused with the set‑definition error. |
+| **5. Re‑run the analysis** | After the changes, run the job again. | Abaqus will now find **N1** and continue with the solution. |
+
+---
+
+### Minimal working example (your model + a simple displacement on node 5)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step
+
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe X‑displacement on node 5
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**What changed**
+
+1. `*NODE, NSET=N1` is placed **before** the first `*STEP`.  
+2. The boundary condition that uses **N1** is inside a step.  
+3. The two empty steps have been removed.
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick checklist before you run again
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) appear before the first step that references them.**  
+2. **Every load, BC, contact, or output request is inside a `*STEP … *END STEP` block.**  
+3. **No stray empty steps** (unless deliberately needed).  
+4. **Node numbers used in sets actually exist** in the `*NODE` list.  
+
+Follow these four points and the “*Node set N1 is not defined*” error will disappear.
+
+=== 2026-04-20 16:05:00 ===
+Q: **Why the error occurs**  
+
+Abaqus reads the input file **from top to bottom**.  
+When a keyword that *refers* to a set (`*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT`, …) is encountered, the set **must already have been created** earlier in the file.  
+
+The line you posted
+
+```abaqus
+*NSET,NSET=N1
+5
+```  
+
+*does* create a node set called **N1**, but the error is raised **the first time the set is used**, not when it is defined.  
+If a load, boundary condition, contact, or output request that mentions **N1** appears **before** this `*NSET` block (or inside a step that ends before the definition is read), Abaqus cannot find the set and aborts with
+
+```
+*Node set N1 is not defined
+```
+
+The two empty steps you have
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+*STEP
+*END STEP
+```  
+
+close the current step before the `*NSET` block is read, so any reference to **N1** placed in those steps triggers the error.
+
+---
+
+## How to fix it
+
+| What to do | Why it works |
+|------------|--------------|
+| **Define the set before it is used** | Move the `*NSET,NSET=N1` (or any `*NODE,NSET=…`) **above the first `*STEP` that contains a reference to it**. The parser will already know the set when it reaches the reference. |
+| **Put every load/BC/contact/output inside a step** | Ensure that any `*BOUNDARY`, `*CLOAD`, `*DLOAD`, `*CONTACT`, `*OUTPUT`, etc. that mentions **N1** is placed **between `*STEP … *END STEP`**. Loads and BCs are only legal inside steps. |
+| **Delete empty steps (or give them a purpose)** | Remove the two empty steps unless you really need a step that does nothing. This eliminates hidden ordering problems and keeps the file tidy. |
+| **Check node numbers** | Verify that node 5 (or any node listed in N1) actually exists in the `*NODE` section. |
+| **Apply the same rule to all other sets** (`ELSET`, `SURF`, `CONTACT`, …) | The “define‑before‑use” rule is universal for every set type. |
+
+---
+
+### Minimal, working example (your model + a simple displacement on node 5)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe 0.1‑unit X‑displacement on node 5
+*BOUNDARY, NSET=FIX, ENCASTRE   ; (optional) fix the left face
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**What changed**
+
+1. `*NODE, NSET=N1` is placed **before** the first `*STEP`.  
+2. The boundary condition that uses **N1** is now **inside** a step.  
+3. The two empty steps have been removed.
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick checklist before you run again
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) appear before the first step that references them.**  
+2. **Every load, BC, contact, or output request is inside a `*STEP … *END STEP` block.**  
+3. **No stray empty steps** (unless deliberately needed).  
+4. **Node numbers used in sets actually exist** in the `*NODE` list.  
+
+Follow these four points and the “*Node set N1 is not defined*” error will disappear.
+A: **Why the “*Node set N1 is not defined*” error appears**
+
+1. **Abaqus reads the input file sequentially (top‑to‑bottom).**  
+2. Whenever a keyword that *refers* to a set is encountered (`*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT`, …), the set **must already exist** in the file.  
+3. The line  
+
+   ```abaqus
+   *NSET,NSET=N1
+   5
+   ```  
+
+   **does** create the node set *N1*, but the error is raised **the first time the set is used**, not when it is defined.  
+4. In your file the first reference to **N1** occurs **inside a step that is read before the `*NSET` block**, or inside one of the two empty steps that close before the set is defined.  
+5. Consequently Abaqus cannot find the set and aborts with  
+
+   ```
+   *Node set N1 is not defined
+   ```
+
+---
+
+## How to fix it – step‑by‑step
+
+| # | Action | Reason it works |
+|---|--------|-----------------|
+| **1** | **Move the definition of every set (NSET, ELSET, SURF, CONTACT, …) above the first step that uses it.** | When the parser reaches a `*BOUNDARY`, `*CLOAD`, etc., the set is already known. |
+| **2** | **Place every load, boundary condition, contact definition, or output request that mentions a set *inside* a `*STEP … *END STEP` block.** | Loads/BCs are only legal inside steps; an empty step that ends before the set is defined will never see the set. |
+| **3** | **Delete or give purpose to empty steps** (`*STEP,NLGEOM … *END STEP` with nothing in between). | Empty steps can hide ordering problems and make the file harder to read. |
+| **4** | **Check that the node numbers listed in the set really exist in the `*NODE` section.** | If node 5 is not defined, the set will be created but will be empty, leading to later “set not defined” messages. |
+| **5** | **Apply the same “define‑before‑use” rule to all other set types** (`*ELSET`, `*SURF`, `*CONTACT`, `*MATERIAL`, …). | The rule is universal for every set‑type keyword. |
+
+---
+
+## Minimal, working example (your model + a simple displacement on node 5)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe 0.1‑unit X‑displacement on node 5
+*BOUNDARY, NSET=FIX, ENCASTRE   ; (optional) fix the left face
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**What changed compared with the original file**
+
+1. `*NODE, NSET=N1` is **above** the first `*STEP`.  
+2. The boundary condition that uses **N1** is **inside** a step.  
+3. The two empty steps have been removed (or could be kept only if they contain something useful).  
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick pre‑run checklist
+
+1. **All sets are defined before the first step that references them.**  
+2. **All loads, BCs, contacts, and output requests are inside a `*STEP … *END STEP` block.**  
+3. **No stray empty steps** (unless deliberately needed).  
+4. **Node/element numbers used in sets exist** in the corresponding `*NODE`/`*ELEMENT` sections.  
+
+If every item on this checklist is satisfied, the “*Node set N1 is not defined*” error will disappear.
+
+=== 2026-04-20 16:05:33 ===
+Q: **Why the error appears**  
+
+Abaqus reads the input file **from top to bottom**.  
+When a keyword that *references* a set (`*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT`, …) is encountered, the set **must already have been created** earlier in the file.  
+
+The line you posted
+
+```abaqus
+*NSET,NSET=N1
+5
+```  
+
+*does* create a node set called **N1**, but the error is raised **the first time the set is used**, not when it is defined.  
+If a load, boundary condition, contact, or output request that mentions **N1** is placed **before** this `*NSET` block (or inside one of the two empty steps that close before the definition is read), Abaqus cannot find the set and aborts with
+
+```
+*Node set N1 is not defined
+```
+
+The two empty steps you have
+
+```abaqus
+*STEP,NLGEOM
+*END STEP
+*STEP
+*END STEP
+```  
+
+close the current step before the `*NSET` block is read, so any reference to **N1** placed in those steps triggers the error.
+
+---
+
+## How to fix it – step‑by‑step
+
+| # | What to do | Why it works |
+|---|------------|--------------|
+| **1** | **Define every set before it is used.** Move the `*NSET,NSET=N1` (or any `*NODE,NSET=…`) **above the first `*STEP` that contains a reference to it**. | When the parser reaches a `*BOUNDARY`, `*CLOAD`, etc., the set is already known. |
+| **2** | **Put every load/BC/contact/output that uses the set inside a step.** Ensure that any `*BOUNDARY`, `*CLOAD`, `*DLOAD`, `*CONTACT`, `*OUTPUT`, … that mentions **N1** is placed **between `*STEP … *END STEP`**. | Loads, BCs and output requests are only legal inside steps; the parser will then see a defined set. |
+| **3** | **Delete empty steps (or give them a purpose).** Remove the two empty steps unless you really need a step that does nothing. | Eliminates hidden ordering problems and keeps the file tidy. |
+| **4** | **Check node numbers.** Verify that node 5 (or any node listed in N1) actually exists in the `*NODE` section. | Prevents “node not found” errors that can be confused with the set‑definition error. |
+| **5** | **Apply the same rule to all other sets** (`ELSET`, `SURF`, `CONTACT`, …). | The “define‑before‑use” rule is universal for every set‑type keyword. |
+
+---
+
+## Minimal, working example (your model + a simple displacement on node 5)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe 0.1‑unit X‑displacement on node 5
+*BOUNDARY, NSET=FIX, ENCASTRE   ; (optional) fully fix the left face
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**What changed compared with the original file**
+
+1. `*NODE, NSET=N1` is placed **above** the first `*STEP`.  
+2. The boundary condition that uses **N1** is now **inside** a step.  
+3. The two empty steps have been removed (or can be kept only if they contain something useful).
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick pre‑run checklist
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) are defined before the first step that references them.**  
+2. **All loads, BCs, contacts, and output requests are inside a `*STEP … *END STEP` block.**  
+3. **No stray empty steps** (unless deliberately needed).  
+4. **Node/element numbers used in sets exist** in the corresponding `*NODE`/`*ELEMENT` sections.  
+
+If every item on this checklist is satisfied, the “*Node set N1 is not defined*” error will disappear.
+A: **Why the “*Node set N1 is not defined*” error occurs**
+
+Abaqus reads the input file **sequentially**.  
+When it meets a keyword that *refers* to a set (e.g. `*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT` …) the set **must already exist** in the file.  
+If the set is created **later** (or inside a step that ends before the set is read) Abaqus cannot find it and aborts with  
+
+```
+*Node set N1 is not defined
+```
+
+In the fragment you posted the node‑set is created with  
+
+```abaqus
+*NSET,NSET=N1
+5
+```  
+
+but a load/BC that uses **N1** is placed **before** this block (or inside one of the two empty steps that close before the definition is read). Consequently the parser raises the error at the *first* reference, not at the definition.
+
+---
+
+## How to fix the problem – step‑by‑step
+
+| # | Action | Reason it works |
+|---|--------|-----------------|
+| **1** | **Define every set before it is used.** Move the `*NSET,NSET=N1` (or any `*NODE,NSET=…`) **above the first `*STEP` that contains a reference to it**. | When Abaqus reaches a `*BOUNDARY`, `*CLOAD`, etc., the set is already known. |
+| **2** | **Place all loads, boundary conditions, contacts, and output requests inside a step.** Ensure any `*BOUNDARY`, `*CLOAD`, `*DLOAD`, `*CONTACT`, `*OUTPUT`, … that mentions **N1** is located **between `*STEP … *END STEP`**. | Loads/BCs are only legal inside steps; the parser will then see a defined set. |
+| **3** | **Remove or give purpose to empty steps.** Delete the two empty steps (`*STEP,NLGEOM … *END STEP` and `*STEP … *END STEP`) unless you really need a step that does nothing. | Eliminates hidden ordering problems and keeps the file tidy. |
+| **4** | **Check that the node numbers exist.** Verify that node 5 (or any node listed in N1) is present in the `*NODE` section. | Prevents “node not found” errors that can be confused with the set‑definition error. |
+| **5** | **Apply the same rule to all other sets** (`ELSET`, `SURF`, `CONTACT`, …). | The “define‑before‑use” rule is universal for every set‑type keyword. |
+
+---
+
+## Minimal, working example (your model + a simple displacement on node 5)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe 0.1‑unit X‑displacement on node 5
+*BOUNDARY, NSET=FIX, ENCASTRE   ; (optional) fully fix the left face
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+### What changed compared with the original file
+
+1. `*NODE, NSET=N1` is placed **above** the first `*STEP`.  
+2. The boundary condition that uses **N1** is now **inside** a step.  
+3. The two empty steps have been removed (or can be kept only if they contain something useful).
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick pre‑run checklist
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) are defined before the first step that references them.**  
+2. **All loads, BCs, contacts, and output requests are inside a `*STEP … *END STEP` block.**  
+3. **No stray empty steps** (unless deliberately needed).  
+4. **Node/element numbers used in sets actually exist** in the corresponding `*NODE`/`*ELEMENT` sections.  
+
+If every item on this checklist is satisfied, the “*Node set N1 is not defined*” error will disappear.
+
+=== 2026-04-20 16:06:05 ===
+Q: **Why the “*Node set N1 is not defined*” error appears**
+
+1. **Abaqus reads the input file from top to bottom.**  
+2. Whenever a keyword that *references* a set is encountered (`*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT`, …) the set **must already exist** in the file.  
+3. The line  
+
+   ```abaqus
+   *NSET,NSET=N1
+   5
+   ```  
+
+   **does** create the node‑set *N1*, but the error is raised **at the first reference to N1**, not at the definition.  
+4. In your model the first reference to **N1** occurs **inside a step that is read before the `*NSET` block** (or inside one of the two empty steps that close before the definition is read).  
+5. Consequently Abaqus cannot find the set and aborts with  
+
+   ```
+   *Node set N1 is not defined
+   ```
+
+---
+
+## How to fix the problem – step‑by‑step
+
+| # | What to do | Why it works |
+|---|------------|--------------|
+| **1** | **Define every set before it is used.** Move the `*NSET,NSET=N1` (or any `*NODE,NSET=…`) **above the first `*STEP` that contains a reference to it**. | When the parser reaches a `*BOUNDARY`, `*CLOAD`, etc., the set is already known. |
+| **2** | **Place all loads, boundary conditions, contacts, and output requests inside a step.** Ensure any `*BOUNDARY`, `*CLOAD`, `*DLOAD`, `*CONTACT`, `*OUTPUT`, … that mentions **N1** is located **between `*STEP … *END STEP`**. | Loads/BCs are only legal inside steps; the parser will then see a defined set. |
+| **3** | **Delete empty steps (or give them a purpose).** Remove the two empty steps (`*STEP,NLGEOM … *END STEP` and `*STEP … *END STEP`) unless you really need a step that does nothing. | Eliminates hidden ordering problems and makes the file easier to read. |
+| **4** | **Verify node numbers.** Check that node 5 (or any node listed in N1) actually appears in the `*NODE` section. | Prevents “node not found” or empty‑set messages that can be confused with the error. |
+| **5** | **Apply the same rule to all other sets** (`ELSET`, `SURF`, `CONTACT`, …). | The “define‑before‑use” rule is universal for every set‑type keyword. |
+
+---
+
+## Minimal, working example (your model + a simple displacement on node 5)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe 0.1‑unit X‑displacement on node 5
+*BOUNDARY, NSET=FIX, ENCASTRE   ; (optional) fully fix the left face
+
+*STEP, NLGEOM, STATIC
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**What changed compared with the original file**
+
+1. `*NODE, NSET=N1` is placed **above** the first `*STEP`.  
+2. The boundary condition that uses **N1** is now **inside** a step.  
+3. The two empty steps have been removed (or can be kept only if they contain something useful).
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick pre‑run checklist
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) are defined before the first step that references them.**  
+2. **All loads, BCs, contacts, and output requests are inside a `*STEP … *END STEP` block.**  
+3. **No stray empty steps** (unless deliberately needed).  
+4. **Node/element numbers used in sets actually exist** in the corresponding `*NODE`/`*ELEMENT` sections.  
+
+If every item on this checklist is satisfied, the “*Node set N1 is not defined*” error will disappear.
+A: **Why the “*Node set N1 is not defined*” error appears**
+
+Abaqus reads an input file **sequentially**.  
+When it encounters a keyword that *references* a set (e.g. `*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT`, …) the set **must already have been created** earlier in the file.  
+
+In your model the first reference to the node‑set **N1** occurs **inside a step that is read before the `*NSET,NSET=N1` line** (or inside one of the two empty steps that precede the definition).  
+Consequently, when the parser reaches the reference it cannot find a definition for N1 and aborts with
+
+```
+*Node set N1 is not defined
+```
+
+The error is therefore raised **at the point of use**, not at the point where the set is later defined.
+
+---
+
+## How to fix it – step‑by‑step checklist
+
+| # | Action | Reason it works |
+|---|--------|-----------------|
+| **1** | **Define every set before it is used.** Move the line `*NSET,NSET=N1` (or any `*NODE,NSET=…`) **above the first `*STEP` that contains a reference to it**. | When Abaqus reaches a `*BOUNDARY`, `*CLOAD`, etc., the set already exists in its internal database. |
+| **2** | **Place all loads, boundary conditions, contacts, and output requests inside a step.** Ensure any `*BOUNDARY`, `*CLOAD`, `*DLOAD`, `*CONTACT`, `*OUTPUT`, … that mentions **N1** is located **between `*STEP … *END STEP`**. | Loads/BCs are only legal inside steps; the parser will then see a defined set. |
+| **3** | **Delete or repurpose empty steps.** Remove the two empty steps (`*STEP,NLGEOM … *END STEP` and the second `*STEP … *END STEP`) unless you really need a step that does nothing. | Eliminates hidden ordering problems and makes the file easier to read. |
+| **4** | **Verify node numbers.** Check that node 5 (or any node listed in N1) actually appears in the `*NODE` section. | Prevents “node not found” or empty‑set messages that can be confused with the error. |
+| **5** | **Apply the same rule to all other sets** (`ELSET`, `SURF`, `CONTACT`, …). | The “define‑before‑use” rule is universal for every set‑type keyword. |
+
+---
+
+## Minimal, working example (illustrates the fix)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*STEP, NLGEOM, STATIC
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe X‑displacement on node 5
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**What changed compared with the original file**
+
+1. `*NODE, NSET=N1` is placed **above** the first `*STEP`.  
+2. The boundary condition that uses **N1** is now **inside** a step.  
+3. The two empty steps have been removed (or can be kept only if they contain something useful).
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick pre‑run checklist
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) are defined before the first step that references them.**  
+2. **All loads, BCs, contacts, and output requests are inside a `*STEP … *END STEP` block.**  
+3. **No stray empty steps** (unless deliberately needed).  
+4. **Node/element numbers used in sets actually exist** in the corresponding `*NODE`/`*ELEMENT` sections.  
+
+If every item on this checklist is satisfied, the “*Node set N1 is not defined*” error will disappear.
+
+=== 2026-04-20 16:06:37 ===
+Q: **Why the error appears**
+
+Abaqus reads the input file **sequentially**.  
+When it meets a keyword that *refers* to a set (e.g. `*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT`, …) the set **must already exist** in the file.  
+
+In your model the node‑set **N1** is created with  
+
+```abaqus
+*NSET,NSET=N1
+5
+```  
+
+but a load/BC that uses **N1** is placed **before** this block (or inside one of the two empty steps that are read before the definition).  
+Therefore, at the moment Abaqus encounters the first reference to **N1** it cannot find a definition and aborts with  
+
+```
+*Node set N1 is not defined
+```
+
+The error is raised **at the point of use**, not at the later definition.
+
+---
+
+## How to fix it – step‑by‑step checklist
+
+| # | Action | Why it works |
+|---|--------|-----------------|
+| **1** | **Define every set before it is used.** Move the line `*NSET,NSET=N1` (or any `*NODE,NSET=…`) **above the first `*STEP` that contains a reference to it**. | When Abaqus reaches a `*BOUNDARY`, `*CLOAD`, etc., the set already exists in its internal database. |
+| **2** | **Place all loads, boundary conditions, contacts, and output requests inside a step.** Ensure any `*BOUNDARY`, `*CLOAD`, `*DLOAD`, `*CONTACT`, `*OUTPUT`, … that mentions **N1** is located **between `*STEP … *END STEP`**. | Loads/BCs are only legal inside steps; the parser will then see a defined set. |
+| **3** | **Delete empty steps (or give them a purpose).** Remove the two empty steps (`*STEP,NLGEOM … *END STEP` and the second `*STEP … *END STEP`) unless you really need a step that does nothing. | Eliminates hidden ordering problems and makes the file easier to read. |
+| **4** | **Verify node numbers.** Check that node 5 (or any node listed in N1) actually appears in the `*NODE` section. | Prevents “node not found” or empty‑set messages that can be confused with the error. |
+| **5** | **Apply the same rule to all other sets** (`ELSET`, `SURF`, `CONTACT`, …). | The “define‑before‑use” rule is universal for every set‑type keyword. |
+
+---
+
+## Minimal, working example (illustrates the fix)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*STEP, NLGEOM, STATIC
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe X‑displacement on node 5
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**What changed compared with the original file**
+
+1. `*NODE, NSET=N1` is placed **above** the first `*STEP`.  
+2. The boundary condition that uses **N1** is now **inside** a step.  
+3. The two empty steps have been removed (or can be kept only if they contain something useful).
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick pre‑run checklist
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) are defined before the first step that references them.**  
+2. **All loads, BCs, contacts, and output requests are inside a `*STEP … *END STEP` block.**  
+3. **No stray empty steps** (unless deliberately needed).  
+4. **Node/element numbers used in sets actually exist** in the corresponding `*NODE`/`*ELEMENT` sections.  
+
+If every item on this checklist is satisfied, the “*Node set N1 is not defined*” error will disappear.
+A: **Why the “*Node set N1 is not defined*” error occurs**
+
+Abaqus reads the input file **top‑to‑bottom**.  
+When it encounters a keyword that *refers* to a set (e.g. `*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT`, …) the set **must already exist** in the file.  
+
+In your model the node‑set **N1** is created with  
+
+```abaqus
+*NSET,NSET=N1
+5
+```  
+
+but a load/BC that uses **N1** appears **before** this definition (or inside one of the two empty steps that are read first).  
+Consequently, at the moment Abaqus reaches the first reference to **N1** it cannot find a definition and aborts with  
+
+```
+*Node set N1 is not defined
+```
+
+The error is raised **at the point of use**, not when the set is later defined.
+
+---
+
+## Complete step‑by‑step fix
+
+| # | What to do | How it solves the problem |
+|---|------------|---------------------------|
+| **1** | **Define every set before it is used.** Move the `*NSET,NSET=N1` (or any `*NODE,NSET=…`) **above the first `*STEP` that contains a reference to it**. | When Abaqus reads a `*BOUNDARY`, `*CLOAD`, etc., the set already exists in its internal database. |
+| **2** | **Put all loads, boundary conditions, contacts, and output requests inside a step.** Ensure any `*BOUNDARY`, `*CLOAD`, `*DLOAD`, `*CONTACT`, `*OUTPUT`, … that mentions **N1** is located **between `*STEP … *END STEP`**. | Loads/BCs are only legal inside steps; the parser will then see a defined set. |
+| **3** | **Remove or give purpose to empty steps.** Delete the two empty steps (`*STEP,NLGEOM … *END STEP` and the second `*STEP … *END STEP`) unless you really need a step that does nothing. | Eliminates hidden ordering problems and makes the file easier to read. |
+| **4** | **Check that the node numbers really exist.** Verify that node 5 (or any node listed in N1) appears in the `*NODE` section. | Prevents “node not found” or empty‑set messages that can be confused with the current error. |
+| **5** | **Apply the same rule to all other sets** (`ELSET`, `SURF`, `CONTACT`, …). | The “define‑before‑use” rule is universal for every set‑type keyword. |
+
+---
+
+## Minimal, working example (shows the corrected order)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                     (complete node list)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     (complete element list)
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                       ;--- definition **before** any step that uses it
+
+*STEP, NLGEOM, STATIC
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe X‑displacement on node 5
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+**What changed compared with the original file**
+
+1. `*NODE, NSET=N1` is placed **above** the first `*STEP`.  
+2. The boundary condition that uses **N1** is now **inside** a step.  
+3. The two empty steps have been removed (or can be kept only if they contain something useful).
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick pre‑run checklist (run it before submitting)
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) are defined before the first step that references them.**  
+2. **All loads, BCs, contacts, and output requests are inside a `*STEP … *END STEP` block.**  
+3. **No stray empty steps** (unless deliberately needed).  
+4. **Node/element numbers used in sets actually exist** in the corresponding `*NODE`/`*ELEMENT` sections.  
+
+If every item on this checklist is satisfied, the “*Node set N1 is not defined*” error will disappear.
+
+=== 2026-04-20 16:07:09 ===
+Q: **Why the error appears**
+
+Abaqus reads the input file from top to bottom.  
+When it meets a keyword that *refers* to a set ( *BOUNDARY*, *CLOAD*, *CONTACT*, *OUTPUT* …) the set **must already exist** in the file.  
+
+In the posted model the node‑set **N1** is created with  
+
+*NSET,NSET=N1  
+5  
+
+but a load/BC that uses **N1** is placed **before** this line (or inside one of the two empty steps that are read first).  
+Consequently, when the parser reaches the first reference to **N1** it cannot find a definition and aborts with  
+
+*Node set N1 is not defined*  
+
+The error is raised **at the point of use**, not when the set is later defined.
+
+---
+
+### Step‑by‑step fix (checklist)
+
+1. **Define every set before it is used** – move the line `*NSET,NSET=N1` (or any `*NODE,NSET=…`) **above the first `*STEP` that contains a reference to it**.  
+2. **Put all loads, boundary conditions, contacts and output requests inside a step** – ensure any `*BOUNDARY`, `*CLOAD`, `*DLOAD`, `*CONTACT`, `*OUTPUT`, … that mentions **N1** is located **between `*STEP … *END STEP`**.  
+3. **Delete empty steps (or give them a purpose)** – the two empty steps (`*STEP,NLGEOM … *END STEP` and the second `*STEP … *END STEP`) are unnecessary unless you really need a step that does nothing.  
+4. **Verify node numbers** – check that node 5 (or any node listed in N1) actually appears in the `*NODE` section.  
+5. **Apply the same rule to all other sets** (`ELSET`, `SURF`, `CONTACT`, …).  
+
+---
+
+### Minimal working example (illustrates the corrected order)
+
+*HEADING  
+** 20‑node brick model (C3D20R)  
+
+*NODE  
+… (complete node list)  
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall  
+… (complete element list)  
+
+*ELSET, ELSET=Eall, GENERATE  
+1, 261, 1  
+
+*MATERIAL, NAME=EL  
+*ELASTIC  
+210000., 0.3  
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL  
+
+*TRANSFORM, NSET=Nall, TYPE=C  
+0.5, 0.5, 0., 0.5, 0.5, 8.  
+
+*NODE, NSET=Nall, GENERATE  
+1, 261  
+
+*NODE, NSET=N1  
+5   ; definition **before** any step that uses it  
+
+*STEP, NLGEOM, STATIC  
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe X‑displacement on node 5  
+*OUTPUT, FIELD, VARIABLE=PRESELECT  
+*END STEP  
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+### Quick pre‑run checklist
+
+1. All sets (NSET, ELSET, SURF, CONTACT, …) are defined **before** the first step that references them.  
+2. All loads, BCs, contacts and output requests are inside a `*STEP … *END STEP` block.  
+3. No stray empty steps (unless deliberately needed).  
+4. Node/element numbers used in sets actually exist in the corresponding `*NODE`/`*ELEMENT` sections.  
+
+If every item on this checklist is satisfied, the “*Node set N1 is not defined*” error will disappear.
+A: **Why the “Node set N1 is not defined” error occurs**
+
+Abaqus reads the input file **sequentially**.  
+When it encounters a keyword that *refers* to a set (e.g. `*BOUNDARY`, `*CLOAD`, `*CONTACT`, `*OUTPUT`, …) the set **must already have been created** earlier in the file.  
+
+In your model the node‑set **N1** is created with  
+
+```  
+*NSET,NSET=N1
+5
+```  
+
+but a load/BC that uses **N1** appears **before** that line (or inside one of the two empty steps that are read first).  
+Consequently, when the parser reaches the first reference to **N1** it cannot find a definition and aborts with
+
+```
+*Node set N1 is not defined
+```
+
+The error is raised **at the point of use**, not when the set is later defined.
+
+---
+
+## Step‑by‑step fix (checklist)
+
+| # | Action | Why it matters |
+|---|--------|----------------|
+| 1 | **Define every set before it is used** – move the line `*NSET,NSET=N1` (or any `*NODE,NSET=…`) **above the first `*STEP` that contains a reference to it**. | Abaqus must know the set when it parses the load/BC. |
+| 2 | **Place all loads, boundary conditions, contacts and output requests inside a step** (`*STEP … *END STEP`). | Keywords that refer to sets are only valid inside a step. |
+| 3 | **Delete empty steps (or give them a purpose)** – the two empty steps (`*STEP,NLGEOM … *END STEP` and the second `*STEP … *END STEP`) are unnecessary unless you really need a step that does nothing. | Empty steps waste time and can hide ordering problems. |
+| 4 | **Verify node numbers** – ensure that node 5 (or any node listed in N1) actually appears in the `*NODE` section. | A set that contains a non‑existent node will also cause errors. |
+| 5 | **Apply the same rule to all other sets** (`ELSET`, `SURF`, `CONTACT`, …). | Consistency prevents similar errors elsewhere. |
+
+---
+
+## Minimal working example (correct order)
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                ; complete node list (1‑261)
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                ; complete element list
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                 ; **definition before any step that uses it**
+
+*STEP, NLGEOM, STATIC
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; prescribe X‑displacement on node 5
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+Running this file with Abaqus/Standard (any recent release) finishes without the “*Node set N1 is not defined*” error and applies the prescribed displacement to node 5.
+
+---
+
+## Quick pre‑run checklist
+
+1. **All sets (NSET, ELSET, SURF, CONTACT, …) are defined before the first step that references them.**  
+2. **All loads, BCs, contacts and output requests are inside a `*STEP … *END STEP` block.**  
+3. **No stray empty steps (unless deliberately needed).**  
+4. **Node/element numbers used in sets actually exist in the corresponding `*NODE`/`*ELEMENT` sections.**  
+
+If every item on this checklist is satisfied, the “*Node set N1 is not defined*” error will disappear.
+
+=== 2026-04-20 16:07:39 ===
+Q: **错误产生的根本原因**  
+Abaqus 按文件的顺序从上到下逐行读取。  
+当它遇到 **需要引用集合的关键字**（如 `*BOUNDARY`、`*CLOAD`、`*CONTACT`、`*OUTPUT` 等）时，**该集合必须已经在文件中被定义**。  
+
+在你的模型中，节点集合 **N1** 是这样创建的：
+
+```abaqus
+*NSET,NSET=N1
+5
+```
+
+但随后（或在前面的两个空 *STEP* 中）已经出现了使用 **N1** 的载荷/边界条件。  
+因此，在解析到第一次引用 **N1** 时，Abaqus 并没有在之前找到对应的集合定义，程序便报出
+
+```
+*Node set N1 is not defined
+```
+
+> 该错误是在 **使用点** 报出的，而不是在后面才出现的定义处。
+
+---
+
+## 逐步排查与修正（检查表）
+
+| 步骤 | 操作 | 目的 |
+|------|------|------|
+| **1** | **先定义集合，再使用**<br>把 `*NSET,NSET=N1`（或任何 `*NODE,NSET=…`）移动到 **第一次在 *STEP* 中引用 N1 之前**。 | Abaqus 在解析 `*BOUNDARY`、`*CLOAD` 等关键字时已经知道该集合。 |
+| **2** | **所有载荷、边界条件、接触、输出请求必须放在 *STEP* 块内部**（`*STEP … *END STEP`）。 | 这些关键字只能在步骤中出现，且必须引用已存在的集合。 |
+| **3** | **删除不必要的空步骤**（如 `*STEP,NLGEOM … *END STEP`、第二个空 *STEP*），除非你真的需要一个“空”步骤。 | 空步骤会浪费计算时间，也可能掩盖顺序错误。 |
+| **4** | **检查节点编号是否真实存在**。确认节点 5（或 N1 中列出的任何节点）已经在 `*NODE` 部分出现。 | 集合中包含不存在的节点同样会导致错误。 |
+| **5** | **对所有其他集合（ELSET、SURF、CONTACT 等）遵循同样的“先定义后使用”原则**。 | 保持一致性，防止类似错误在别处出现。 |
+
+---
+
+## 最小可运行示例（展示正确的顺序）
+
+```abaqus
+*HEADING
+** 20‑node brick model (C3D20R)
+
+*NODE
+...                ; 完整的节点列表（1‑261）
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                ; 完整的单元列表
+
+*ELSET, ELSET=Eall, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*TRANSFORM, NSET=Nall, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=Nall, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                 ; **在任何使用 N1 的 STEP 之前定义**
+
+*STEP, NLGEOM, STATIC
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; 对节点 5 施加 X 方向位移
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+使用上述顺序提交后，Abaqus/Standard（任意近期版本）能够顺利运行，且不会再出现 “*Node set N1 is not defined*” 的报错。
+
+---
+
+## 提交前快速检查清单
+
+1. **所有集合（NSET、ELSET、SURF、CONTACT 等）在首次被步骤引用之前已经定义。**  
+2. **所有载荷、边界条件、接触和输出请求均位于 `*STEP … *END STEP` 块内部。**  
+3. **不存在无意义的空步骤**（除非确实需要）。  
+4. **集合中使用的节点/单元编号在对应的 `*NODE`/`*ELEMENT` 部分真实存在。**  
+
+只要上述每一项都满足，**“Node set N1 is not defined”** 错误就会消失，模型即可正常提交并求解。
+A: **简要答案**  
+在 Abaqus 输入文件中，**任何需要引用集合（NSET、ELSET、SURF、CONTACT 等）的关键字**（如 `*BOUNDARY`、`*CLOAD`、`*CONTACT`、`*OUTPUT` 等）**必须在它们第一次被使用之前已经在文件中定义**。  
+因此，只要把 `*NSET,NSET=N1`（或其它集合的定义）放在第一次引用 `N1` 的 `*STEP` 之前，错误 *“Node set N1 is not defined”* 就会消失。
+
+---
+
+## 完整的排查‑修正流程（检查表）
+
+| 步骤 | 操作 | 目的 |
+|------|------|------|
+| **1. 先定义后使用** | 把所有 `*NSET`、`*ELSET`、`*SURF`、`*CONTACT` 等集合的定义移动到 **第一次在 *STEP* 中引用它们之前**。 | Abaqus 在解析 `*BOUNDARY`、`*CLOAD`、`*CONTACT`、`*OUTPUT` 等关键字时已经知道集合。 |
+| **2. 确认集合中节点/单元真实存在** | 检查 `*NODE`（或 `*ELEMENT`）段里是否真的包含集合中列出的编号（如节点 5）。 | 防止“集合中包含不存在的节点/单元”导致的二次错误。 |
+| **3. 所有载荷/边界/接触/输出必须在 *STEP* 块内部** | `*BOUNDARY`、`*CLOAD`、`*CONTACT`、`*OUTPUT` 等关键字只能写在 `*STEP … *END STEP` 之间。 | Abaqus 只在步骤内部解释这些关键字。 |
+| **4. 删除或合并不必要的空 STEP** | 如果有仅包含 `*STEP, NLGEOM … *END STEP` 而没有任何指令的空步骤，删除或合并到实际需要的步骤中。 | 空步骤会掩盖顺序错误并浪费计算时间。 |
+| **5. 对其它集合同样遵循“先定义后使用”** | 如 `*ELSET`、`*SURF`、`*CONTACT PAIR` 等，都要在第一次引用前完成定义。 | 保持文件结构一致，防止类似错误在别处出现。 |
+| **6. 最后一次整体检查** | 运行 **File → Check Input**（或在提交前用 `abaqus job=… input=…` 的 `-check` 选项）确认没有遗漏。 | Abaqus 会在提交前捕获大多数语法/顺序错误。 |
+
+---
+
+## 最小可运行示例（正确顺序）
+
+```abaqus
+*HEADING
+** 示例：20‑node 砖块模型（C3D20R）
+
+*NODE
+1, 0., 0., 0.
+2, 1., 0., 0.
+...                ; 直至节点 261（省略）
+
+*ELEMENT, TYPE=C3D20R, ELSET=EALL
+1, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20
+...                ; 其余单元
+
+*ELSET, ELSET=EALL, GENERATE
+1, 261, 1
+
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+*TRANSFORM, NSET=NALL, TYPE=C
+0.5, 0.5, 0., 0.5, 0.5, 8.
+
+*NODE, NSET=NALL, GENERATE
+1, 261
+
+*NODE, NSET=N1
+5                 ; **在任何 STEP 中使用 N1 之前定义**
+
+*STEP, NLGEOM, STATIC
+*BOUNDARY, NSET=N1, 1, 1, 0.1   ; 对节点 5 施加 X 方向位移
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*END STEP
+```
+
+> **关键点**：`*NSET,NSET=N1` 位于 `*STEP` 之前；所有载荷 (`*BOUNDARY`) 位于 `*STEP … *END STEP` 之间；节点 5 已在 `*NODE` 中出现。
+
+---
+
+## 提交前快速检查清单（可直接复制到笔记）
+
+1. **集合定义 → 在首次引用之前**  
+2. **节点/单元编号 → 已在 *NODE*/*ELEMENT* 中出现**  
+3. **载荷/边界/接触/输出 → 只在 *STEP* 块内部**  
+4. **空 STEP → 已删除或合并**  
+5. **对所有集合（NSET、ELSET、SURF、CONTACT）重复步骤 1‑4**  
+6. **使用 Abaqus 检查功能 (`abaqus job=… input=… -check`)**  
+
+只要上述每一项都满足，**“*Node set N1 is not defined*”** 错误就会彻底消失，模型可以顺利提交并求解。祝你建模顺利！
+

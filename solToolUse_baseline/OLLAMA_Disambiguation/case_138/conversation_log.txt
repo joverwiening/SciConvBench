@@ -1,0 +1,3052 @@
+=== 2026-04-20 17:53:15 ===
+Q: **What the error means**
+
+In Abaqus a *COUPLING (kinematic) constraint creates a set of equations that relate the
+displacements (or rotations) of the *reference node* to the average displacement of
+all the nodes that belong to the *surface* you specify.  
+If a degree of freedom (DOF) that is being coupled is already constrained by some
+other equation or a boundary condition, the system of equations becomes **over‑
+constrained** – Abaqus therefore stops with the message
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+In practice this most often happens when the reference node itself is also a
+member of the surface that is being coupled, or when a displacement (or rotation)
+boundary condition has been applied to a node that is also included in the
+coupling.
+
+---
+
+**Why it happens in the posted input file**
+
+The coupling you defined is
+
+```
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3
+```
+
+*   **Reference node** – node 262 (coordinates 10., 0., 0.)
+*   **Surface** – S1, which you built from element faces
+    (2,S4), (4,S4), (30,S4) and (32,S4).
+
+The *KINEMATIC* line tells Abaqus to couple **DOF 1** (U1) of the reference node
+to **DOF 3** (U3) of every node that belongs to the surface.  
+
+If you look carefully at the surface definition you will see that **node 262 is
+actually part of the surface**.  The element faces you listed for S1 are
+opposite‑node faces of the 8‑node brick.  For a brick the S4 face is defined by
+the four nodes that are opposite node 2 of the element.  In the elements you
+used (2, 4, 30, 32) node 262 is one of those four nodes, so the surface S1
+*does* contain the reference node.
+
+Consequently the coupling equation tries to relate **U1 of node 262** to the
+average **U3 of the surface nodes**, but node 262’s U3 is also part of that
+average (because node 262 itself is on the surface).  The same degree of
+freedom therefore appears on both sides of the equation, which makes the
+constraint **over‑defined** and Abaqus aborts.
+
+---
+
+**How to fix it**
+
+1. **Make sure the reference node is *not* on the surface** you are coupling.
+   - The simplest way is to delete node 262 from the surface definition.
+   - If you need node 262 to stay on the surface (e.g. it is the tip node you
+     want to move), then you must use a *different* reference node that is not
+     part of the surface.  Create a new “dummy” node somewhere off the model,
+     e.g.
+
+     ```
+     *Node
+     9999, 0., 0., 0.
+     ```
+
+     and then change the coupling line to
+
+     ```
+     *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+     *KINEMATIC
+     1,3
+     ```
+
+2. **If you really want to couple the tip node itself**, you can avoid a
+   surface definition altogether and use a *MPC* (multi‑point constraint) that
+   directly ties the tip node to the reference node:
+
+   ```
+   *MPC, TYPE=BEAM, NAME=CN1
+   1, 262, 100
+   ```
+
+   (Here 1 is the DOF number for the translation you want to control,
+   262 is the reference node, and 100 is the tip node.)
+
+3. **Check the step definition** – for a static analysis you should have a
+   *STATIC* step (or *STATIC, ...*) after the *STEP* line.  The missing
+   *STATIC* line does not cause the over‑defined‑constraint error, but it will
+   make the job fail later.  A correct static step looks like:
+
+   ```
+   *STEP, NLGEOM=YES
+   *STATIC
+   1., 1., 1e-05, 1.
+   *END STEP
+   ```
+
+   (The numbers are the usual *STATIC* parameters: initial increment,
+   minimum increment, maximum increment, and total time.)
+
+---
+
+**Summary of the fix**
+
+- **Do not include the reference node in the coupled surface.**  
+  Either remove node 262 from surface S1 or choose a different reference node
+  that is not part of the surface.
+- Optionally, if you only need to move a single tip node, replace the surface
+  coupling with a simple *MPC* that ties that tip node to the reference node.
+- Add a proper *STATIC* step definition after the *STEP* line.
+
+After making these changes the model will no longer have an over‑defined
+constraint and the static analysis should run without the “constraint equation
+is over defined” error.
+A: **Short answer** – The error is caused because the node you have chosen as the **reference node (262)** also belongs to the **surface S1** that you are coupling to.  
+When a kinematic coupling tries to relate a DOF of the reference node to the *average* of the same DOF on the surface, that DOF appears on both sides of the equation and the system becomes **over‑defined**.  
+Remove the reference node from the surface (or use a different reference node) and the job will run.
+
+Below is a step‑by‑step explanation, a checklist of things to verify, and a ready‑to‑copy corrected input file.
+
+---
+
+## 1. Why the error occurs in the posted input
+
+| Item | What you wrote | What Abaqus does |
+|------|----------------|------------------|
+| **Reference node** | `REF NODE=262` (coordinates 10., 0., 0.) | This node is the “master” of the coupling. |
+| **Surface** | `SURFACE=S1` built from element faces (2,S4), (4,S4), (30,S4) and (32,S4) | Abaqus collects **all nodes that belong to those faces** and forms the “slave” set. |
+| **KINEMATIC line** | `1,3` – couple **U1** of node 262 to the **average U3** of the slave nodes. | The equation is:  `U1(262) = ( Σ U3(i) ) / N` where *i* runs over every node on S1. |
+
+When you examine the four faces you listed, you will see that **node 262 is one of the four nodes that define the S4 face of each of those elements** (the S4 face of an 8‑node brick is the set of nodes opposite node 2). Consequently node 262 is **included in the slave set**.  
+
+Therefore the same degree of freedom (U3 of node 262) appears on both sides of the coupling equation, which makes the constraint **over‑defined** and Abaqus aborts with
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## 2. Checklist – things that can also create an over‑defined coupling
+
+| Check | What to look for |
+|-------|------------------|
+| **Reference node on the surface** | Verify that the node number given after `REF NODE=` is **not** listed in the surface definition. |
+| **Boundary conditions on the same DOF** | Do not apply a displacement/rotation BC to a node that is also part of the coupled surface for the same DOF. |
+| **Duplicate coupling definitions** | Make sure you do not define two *COUPLING* entries that involve the same reference node and the same DOF. |
+| **MPC vs. COUPLING** | If you only need to tie a single node to another node, an *MPC* is simpler and less prone to this error. |
+
+---
+
+## 3. How to fix the problem
+
+### Option A – Keep node 262 on the surface, but **use a different reference node**
+
+1. **Create a dummy node** somewhere outside the model (any coordinates are fine, e.g. the origin).  
+   ``` 
+   *Node
+   9999, 0., 0., 0.
+   ```
+2. **Replace the coupling line** with the new reference node:  
+   ``` 
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3
+   ```
+3. **Apply the prescribed motion** (or load) to the dummy node instead of node 262, or keep node 262 free and let the coupling move it.
+
+### Option B – Keep node 262 as the reference node, **remove it from the surface**
+
+1. **Redefine surface S1** without the faces that contain node 262, or manually list the nodes that should belong to the surface and omit 262.  
+   Example (manual node list):
+   ```
+   *Surface, type=ELEMENT, name=S1
+   2, S4
+   4, S4
+   30, S4
+   32, S4
+   ```
+   Then delete node 262 from the surface by editing the node set that Abaqus internally creates (easier to just create a new surface that does not include the element containing node 262).
+
+2. **Leave the original coupling line** unchanged:
+   ```
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3
+   ```
+
+### Option C – Use a **MPC** (multi‑point constraint) instead of a surface coupling
+
+If you only need to control the tip node (262) relative to another node (e.g. a “master” node 100), a *MPC* is the cleanest way:
+
+```
+*Node
+100, 0., 0., 0.          ! master node (any location you like)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! DOF 1 of node 262 = DOF 1 of node 100
+```
+
+You can add additional lines for the other DOFs you want to couple (e.g. `2, 262, 100` for U2, etc.).
+
+---
+
+## 4. A complete, corrected input file (Option A – dummy reference node)
+
+Below is a minimal, self‑contained input that compiles the changes described above.  
+Only the parts that are relevant to the error are shown; you will have to insert the rest of your model (material definitions, sections, etc.) as needed.
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+** --------------------------------------------------------------
+
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** --------------------------------------------------------------
+**  Nodes
+** --------------------------------------------------------------
+*Node
+10, 0., 0., 0.          ! example node (keep your original nodes)
+262, 10., 0., 0.        ! tip node (the one you want to move)
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+** --------------------------------------------------------------
+**  Elements (your original element definitions go here)
+** --------------------------------------------------------------
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+** --------------------------------------------------------------
+**  Surface definition – unchanged (still contains node 262)
+** --------------------------------------------------------------
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+** --------------------------------------------------------------
+**  Kinematic coupling – reference node is now 9999 (outside the surface)
+** --------------------------------------------------------------
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+** --------------------------------------------------------------
+**  Boundary conditions (example – keep as you need)
+** --------------------------------------------------------------
+*Boundary
+9999, 1, 1, 0.0        ! fix the dummy node in the direction you prescribe
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+** --------------------------------------------------------------
+**  Step definition – a static step (you omitted *STATIC* before)
+** --------------------------------------------------------------
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! initial inc, min inc, max inc, total time
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+**What changed?**
+
+| Change | Reason |
+|--------|--------|
+| Added node **9999** and used it as `REF NODE` | Guarantees the reference node is **not** part of surface S1, eliminating the over‑definition. |
+| Added a proper `*STATIC` line inside the step | The original input missed the `*STATIC` keyword; without it the job would stop later. |
+| (Optional) Fixed the dummy node with a `*Boundary` card | Prevents the dummy node from moving unintentionally. You can also prescribe a displacement on this node if you want to drive the coupling. |
+
+---
+
+## 5. Quick “what‑to‑do” checklist for future models
+
+1. **Identify the reference node** you intend to use.  
+2. **List all nodes that belong to the surface** (or node set) you are coupling to.  
+3. **Verify that the reference node is NOT in that list**.  
+4. **Check that no other BC or MPC uses the same DOF on any of those nodes**.  
+5. **Run a short “check” job** (`abaqus job=… interactive`) – Abaqus will stop early if a constraint is over‑defined, letting you correct it before a long analysis.  
+6. **Add the appropriate step keyword** (`*STATIC`, `*Dynamic`, …) after the `*STEP` line.  
+
+---
+
+### TL;DR
+
+- The error is caused because **node 262 (the reference node) is also on surface S1**.  
+- **Fix:** either (a) use a different reference node that is not on the surface, or (b) remove node 262 from the surface definition, or (c) replace the surface coupling with a simple *MPC* that ties the two nodes directly.  
+- Also make sure the step contains a `*STATIC` (or other appropriate) sub‑step definition.  
+
+After applying one of the fixes above the model will no longer be over‑constrained and the static analysis will run successfully.
+
+=== 2026-04-20 17:54:08 ===
+Q: **Short answer** – The *COUPLING* error occurs because the node you chose as the **reference node (262)** also belongs to the **surface S1** that you are coupling to.  
+A kinematic coupling tries to relate a DOF of the reference node to the *average* of the same DOF on the surface; when the reference node is part of that surface the same DOF appears on both sides of the equation, making the constraint **over‑defined**.  
+Remove the reference node from the surface (or use a different reference node) and the job will run.
+
+Below is a step‑by‑step explanation, a checklist of things to verify, and a ready‑to‑copy corrected input file (using a dummy reference node that is not on the surface).
+
+---
+
+## 1. Why the error occurs in the posted input
+
+| Item | What you wrote | What Abaqus does |
+|------|----------------|------------------|
+| **Reference node** | `REF NODE=262` (coordinates 10., 0., 0.) | This node is the “master” of the coupling. |
+| **Surface** | `SURFACE=S1` built from element faces (2,S4), (4,S4), (30,S4) and (32,S4) | Abaqus gathers **all nodes that belong to those faces** and forms the “slave” set. |
+| **KINEMATIC line** | `1,3` – couple **U1** of node 262 to the **average U3** of the slave nodes. | Equation: `U1(262) = ( Σ U3(i) ) / N` where *i* runs over every node on S1. |
+
+When you examine the four faces you listed, you will see that **node 262 is one of the four nodes that define the S4 face of each of those elements** (the S4 face of an 8‑node brick is the set of nodes opposite node 2). Consequently node 262 is **included in the slave set**.  
+
+Therefore the same degree of freedom (U3 of node 262) appears on both sides of the coupling equation, which makes the constraint **over‑defined** and Abaqus aborts with
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## 2. Checklist – common sources of an over‑defined coupling
+
+| Check | What to look for |
+|-------|------------------|
+| **Reference node on the surface** | Verify that the node number after `REF NODE=` is **not** listed in the surface definition. |
+| **Boundary conditions on the same DOF** | Do not apply a displacement/rotation BC to a node that is also part of the coupled surface for the same DOF. |
+| **Duplicate coupling definitions** | Ensure you do not define two *COUPLING* entries that involve the same reference node and the same DOF. |
+| **MPC vs. COUPLING** | If you only need to tie a single node to another node, an *MPC* is simpler and avoids this problem. |
+
+---
+
+## 3. How to fix the problem
+
+### Option A – Keep node 262 on the surface, **use a different reference node**
+
+1. **Create a dummy node** that is not part of S1 (any coordinates are fine).  
+   ``` 
+   *Node
+   9999, 0., 0., 0.
+   ```
+2. **Replace the coupling line** with the new reference node:  
+   ``` 
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3
+   ```
+3. **Apply the prescribed motion** (or load) to the dummy node instead of node 262, or keep node 262 free and let the coupling move it.
+
+### Option B – Keep node 262 as the reference node, **remove it from the surface**
+
+1. Redefine surface **S1** without the faces that contain node 262, or manually list the nodes that should belong to the surface and omit 262.  
+2. Leave the original coupling line unchanged:
+   ``` 
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3
+   ```
+
+### Option C – Use a **MPC** (multi‑point constraint) instead of a surface coupling
+
+If you only need to control the tip node (262) relative to another node (e.g. a master node 100), a *MPC* is the cleanest way:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1 of node 262 = U1 of node 100
+```
+
+Add additional lines (`2, 262, 100`, `3, 262, 100`, …) for the other DOFs you wish to tie.
+
+---
+
+## 4. A complete, corrected input file (Option A – dummy reference node)
+
+Only the parts that are relevant to the error are shown; insert the rest of your model (material, sections, loads, etc.) as needed.
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+** --------------------------------------------------------------
+
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** --------------------------------------------------------------
+**  Nodes
+** --------------------------------------------------------------
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+** --------------------------------------------------------------
+**  Elements (your original element definitions)
+** --------------------------------------------------------------
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+** --------------------------------------------------------------
+**  Surface definition – unchanged (still contains node 262)
+** --------------------------------------------------------------
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+** --------------------------------------------------------------
+**  Kinematic coupling – reference node is now 9999 (outside the surface)
+** --------------------------------------------------------------
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+** --------------------------------------------------------------
+**  (Optional) Boundary conditions for the dummy node
+** --------------------------------------------------------------
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+** --------------------------------------------------------------
+**  Step definition – a static step (the original input missed *STATIC*)
+** --------------------------------------------------------------
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! initial inc, min inc, max inc, total time
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+### What changed?
+
+| Change | Reason |
+|--------|--------|
+| Added node **9999** and used it as `REF NODE` | Guarantees the reference node is **not** part of surface S1, eliminating the over‑definition. |
+| Added a proper `*STATIC` line inside the step | The original input missed the `*STATIC` keyword; without it the job would stop later. |
+| (Optional) Fixed the dummy node with a `*Boundary` card | Prevents the dummy node from moving unintentionally. You can also prescribe a displacement on this node if you want to drive the coupling. |
+
+---
+
+## 5. Quick “what‑to‑do” checklist for future models
+
+1. **Identify the reference node** you intend to use.  
+2. **List all nodes that belong to the surface (or node set) you are coupling to.**  
+3. **Verify that the reference node is NOT in that list.**  
+4. **Check that no other BC or MPC uses the same DOF on any of those nodes.**  
+5. **Run a short “check” job** (`abaqus job=… interactive`) – Abaqus will stop early if a constraint is over‑defined.  
+6. **Add the appropriate step keyword** (`*Static`, `*Dynamic`, …) after the `*Step` line.  
+
+---
+
+### TL;DR
+
+- The error is caused because **node 262 (the reference node) is also on surface S1**.  
+- **Fix:** either (a) use a different reference node that is not on the surface, or (b) remove node 262 from the surface definition, or (c) replace the surface coupling with a simple *MPC* that ties the two nodes directly.  
+- Also make sure the step contains a `*STATIC` (or other appropriate) sub‑step definition.  
+
+After applying one of the fixes above the model will no longer be over‑constrained and the static analysis will run successfully.
+A: **Short answer** – The *COUPLING* error is caused by using node 262 as the **reference node** while that same node also belongs to the **surface S1** that you are coupling to.  
+Because the reference node is part of the slave surface, the same degree of freedom appears on both sides of the kinematic‑coupling equation, making the constraint **over‑defined**.  
+
+**Fix** – Use a reference node that is **not** on the coupled surface (or remove the node from the surface). The easiest way is to create a dummy node and make it the reference node.  
+
+Below is a compact “what‑to‑do” checklist, the minimal changes you need to make to your input file, and a ready‑to‑copy corrected example.
+
+---
+
+## 1. Checklist – avoid an over‑defined coupling
+
+| # | What to verify |
+|---|----------------|
+| 1 | The node given after `REF NODE=` **must not** appear in the surface (or node set) listed after `SURFACE=`. |
+| 2 | No other boundary condition or MPC uses the same DOF on any node that belongs to the coupled surface. |
+| 3 | Only one *COUPLING* entry should involve a given reference node/DOF pair. |
+| 4 | The step definition must contain a proper analysis keyword (`*Static`, `*Dynamic`, …). |
+
+If any of the above fails, Abaqus will abort with “The constraint equation is over defined”.
+
+---
+
+## 2. Two ways to cure the problem
+
+### **Option A – Introduce a dummy reference node (recommended)**
+1. Add a node that is **not** part of surface S1.  
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node
+   ```
+2. Change the coupling definition to use this node:  
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! U1 of node 9999 = average U3 of S1
+   ```
+3. (Optional) Apply the desired motion or fix the dummy node with a `*Boundary` card.
+
+### **Option B – Keep node 262 as reference, remove it from the surface**
+1. Redefine surface **S1** so that node 262 is omitted (list only the faces or nodes you really need).  
+2. Leave the original coupling line unchanged.
+
+### **Option C – Use an *MPC* instead of a surface coupling**
+If you only need to tie node 262 to a single master node, an MPC is simpler:
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+(Use the appropriate DOFs for your model.)
+
+---
+
+## 3. Minimal corrected input (Option A)
+
+Only the parts that are relevant to the error are shown; insert the rest of your model (materials, sections, loads, etc.) as usual.
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+** -------------------------------------------------
+** Nodes
+** -------------------------------------------------
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+** -------------------------------------------------
+** Elements (your original element definitions)
+** -------------------------------------------------
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+** -------------------------------------------------
+** Surface definition – unchanged (still contains node 262)
+** -------------------------------------------------
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+** -------------------------------------------------
+** Kinematic coupling – reference node is now 9999
+** -------------------------------------------------
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+** -------------------------------------------------
+** (Optional) Boundary conditions for the dummy node
+** -------------------------------------------------
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+** -------------------------------------------------
+** Step definition – a static step (the original input missed *STATIC*)
+** -------------------------------------------------
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! initial inc, min inc, max inc, total time
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+**What changed?**
+
+| Change | Reason |
+|--------|--------|
+| Added node **9999** and used it as `REF NODE` | Guarantees the reference node is **outside** surface S1, eliminating the over‑definition. |
+| Added a proper `*STATIC` line inside the step | The original input omitted the analysis sub‑keyword; without it the job would stop later. |
+| (Optional) Fixed the dummy node with a `*Boundary` card | Prevents the dummy node from moving unintentionally; you can also prescribe a displacement here to drive the coupling. |
+
+---
+
+## 4. Quick “what‑to‑do” before running the next job
+
+1. **Open the input file** and locate the `*COUPLING` line.  
+2. **Check the node number after `REF NODE=`** – make sure it does **not** appear in the surface definition that follows `SURFACE=`.  
+3. **If it does, either**  
+   * add a dummy node and point `REF NODE=` to it, **or**  
+   * edit the surface definition to exclude that node.  
+4. **Verify that the step contains a proper analysis keyword** (`*Static`, `*Dynamic`, etc.).  
+5. Run a short “check” job (`abaqus job=… interactive`). Abaqus will stop immediately if a constraint is still over‑defined, letting you correct it before a full run.
+
+---
+
+### TL;DR
+
+- The error is caused because **node 262 (reference node) is also on surface S1**.  
+- **Fix:** use a different reference node that is not part of the coupled surface (or remove node 262 from the surface), or replace the surface coupling with an *MPC*.  
+- Also ensure the step contains a `*STATIC` (or appropriate) sub‑step definition.  
+
+After applying one of the fixes above the model will no longer be over‑constrained and the static analysis will run successfully.
+
+=== 2026-04-20 17:54:56 ===
+Q: **Short answer** – The *COUPLING* error occurs because the node you chose as the **reference node (262)** also belongs to the **surface S1** that you are coupling to.  
+A kinematic coupling relates a DOF of the reference node to the *average* of the same DOF on the slave surface; when the reference node is part of that surface the same DOF appears on both sides of the equation, making the constraint **over‑defined**.  
+
+**Fix** – Use a reference node that is **not** on the coupled surface (or remove the node from the surface), or replace the surface coupling with an *MPC*. The easiest solution is to create a dummy node and make it the reference node.  
+
+Below is a step‑by‑step explanation, a checklist to avoid this problem in the future, and a ready‑to‑copy corrected input file (using a dummy reference node).
+
+---
+
+## 1. Why the error occurs in your input
+
+| Item | What you wrote | What Abaqus does |
+|------|----------------|------------------|
+| **Reference node** | `REF NODE=262` (coordinates 10., 0., 0.) | This node is the “master” of the coupling. |
+| **Surface** | `SURFACE=S1` built from element faces (2,S4), (4,S4), (30,S4) and (32,S4) | Abaqus gathers **all nodes that belong to those faces** and forms the “slave” set. |
+| **KINEMATIC line** | `1,3` – couple **U1** of node 262 to the **average U3** of the slave nodes. | Equation: `U1(262) = ( Σ U3(i) ) / N` where *i* runs over every node on S1. |
+
+The four faces you listed each contain node 262 (the S4 face of an 8‑node brick is the set of nodes opposite node 2). Consequently node 262 is **included in the slave surface**.  
+
+Because the same degree of freedom (U3 of node 262) appears on both sides of the coupling equation, the constraint is **over‑defined** and Abaqus aborts with
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## 2. Checklist – common sources of an over‑defined coupling
+
+| # | What to verify |
+|---|----------------|
+| 1 | The node after `REF NODE=` **must not** appear in the surface (or node set) listed after `SURFACE=`. |
+| 2 | No other boundary condition or MPC uses the same DOF on any node that belongs to the coupled surface. |
+| 3 | Only one *COUPLING* entry should involve a given reference node/DOF pair. |
+| 4 | The step definition must contain a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## 3. How to cure the problem
+
+### Option A – Introduce a dummy reference node (recommended)
+
+1. **Add a node that is not part of surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node
+   ```
+
+2. **Change the coupling definition** to use this node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! U1 of node 9999 = average U3 of S1
+   ```
+
+3. (Optional) **Prescribe motion or fix the dummy node** with a `*Boundary` card, e.g.
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0
+   9999, 2, 2, 0.0
+   9999, 3, 3, 0.0
+   ```
+
+### Option B – Keep node 262 as reference, remove it from the surface
+
+1. Redefine surface **S1** so that node 262 is omitted (list only the faces or nodes you really need).  
+2. Leave the original coupling line unchanged:
+
+   ```abaqus
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3
+   ```
+
+### Option C – Use an *MPC* instead of a surface coupling
+
+If you only need to tie node 262 to a single master node, an MPC is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+Add the DOFs you actually need.
+
+---
+
+## 4. Minimal corrected input (Option A – dummy reference node)
+
+Only the sections relevant to the error are shown; insert the rest of your model (materials, sections, loads, etc.) as usual.
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+** Nodes
+** -------------------------------------------------
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+** -------------------------------------------------
+** Elements (your original element definitions)
+** -------------------------------------------------
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+** -------------------------------------------------
+** Surface definition – unchanged (still contains node 262)
+** -------------------------------------------------
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+** -------------------------------------------------
+** Kinematic coupling – reference node is now 9999
+** -------------------------------------------------
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+** -------------------------------------------------
+** (Optional) Boundary conditions for the dummy node
+** -------------------------------------------------
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+** -------------------------------------------------
+** Step definition – a static step (the original input missed *STATIC*)
+** -------------------------------------------------
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! initial inc, min inc, max inc, total time
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+### What changed?
+
+| Change | Reason |
+|--------|--------|
+| Added node **9999** and used it as `REF NODE` | Guarantees the reference node is **outside** surface S1, eliminating the over‑definition. |
+| Added a proper `*STATIC` line inside the step | The original input omitted the analysis sub‑keyword; without it the job would stop later. |
+| (Optional) Fixed the dummy node with a `*Boundary` card | Prevents the dummy node from moving unintentionally; you can also prescribe a displacement here to drive the coupling. |
+
+---
+
+## 5. Quick “what‑to‑do” before running the next job
+
+1. **Open the input file** and locate the `*COUPLING` line.  
+2. **Check the node number after `REF NODE=`** – make sure it does **not** appear in the surface definition that follows `SURFACE=`.  
+3. **If it does, either**  
+   * add a dummy node and point `REF NODE=` to it, **or**  
+   * edit the surface definition to exclude that node.  
+4. **Verify that the step contains a proper analysis keyword** (`*Static`, `*Dynamic`, etc.).  
+5. Run a short “check” job (`abaqus job=… interactive`). Abaqus will stop immediately if a constraint is still over‑defined, letting you correct it before a full run.
+
+---
+
+### TL;DR
+
+- The error is caused because **node 262 (reference node) is also on surface S1**.  
+- **Fix:** use a different reference node that is not part of the coupled surface (or remove node 262 from the surface), or replace the surface coupling with an *MPC*.  
+- Also ensure the step contains a `*STATIC` (or appropriate) sub‑step definition.  
+
+After applying one of the fixes above the model will no longer be over‑constrained and the static analysis will run successfully.
+A: **Short answer** – The *COUPLING* error appears because the node you gave as the **reference node (262)** also belongs to the **slave surface S1**.  
+A kinematic coupling equates a DOF of the reference node to the *average* of the same DOF on all nodes of the slave surface. When the reference node is part of that surface the same DOF shows up on both sides of the equation, so the constraint is **over‑defined** and Abaqus aborts.
+
+The cure is simple: **use a reference node that is *not* on the coupled surface** (or remove the node from the surface), or replace the surface coupling with an MPC. The easiest and most robust way is to create a dummy node and make it the reference node.
+
+Below is a **complete, ready‑to‑copy input fragment** that implements the dummy‑node solution, together with a short checklist to avoid the problem in the future.
+
+---
+
+## 1. Why the error occurs in your original input
+
+| Item | Your line | What Abaqus does |
+|------|-----------|------------------|
+| Reference node | `REF NODE=262` | Takes node 262 as the “master”. |
+| Surface | `SURFACE=S1` (faces 2‑S4, 4‑S4, 30‑S4, 32‑S4) | Collects **all nodes belonging to those faces** as the slave set. |
+| Coupling type | `*KINEMATIC` `1,3` | Writes the equation `U1(262) = ( Σ U3(i) ) / N` where *i* runs over every node on S1. |
+
+Because node 262 is one of the nodes that belongs to the faces listed for **S1**, the same degree of freedom (U3 of node 262) appears on both sides of the equation → **over‑defined** → abort with
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## 2. Checklist – common sources of an over‑defined coupling
+
+| # | What to verify |
+|---|----------------|
+| 1 | The node after `REF NODE=` **must not** be included in the surface (or node set) named after `SURFACE=`. |
+| 2 | No other boundary condition, MPC, or coupling uses the same DOF on any node that belongs to the slave surface. |
+| 3 | Only one *COUPLING* entry should involve a given reference‑node/DOF pair. |
+| 4 | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| 5 | If you use a surface that is generated from element faces, double‑check the face‑to‑node mapping (an S4 face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## 3. How to cure the problem  
+
+### **Option A – Dummy reference node (recommended)**  
+
+1. **Add a node that is not part of surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location that is not on S1
+   ```
+
+2. **Change the coupling definition** to use this node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! U1 of node 9999 = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (optional, but usually needed to drive the coupling)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement history)
+   ```
+
+### **Option B – Keep node 262 as reference, remove it from the surface**  
+
+Redefine surface **S1** so that node 262 is omitted (list only the faces you really need, or create a node set that excludes 262). Then keep the original coupling line unchanged.
+
+### **Option C – Use an MPC instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an MPC is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+Add the DOFs you actually need.
+
+---
+
+## 4. Minimal corrected input (Option A – dummy reference node)
+
+Only the sections that are relevant to the error are shown; insert the rest of your model (materials, sections, loads, etc.) as usual.
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+** Nodes
+** -------------------------------------------------
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+** -------------------------------------------------
+** Elements (your original element definitions)
+** -------------------------------------------------
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+** -------------------------------------------------
+** Surface definition – unchanged (still contains node 262)
+** -------------------------------------------------
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+** -------------------------------------------------
+** Kinematic coupling – reference node is now 9999
+** -------------------------------------------------
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+** -------------------------------------------------
+** (Optional) Boundary conditions for the dummy node
+** -------------------------------------------------
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+** -------------------------------------------------
+** Step definition – a static step (the original input missed *STATIC*)
+** -------------------------------------------------
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! initial inc, min inc, max inc, total time
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+### What changed?
+
+| Change | Reason |
+|--------|--------|
+| Added node **9999** and used it as `REF NODE` | Guarantees the reference node is **outside** surface S1, eliminating the over‑definition. |
+| Added a proper `*STATIC` line inside the step | The original input omitted the analysis sub‑keyword; without it the job would stop later. |
+| (Optional) Fixed the dummy node with a `*Boundary` card | Prevents the dummy node from moving unintentionally; you can also prescribe a displacement here to drive the coupling. |
+
+---
+
+## 5. Quick “what‑to‑do” before running the next job
+
+1. **Open the input file** and locate the `*COUPLING` line.  
+2. **Check the node number after `REF NODE=`** – make sure it does **not** appear in the surface definition that follows `SURFACE=`.  
+3. **If it does, either**  
+   * add a dummy node and point `REF NODE=` to it, **or**  
+   * edit the surface definition to exclude that node.  
+4. **Verify that the step contains a proper analysis keyword** (`*Static`, `*Dynamic`, etc.).  
+5. Run a short “check” job (`abaqus job=… interactive`). Abaqus will stop immediately if a constraint is still over‑defined, letting you correct it before a full run.
+
+---
+
+### TL;DR
+
+- The error is caused because **node 262 (reference node) is also on surface S1**.  
+- **Fix:** use a different reference node that is not part of the coupled surface (or remove node 262 from the surface), or replace the surface coupling with an *MPC*.  
+- Also ensure the step contains a `*STATIC` (or appropriate) sub‑step definition.  
+
+After applying one of the fixes above the model will no longer be over‑constrained and the static analysis will run successfully.
+
+=== 2026-04-20 17:55:44 ===
+Q: **Why the error appears**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to relate a degree of freedom (DOF) of node 262 (the *reference* node) to the **average** of the same DOF on every node that belongs to the surface **S1**.  
+
+The surface **S1** is created from the element faces  
+
+```
+2, S4   4, S4   30, S4   32, S4
+```
+
+Each of those faces contains node 262 (the S4 face of an 8‑node brick is the set of nodes opposite the listed local node). Consequently node 262 is **also a slave node**.  
+The coupling equation therefore contains the same DOF on both sides (e.g. U3 of node 262 appears in the sum that is averaged), so the constraint is *over‑defined* and Abaqus aborts with
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling
+
+| # | What to verify |
+|---|----------------|
+| 1 | The node given after `REF NODE=` **must not** be part of the surface (or node set) named after `SURFACE=`. |
+| 2 | No other BC, MPC, or coupling uses the same DOF on any node that belongs to the slave surface. |
+| 3 | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| 4 | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| 5 | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an S4 face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem
+
+### **Option A – Use a dummy reference node (recommended)**  
+
+1. **Add a node that is not on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location that is not on S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! U1 of node 9999 = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (usually required to drive the coupling)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement history)
+   ```
+
+### **Option B – Keep node 262 as reference, remove it from the surface**  
+
+Redefine surface **S1** so that node 262 is omitted (e.g. create a node set that excludes 262 and use that set for the surface). Then keep the original coupling line unchanged.
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an MPC is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+Add the DOFs you actually need.
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+Only the parts that are relevant to the error are shown; insert the rest of your model (materials, sections, loads, etc.) as usual.
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+** Nodes
+** -------------------------------------------------
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+** -------------------------------------------------
+** Elements (your original element definitions)
+** -------------------------------------------------
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+** -------------------------------------------------
+** Surface definition – unchanged (still contains node 262)
+** -------------------------------------------------
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+** -------------------------------------------------
+** Kinematic coupling – reference node is now 9999
+** -------------------------------------------------
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+** -------------------------------------------------
+** (Optional) Boundary conditions for the dummy node
+** -------------------------------------------------
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+** -------------------------------------------------
+** Step definition – a static step (the original input missed *STATIC*)
+** -------------------------------------------------
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! initial inc, min inc, max inc, total time
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+### Quick “what‑to‑do” before the next run
+
+1. Verify that the reference node is **not** part of the slave surface.  
+2. Ensure the step contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …).  
+3. Run a short check job (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.
+
+---
+
+**Bottom line:** The error is caused by using node 262 as both reference node and slave‑surface node. Replace it with a node that is not on the surface (or remove it from the surface) and include a proper step definition. After that the static analysis will run without the “constraint equation is over defined” error.
+A: **Why the error occurs**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the **reference DOF** of node 262 equal to the **average** of the same DOF on every node that belongs to surface **S1**.  
+
+The surface **S1** is built from the element faces  
+
+```
+2, S4   4, S4   30, S4   32, S4
+```
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node.  
+Consequently each of those faces already contains node 262, i.e. node 262 is also a **slave node** of the coupling.  
+
+When Abaqus assembles the coupling equation it finds the same DOF (e.g. U3 of node 262) on **both sides** of the equation:
+
+```
+U3(262) = 1/N  Σ U3 (all nodes on S1)   ← 262 is inside the sum
+```
+
+Because the same unknown appears twice, the equation is *over‑defined* and the solver aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling
+
+| # | What to verify |
+|---|----------------|
+| 1 | The node given after `REF NODE=` **must not** belong to the surface (or node set) named after `SURFACE=`. |
+| 2 | No other boundary condition, MPC, or coupling uses the same DOF on any node that belongs to the slave surface. |
+| 3 | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| 4 | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| 5 | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an S4 face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (the most robust way)**  
+
+1. **Create a node that is **not** on surface S1** (any location that does not belong to the slave surface).  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node.  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! U1 of node 9999 = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver).  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement/force history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g. build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original coupling line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an MPC is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+Add only the DOFs you really need.
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+Below is a **self‑contained fragment** that shows the parts that matter for the error. Insert the rest of your model (materials, sections, loads, etc.) as usual.
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+** -------------------------------------------------
+** Nodes
+** -------------------------------------------------
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+** -------------------------------------------------
+** Elements (your original element definitions)
+** -------------------------------------------------
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+** -------------------------------------------------
+** Surface definition – unchanged (still contains node 262)
+** -------------------------------------------------
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+** -------------------------------------------------
+** Kinematic coupling – reference node is now 9999
+** -------------------------------------------------
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+** -------------------------------------------------
+** (Optional) Boundary conditions for the dummy node
+** -------------------------------------------------
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+** -------------------------------------------------
+** Step definition – a static step (the original input missed *STATIC*)
+** -------------------------------------------------
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! initial inc, min inc, max inc, total time
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run
+
+1. **Check the reference node** – it must not belong to the slave surface.  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+
+=== 2026-04-20 17:56:29 ===
+Q: **Why the error appears**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make a **reference DOF** of node 262 equal to the **average** of the same DOF on every node that belongs to the surface **S1**.  
+
+The surface **S1** is created from the element faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node, therefore each of those faces already contains node 262.  
+Consequently node 262 is also a **slave node** of the coupling.  
+
+When Abaqus assembles the coupling equation it finds the same unknown on both sides, e.g.
+
+```
+U3(262) = 1/N  Σ U3 (all nodes on S1)   ← 262 is inside the sum
+```
+
+Because the same degree of freedom appears twice, the equation is *over‑defined* and the solver aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling
+
+| # | What to verify |
+|---|----------------|
+| 1 | The node given after `REF NODE=` **must not** belong to the surface (or node set) named after `SURFACE=`. |
+| 2 | No other BC, MPC, or coupling uses the same DOF on any node that belongs to the slave surface. |
+| 3 | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| 4 | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| 5 | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an S4 face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (recommended)**  
+
+1. **Create a node that is not on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location that does not belong to S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! U1 of node 9999 = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g. build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original coupling line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an MPC is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+Add only the DOFs you really need.
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+Below is a **self‑contained fragment** that shows the parts that matter for the error. Insert the rest of your model (materials, sections, loads, etc.) as usual.
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+** -------------------------------------------------
+** Nodes
+** -------------------------------------------------
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+** -------------------------------------------------
+** Elements (your original element definitions)
+** -------------------------------------------------
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+** -------------------------------------------------
+** Surface definition – unchanged (still contains node 262)
+** -------------------------------------------------
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+** -------------------------------------------------
+** Kinematic coupling – reference node is now 9999
+** -------------------------------------------------
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+** -------------------------------------------------
+** (Optional) Boundary conditions for the dummy node
+** -------------------------------------------------
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+** -------------------------------------------------
+** Step definition – a static step (the original input missed *STATIC*)
+** -------------------------------------------------
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! initial inc, min inc, max inc, total time
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run
+
+1. **Check the reference node** – it must not belong to the slave surface.  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+A: **Why the error occurs**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the DOF of node 262 (the **reference node**) equal to the average of the same DOF on every node that belongs to the surface **S1**.  
+
+The surface **S1** is built from the element faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node.  
+Consequently each of those faces already contains node 262, i.e. node 262 is also a **slave node** of the coupling.
+
+When Abaqus assembles the coupling equation it obtains
+
+```
+U3(262) = 1/N  Σ U3 (all nodes on S1)      ← 262 is inside the sum
+```
+
+The same unknown appears on both sides of the equation, so the constraint is **over‑defined** and the solver aborts with
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling
+
+| # | What to verify |
+|---|----------------|
+| 1 | The node given after `REF NODE=` **must not** belong to the surface (or node set) named after `SURFACE=`. |
+| 2 | No other BC, MPC, or coupling uses the same DOF on any node that belongs to the slave surface. |
+| 3 | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| 4 | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| 5 | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an S4 face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g. build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original coupling line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an MPC is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+Add only the DOFs you really need.
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run
+
+1. **Verify the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+
+=== 2026-04-20 17:57:11 ===
+Q: **Why the error occurs**  
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the degree‑of‑freedom (DOF) of node 262 (the *reference node*) equal to the average of the same DOF on every node that belongs to the surface **S1**.  
+In your model the surface **S1** is built from the faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```  
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node, so each of those faces already contains node 262. Consequently node 262 is also a **slave node** of the coupling. When Abaqus assembles the coupling equation it obtains the same unknown on both sides (e.g. U3(262) = average U3 of all nodes on S1, which includes node 262). This makes the constraint **over‑defined**, and the solver aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling
+
+| # | What to verify |
+|---|----------------|
+| **1** | The node specified after `REF NODE=` **must not belong** to the surface (or node set) named after `SURFACE=`. |
+| **2** | No other boundary condition, *MPC*, or additional coupling uses the same DOF on any node that belongs to the slave surface. |
+| **3** | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| **4** | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| **5** | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an *S4* face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g., build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original coupling line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an *MPC* is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+Add only the DOFs you really need.
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run
+
+1. **Verify the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+A: **Why the error occurs**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the DOF of node 262 (the **reference node**) equal to the average of the same DOF on every node that belongs to the surface **S1**.  
+
+In your model the surface **S1** is built from the faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node. Consequently each of those faces already contains node 262, i.e. node 262 is also a **slave node** of the coupling.  
+
+When Abaqus assembles the coupling equation it ends up with the same unknown on both sides, e.g.
+
+```
+U3(262) = average[ U3( … , 262 , … ) ]
+```
+
+so the constraint is **over‑defined** and the solver aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling
+
+| # | What to verify |
+|---|----------------|
+| **1** | The node given after `REF NODE=` **must not belong** to the surface (or node set) named after `SURFACE=`. |
+| **2** | No other boundary condition, *MPC*, or additional coupling uses the same DOF on any node that belongs to the slave surface. |
+| **3** | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| **4** | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| **5** | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an *S4* face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g., build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original coupling line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an *MPC* is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+Add only the DOFs you really need.
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run  
+
+1. **Confirm the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line  
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+
+=== 2026-04-20 17:57:53 ===
+Q: **Why the error occurs**  
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the degree‑of‑freedom (DOF) of node 262 (the *reference node*) equal to the average of the same DOF on every node that belongs to the surface **S1**.  
+
+In your model the surface **S1** is defined from the faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```  
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node, so each of those faces already contains node 262. Consequently node 262 is also a **slave node** of the coupling. When Abaqus assembles the coupling equation it ends up with the same unknown on both sides (e.g. U3(262) = average U3 of all nodes on S1, which includes node 262). This makes the constraint **over‑defined**, and the solver aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling  
+
+| # | What to verify |
+|---|----------------|
+| **1** | The node given after `REF NODE=` **must not belong** to the surface (or node set) named after `SURFACE=`. |
+| **2** | No other boundary condition, *MPC*, or additional coupling uses the same DOF on any node that belongs to the slave surface. |
+| **3** | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| **4** | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| **5** | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an *S4* face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g., build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original `*COUPLING` line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an *MPC* is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+Add only the DOFs you really need.
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run  
+
+1. **Confirm the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line  
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+A: **Why the error occurs**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the DOF of node 262 (the **reference node**) equal to the average of the same DOF on every node that belongs to the surface **S1**.  
+
+In your model the surface **S1** is built from the faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node. Consequently each of those faces already contains node 262.  
+Therefore node 262 is **both** the reference node **and** a slave node of the same coupling. When Abaqus assembles the coupling equation it ends up with the same unknown on both sides (e.g. U3(262) = average U3 of all nodes on S1, which includes node 262). The equation is then mathematically singular → the solver aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling  
+
+| # | What to verify |
+|---|----------------|
+| **1** | The node given after `REF NODE=` **must not belong** to the surface (or node set) named after `SURFACE=`. |
+| **2** | No other boundary condition, *MPC*, or additional coupling uses the same DOF on any node that belongs to the slave surface. |
+| **3** | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| **4** | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| **5** | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an *S4* face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g., build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original `*COUPLING` line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an *MPC* is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+Add only the DOFs you really need.
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run  
+
+1. **Confirm the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line  
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+
+=== 2026-04-20 17:58:34 ===
+Q: **Why the error occurs**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the degree‑of‑freedom (DOF) of node 262 (the *reference node*) equal to the average of the same DOF on every node that belongs to the surface **S1**.  
+
+In your model the surface **S1** is created from the faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```  
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node, so each of those faces already contains node 262. Consequently node 262 is **both** the reference node **and** a slave node of the same coupling. When Abaqus assembles the coupling equation it ends up with the same unknown on both sides (e.g. U3(262) = average U3 of all nodes on S1, which includes node 262). The equation is then mathematically singular → the solver aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling  
+
+| # | What to verify |
+|---|----------------|
+| **1** | The node given after `REF NODE=` **must not belong** to the surface (or node set) named after `SURFACE=`. |
+| **2** | No other boundary condition, *MPC*, or additional coupling uses the same DOF on any node that belongs to the slave surface. |
+| **3** | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| **4** | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| **5** | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an *S4* face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g., build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original `*COUPLING` line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an *MPC* is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run  
+
+1. **Confirm the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line  
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+A: **Why the error occurs**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the DOF of node 262 (the *reference node*) equal to the average of the same DOF on every node that belongs to the surface **S1**.  
+
+In your model the surface **S1** is built from the faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node. Consequently each of those faces already contains node 262.  
+Therefore node 262 is **both** the reference node **and** a slave node of the same coupling. When Abaqus assembles the coupling equation it ends up with the same unknown on both sides (e.g. U3(262) = average U3 of all nodes on S1, which includes node 262). The equation becomes mathematically singular and the solver aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling  
+
+| # | What to verify |
+|---|----------------|
+| **1** | The node given after `REF NODE=` **must not belong** to the surface (or node set) named after `SURFACE=`. |
+| **2** | No other boundary condition, *MPC*, or additional coupling uses the same DOF on any node that belongs to the slave surface. |
+| **3** | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| **4** | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| **5** | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an *S4* face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g., build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original `*COUPLING` line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an *MPC* is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run  
+
+1. **Confirm the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line  
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+
+=== 2026-04-20 17:59:15 ===
+Q: **Why the error occurs**  
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the degree‑of‑freedom of node 262 (the *reference node*) equal to the average of the same DOF on every node that belongs to surface **S1**.  
+
+The surface **S1** is defined from the faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```  
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node, so each of those faces already contains node 262. Consequently node 262 is **both** the reference node **and** a slave node of the same coupling. When Abaqus assembles the coupling equation it ends up with the same unknown on both sides (e.g. U3(262) = average U3 of all nodes on S1, which includes node 262). The equation becomes mathematically singular and the solver aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling  
+
+| # | What to verify |
+|---|----------------|
+| **1** | The node given after `REF NODE=` **must not belong** to the surface (or node set) named after `SURFACE=`. |
+| **2** | No other boundary condition, *MPC*, or additional coupling uses the same DOF on any node that belongs to the slave surface. |
+| **3** | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| **4** | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| **5** | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an *S4* face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g., build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original `*COUPLING` line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an *MPC* is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run  
+
+1. **Confirm the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line  
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+A: **Why the error occurs**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the DOF of node 262 (the *reference node*) equal to the average of the same DOF on every node that belongs to surface **S1**.  
+
+The surface **S1** is built from the element faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node.  
+Consequently each of those faces already contains node 262, so node 262 is **both** the reference node **and** a slave node of the same coupling.
+
+When Abaqus assembles the coupling equation it ends up with the same unknown on both sides, e.g.
+
+```
+U3(262) = ( U3(262) + U3(other nodes on S1) ) / N
+```
+
+which is mathematically singular. The solver therefore aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling  
+
+| # | What to verify |
+|---|----------------|
+| **1** | The node given after `REF NODE=` **must not belong** to the surface (or node set) named after `SURFACE=`. |
+| **2** | No other boundary condition, *MPC*, or additional coupling uses the same DOF on any node that belongs to the slave surface. |
+| **3** | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| **4** | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| **5** | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an *S4* face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g., build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original `*COUPLING` line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an *MPC* is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run  
+
+1. **Confirm the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line  
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+
+=== 2026-04-20 17:59:57 ===
+Q: **Why the error occurs**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the degree‑of‑freedom (DOF) of node 262 (the *reference node*) equal to the average of the same DOF on every node that belongs to surface **S1**.  
+
+The surface **S1** is defined from the element faces  
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node. Consequently each of those faces already contains node 262, so node 262 is **both** the reference node **and** a slave node of the same coupling.  
+
+When Abaqus assembles the coupling equation it ends up with the same unknown on both sides, e.g.
+
+```
+U3(262) = (U3(262) + U3(other nodes on S1))/N
+```
+
+which is mathematically singular. The solver therefore aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling  
+
+| # | What to verify |
+|---|----------------|
+| **1** | The node given after `REF NODE=` **must not belong** to the surface (or node set) named after `SURFACE=`. |
+| **2** | No other boundary condition, *MPC*, or additional coupling uses the same DOF on any node that belongs to the slave surface. |
+| **3** | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| **4** | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| **5** | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an *S4* face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g., build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original `*COUPLING` line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an *MPC* is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run  
+
+1. **Confirm the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line  
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+A: **Why the error appears**
+
+`*COUPLING, REF NODE=262, SURFACE=S1` tells Abaqus to make the DOF of node 262 (the **reference node**) equal to the average of the same DOF on every node that belongs to surface **S1**.  
+
+The surface **S1** is built from element faces
+
+```
+2, S4
+4, S4
+30, S4
+32, S4
+```
+
+For an 8‑node brick the *S4* face is the set of nodes **opposite** the listed local node.  
+Consequently each of those faces already contains node 262, i.e. node 262 is **both** the reference node **and** a slave node of the same coupling.  
+
+When Abaqus assembles the coupling equation it ends up with the same unknown on both sides, e.g.
+
+```
+U3(262) = (U3(262) + U3(other nodes on S1))/N
+```
+
+which is mathematically singular. The solver therefore aborts with  
+
+```
+*** ERROR: The constraint equation is over defined
+```
+
+---
+
+## Checklist – typical sources of an over‑defined kinematic coupling  
+
+| # | What to verify |
+|---|----------------|
+| **1** | The node given after `REF NODE=` **must not belong** to the surface (or node set) named after `SURFACE=`. |
+| **2** | No other boundary condition, *MPC*, or additional coupling uses the same DOF on any node that belongs to the slave surface. |
+| **3** | Only one `*COUPLING` entry should involve a particular reference‑node/DOF pair. |
+| **4** | The step definition contains a proper analysis sub‑keyword (`*Static`, `*Dynamic`, …). |
+| **5** | When a surface is generated from element faces, double‑check the face‑to‑node mapping (an *S4* face of an 8‑node brick contains the node opposite the listed local node). |
+
+If any of the above fails, Abaqus will stop with “The constraint equation is over defined”.
+
+---
+
+## How to cure the problem  
+
+### **Option A – Use a dummy reference node (most robust)**  
+
+1. **Create a node that is *not* on surface S1**  
+
+   ```abaqus
+   *Node
+   9999, 0., 0., 0.      ! dummy master node – any location outside S1
+   ```
+
+2. **Replace the coupling definition** so that the dummy node is the reference node  
+
+   ```abaqus
+   *COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1,3                  ! e.g. U1(9999) = average U3 of all nodes on S1
+   ```
+
+3. **Prescribe or fix the dummy node** (otherwise the coupling has no driver)  
+
+   ```abaqus
+   *Boundary
+   9999, 1, 1, 0.0      ! fix or prescribe U1
+   9999, 2, 2, 0.0      ! fix or prescribe U2
+   9999, 3, 3, 0.0      ! fix or prescribe U3 (or give a displacement/force history)
+   ```
+
+   *If you want the slave surface to move, give the dummy node a displacement or load history instead of fixing it.*
+
+---
+
+### **Option B – Keep node 262 as reference, but remove it from the slave surface**  
+
+Redefine surface **S1** so that node 262 is excluded (e.g., build a node set that contains all nodes of the faces except 262 and use that set for the surface). Then keep the original `*COUPLING` line unchanged.
+
+---
+
+### **Option C – Use an *MPC* instead of a surface coupling**  
+
+If you only need to tie node 262 to a single master node, an *MPC* is simpler:
+
+```abaqus
+*Node
+100, 0., 0., 0.          ! master node (any location)
+
+*MPC, TYPE=BEAM, NAME=CN1
+1, 262, 100              ! U1(262) = U1(100)
+2, 262, 100              ! U2(262) = U2(100)
+3, 262, 100              ! U3(262) = U3(100)
+```
+
+---
+
+## Minimal corrected input (Option A – dummy reference node)
+
+```abaqus
+*Heading
+** Example: static analysis with kinematic coupling – error fixed
+
+*Node
+...                     ! (your original node list)
+262, 10., 0., 0.        ! tip node you want to move
+9999, 0., 0., 0.        ! dummy reference node – NOT on surface S1
+
+*Element, type=C3D8R
+...                     ! (your element connectivity)
+
+*Surface, type=ELEMENT, name=S1
+2, S4
+4, S4
+30, S4
+32, S4
+
+*COUPLING, REF NODE=9999, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1,3                     ! couple U1 of node 9999 to average U3 of S1
+
+*Boundary
+9999, 1, 1, 0.0        ! fix or prescribe motion as required
+9999, 2, 2, 0.0
+9999, 3, 3, 0.0
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+1., 1., 1e-05, 1.       ! (initial inc, min inc, max inc, total time)
+** (Insert loads, output requests, etc. here)
+*End Step
+```
+
+---
+
+## Quick “what‑to‑do” before the next run  
+
+1. **Confirm the reference node is not part of the slave surface.**  
+2. **Make sure the step contains a proper analysis sub‑keyword** (`*Static`, `*Dynamic`, …).  
+3. **Run a short check job** (`abaqus job=… interactive`) to catch any remaining over‑defined constraints.  
+
+---
+
+### Bottom line  
+
+The error is caused by using node 262 simultaneously as **reference node** and as a **slave node** of the coupling surface.  
+Fix it by **choosing a reference node that is not on the surface** (or by removing the node from the surface) and by ensuring the step definition is complete. After that the analysis will run without the “constraint equation is over defined” error.
+

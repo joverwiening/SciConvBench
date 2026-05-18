@@ -1,0 +1,2435 @@
+=== 2026-04-20 13:30:49 ===
+Q: **Result**
+
+```json
+{
+  "case_name": "achtelc",
+  "status": "failed",
+  "error": "CalculiX (ccx) executable not found in the execution environment. The input deck `achtelc.inp` was created successfully, but the solver could not be invoked.",
+  "ccx_version": null,
+  "artifacts": [
+    {
+      "name": "achtelc.inp",
+      "type": "input_deck",
+      "description": "CalculiX input file for the centrifugal‑force cube model."
+    }
+  ]
+}
+```
+A: **What happened?**  
+The Agent was able to generate the CalculiX input deck **`achtelc.inp`** successfully, but when it tried to launch the solver (`ccx`) it could not find the executable in the current execution environment. Consequently the run was marked **`status: "failed"`** and no solver output (e.g., `.frd`, `.dat`, `.log`) was produced.
+
+Below is a **complete, step‑by‑step guide** to get the model running, covering the most common causes and the actions you can take to resolve them.
+
+---
+
+## 1. Verify the Presence of the CalculiX Solver
+
+| Check | Command (Linux/macOS) | Expected result |
+|-------|-----------------------|-----------------|
+| **Executable in PATH** | `which ccx`  <br>or <br>`type -a ccx` | Full path to `ccx` (e.g., `/usr/local/bin/ccx`) |
+| **Executable in current folder** | `ls -l ./ccx` | File exists and is executable (`-rwxr-xr-x`) |
+| **Version query** | `ccx -v`  <br>or <br>`ccx -version` | Prints something like `CalculiX 2.19` |
+
+If any of these commands return *“command not found”* or an empty result, the solver is indeed missing from the environment.
+
+---
+
+## 2. Install CalculiX (if not already present)
+
+### 2.1. Using a Package Manager (recommended for Linux)
+
+| Distribution | Command |
+|--------------|---------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install calculix-ccx` |
+| **Fedora / RHEL** | `sudo dnf install calculix-ccx` |
+| **Arch Linux** | `sudo pacman -S calculix` |
+
+> **Note:** The package name may differ (`calculix-ccx`, `calculix`, `calculix-ccx-bin`). Verify with your distro’s package search.
+
+### 2.2. macOS (Homebrew)
+
+```bash
+brew install calculix
+```
+
+### 2.3. Windows
+
+1. **Pre‑compiled binaries** – download the latest Windows installer from the official site or from a trusted source (e.g., <https://www.calculix.de/>).  
+2. **Add to PATH** – after installation, add the folder containing `ccx.exe` to the system `PATH` (Control Panel → System → Advanced → Environment Variables).  
+3. **Verify** – open a new Command Prompt and run `ccx -v`.
+
+### 2.4. Build from source (any platform)
+
+If you need a newer version or the binary packages are unavailable:
+
+```bash
+# Prerequisites
+sudo apt-get install gcc gfortran libopenmpi-dev libblas-dev liblapack-dev
+
+# Get source
+git clone https://github.com/calculix/calculix.git
+cd calculix
+
+# Compile (single‑core version)
+make ccx
+
+# Or compile the MPI version
+make ccx_mpi
+
+# Install (optional)
+sudo cp ccx /usr/local/bin/
+```
+
+After compilation, `ccx` (or `ccx_mpi`) should be in your `PATH`.
+
+---
+
+## 3. Make Sure the Solver Is Accessible to the Agent
+
+If you are running the Agent inside a **container**, **virtual environment**, or **remote execution sandbox**, you must ensure that the `ccx` binary is installed *inside* that environment, not just on the host OS.
+
+### 3.1. Docker example
+
+```Dockerfile
+FROM ubuntu:22.04
+
+# Install CalculiX
+RUN apt-get update && \
+    apt-get install -y calculix-ccx && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy the input deck (or mount at runtime)
+COPY achtelc.inp /work/achtelc.inp
+WORKDIR /work
+
+# Default command (run the solver)
+CMD ["ccx", "achtelc"]
+```
+
+Build & run:
+
+```bash
+docker build -t ccx-runner .
+docker run --rm ccx-runner
+```
+
+### 3.2. Conda / virtualenv
+
+You can also install CalculiX via Conda‑Forge (community channel):
+
+```bash
+conda create -n ccx-env -c conda-forge calculix
+conda activate ccx-env
+which ccx   # should point to the env's bin directory
+```
+
+---
+
+## 4. Re‑run the Agent / Solver
+
+Once `ccx` is available:
+
+1. **Confirm** with `ccx -v` that the version is reported (the `ccx_version` field will be filled automatically).  
+2. **Execute** the model:
+
+   ```bash
+   ccx achtelc
+   ```
+
+   This will read `achtelc.inp` and produce the usual output files (`achtelc.dat`, `achtelc.frd`, `achtelc.log`, etc.).
+
+3. **Check the log** (`achtelc.log`) for any convergence warnings or errors. If the run finishes cleanly, you can post‑process the results with a viewer such as **cgx**, **Paraview**, or **Gmsh**.
+
+---
+
+## 5. If the Solver Is Already Installed but Still Not Found
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `ccx` works from a normal terminal but the Agent still reports “executable not found” | The Agent runs under a different user or a restricted PATH. | Explicitly provide the full path to the executable in the Agent’s configuration (e.g., `"solver_path": "/usr/local/bin/ccx"`). |
+| `ccx` is a script that calls `ccx_2.19` but the script is not executable | Missing execute permission. | `chmod +x /path/to/ccx` |
+| The environment is a **Jupyter notebook** that spawns a kernel without the PATH modifications. | Kernel inherits a stale environment. | Restart the kernel after installing, or set `os.environ["PATH"] += os.pathsep + "/path/to/ccx"` in the notebook before invoking the solver. |
+| Using **MPI** version (`ccx_mpi`) but the Agent calls plain `ccx`. | Mismatch between binary names. | Either install the non‑MPI binary (`ccx`) or configure the Agent to call `ccx_mpi`. |
+
+---
+
+## 6. What to Do With the Existing Input Deck
+
+The file **`achtelc.inp`** is already generated and stored as an artifact. You can:
+
+* **Run it locally** (once `ccx` is installed) as shown above.
+* **Submit it to an external FE service** (e.g., a cloud‑based CalculiX runner) that already has the solver.
+* **Inspect/modify** the deck with any text editor if you need to tweak material properties, loads, or mesh refinement before the next run.
+
+---
+
+## 7. Quick Checklist (copy‑paste into your notes)
+
+```
+[ ] Verify `ccx` is in PATH: `which ccx`
+[ ] If missing, install:
+    - Ubuntu: sudo apt-get install calculix-ccx
+    - macOS: brew install calculix
+    - Windows: download installer, add to PATH
+    - Build from source if needed
+[ ] If using Docker/conda, ensure the binary is inside that environment.
+[ ] Re‑run: ccx achtelc
+[ ] Check `achtelc.log` for success/failure messages.
+[ ] If still failing, confirm the Agent’s PATH or provide full path to `ccx`.
+```
+
+---
+
+### TL;DR
+
+*The failure is **environmental**, not a problem with the model itself.*  
+Install the CalculiX solver (`ccx`) in the same environment where the Agent runs, make sure it is executable and reachable via the system `PATH`, then re‑execute the model. Once `ccx` is found, the Agent will fill the `ccx_version` field and produce the usual result files. If you cannot install `ccx` locally, you can still use the generated `achtelc.inp` with any other compatible FE solver or a cloud‑based CalculiX service.
+
+=== 2026-04-20 13:31:31 ===
+Q: **What happened?**  
+The agent successfully created the CalculiX input deck **`achtelc.inp`**, but when it tried to start the solver (`ccx`) it could not locate the executable in the current execution environment. Because the solver could not be invoked, the run was marked **`status: "failed"`** and no solver output (e.g., `.dat`, `.frd`, `.log`) was generated.
+
+Below is a **complete, step‑by‑step guide** to get the model running, covering the most common causes and the actions you can take to resolve them.
+
+---
+
+## 1. Verify the Presence of the CalculiX Solver
+
+| Check | Command (Linux/macOS) | Expected result |
+|-------|-----------------------|-----------------|
+| **Executable in PATH** | `which ccx`  <br>or <br>`type -a ccx` | Full path to `ccx` (e.g., `/usr/local/bin/ccx`) |
+| **Executable in current folder** | `ls -l ./ccx` | File exists and is executable (`-rwxr-xr-x`) |
+| **Version query** | `ccx -v`  <br>or <br>`ccx -version` | Prints something like `CalculiX 2.19` |
+
+If any of these commands return *“command not found”* or an empty result, the solver is indeed missing from the environment.
+
+---
+
+## 2. Install CalculiX (if not already present)
+
+### 2.1. Linux – package manager (recommended)
+
+| Distribution | Command |
+|--------------|---------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install calculix-ccx` |
+| **Fedora / RHEL** | `sudo dnf install calculix-ccx` |
+| **Arch Linux** | `sudo pacman -S calculix` |
+
+> The package name may be `calculix-ccx`, `calculix`, or `calculix-ccx-bin`. Check your distro’s package list.
+
+### 2.2. macOS (Homebrew)
+
+```bash
+brew install calculix
+```
+
+### 2.3. Windows
+
+1. Download the latest Windows binary (`ccx.exe`) from the official site (https://www.calculix.de/).  
+2. Extract it to a folder, e.g., `C:\Program Files\CalculiX`.  
+3. Add that folder to the system **PATH** (Control Panel → System → Advanced → Environment Variables).  
+4. Open a new Command Prompt and run `ccx -v` to verify.
+
+### 2.4. Build from source (any platform)
+
+```bash
+# Prerequisites
+sudo apt-get install gcc gfortran libopenmpi-dev libblas-dev liblapack-dev
+
+# Get source
+git clone https://github.com/calculix/calculix.git
+cd calculix
+
+# Compile (single‑core version)
+make ccx
+
+# Or compile the MPI version
+make ccx_mpi
+
+# Install (optional)
+sudo cp ccx /usr/local/bin/
+```
+
+After compilation, `ccx` (or `ccx_mpi`) should be in your `PATH`.
+
+---
+
+## 3. Make Sure the Solver Is Accessible to the Agent
+
+If you are running the agent inside a **container**, **virtual environment**, or **remote sandbox**, the `ccx` binary must be installed *inside* that environment, not only on the host OS.
+
+### 3.1. Docker example
+
+```Dockerfile
+FROM ubuntu:22.04
+
+# Install CalculiX
+RUN apt-get update && \
+    apt-get install -y calculix-ccx && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+COPY achtelc.inp /work/achtelc.inp
+
+CMD ["ccx", "achtelc"]
+```
+
+Build & run:
+
+```bash
+docker build -t ccx-runner .
+docker run --rm ccx-runner
+```
+
+### 3.2. Conda / virtualenv
+
+```bash
+conda create -n ccx-env -c conda-forge calculix
+conda activate ccx-env
+which ccx   # should point to the env's bin directory
+```
+
+---
+
+## 4. Re‑run the Agent / Solver
+
+Once `ccx` is available:
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+
+* Verify the version appears in the log (`ccx -v`).  
+* Inspect `achtelc.log` for any warnings or errors.  
+* Post‑process the results with **cgx**, **Paraview**, or **Gmsh**.
+
+---
+
+## 5. Solver Already Installed but Still “Not Found”
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `ccx` works in a normal terminal but the agent still says “executable not found” | Agent runs under a different user or with a stripped `PATH`. | Provide the full path to the binary in the agent configuration (e.g., `"solver_path": "/usr/local/bin/ccx"`). |
+| `ccx` is a script that calls `ccx_2.19` but the script lacks execute permission | Missing `chmod +x`. | `chmod +x /path/to/ccx` |
+| Using a Jupyter kernel that doesn’t inherit the updated `PATH`. | Kernel started before installation. | Restart the kernel or set `os.environ["PATH"] += os.pathsep + "/path/to/ccx"` before calling the solver. |
+| You have only the MPI version (`ccx_mpi`) but the agent calls `ccx`. | Binary name mismatch. | Install the non‑MPI binary or configure the agent to call `ccx_mpi`. |
+
+---
+
+## 6. Using the Already‑Generated Input Deck
+
+The file **`achtelc.inp`** is already stored as an artifact. You can:
+
+* Run it locally once `ccx` is installed (`ccx achtelc`).  
+* Submit it to a cloud‑based CalculiX service that already provides the solver.  
+* Edit the deck (e.g., change material density, load magnitude, mesh refinement) and re‑run.
+
+---
+
+## 7. Quick Checklist (copy‑paste)
+
+```
+[ ] Verify `ccx` is in PATH: which ccx
+[ ] If missing, install:
+    - Ubuntu: sudo apt-get install calculix-ccx
+    - macOS: brew install calculix
+    - Windows: download installer, add to PATH
+    - Build from source if needed
+[ ] If using Docker/conda, ensure the binary lives inside that environment.
+[ ] Re‑run: ccx achtelc
+[ ] Inspect `achtelc.log` for success/failure.
+[ ] If still failing, adjust the agent’s PATH or give the full path to the executable.
+```
+
+---
+
+### TL;DR
+
+The failure is **environmental** – the CalculiX solver (`ccx`) is not available where the agent tried to run it. Install `ccx` (or `ccx_mpi`) in the same environment, make sure it is executable and reachable via `PATH`, then re‑execute the model. Once the solver is found, the run will complete and you’ll obtain the usual result files (`.dat`, `.frd`, `.log`). If you cannot install `ccx` locally, you can still use the generated `achtelc.inp` with any other compatible FE solver or a cloud‑based CalculiX service.
+A: **What happened?**  
+The agent was able to write the CalculiX input file **`achtelc.inp`**, but when it tried to start the solver (`ccx`) the executable could not be found in the execution environment. Because the solver was not invoked, the run finished with  
+
+```
+status: "failed"
+```
+
+and no result files (`.dat`, `.frd`, `.log`, …) were produced.
+
+---
+
+## Complete step‑by‑step solution  
+
+### 1. Confirm that the CalculiX solver is really missing
+Open a terminal (or the same shell that the agent uses) and run:
+
+| Command | Expected output |
+|---------|-----------------|
+| `which ccx`  <br>or `type -a ccx` | Full path to the binary, e.g. `/usr/local/bin/ccx` |
+| `ls -l $(which ccx)` | A regular file with execute bits (`-rwxr-xr-x`) |
+| `ccx -v`  <br>or `ccx -version` | Something like `CalculiX 2.19` |
+
+If any of these commands return *“command not found”*, *empty*, or an error, the solver is not available to the agent.
+
+---
+
+### 2. Install CalculiX (or make the existing binary reachable)
+
+#### 2.1. Linux – package manager (recommended)
+
+| Distribution | Install command |
+|--------------|-----------------|
+| Ubuntu / Debian | `sudo apt-get update && sudo apt-get install calculix-ccx` |
+| Fedora / RHEL | `sudo dnf install calculix-ccx` |
+| Arch Linux | `sudo pacman -S calculix` |
+
+> Package names may vary (`calculix`, `calculix-ccx`, `calculix-ccx-bin`). Use your distro’s package search if needed.
+
+#### 2.2. macOS (Homebrew)
+
+```bash
+brew install calculix
+```
+
+#### 2.3. Windows
+
+1. Download `ccx.exe` from the official site: <https://www.calculix.de/>.  
+2. Place it in a folder, e.g. `C:\Program Files\CalculiX`.  
+3. Add that folder to **System → Advanced → Environment Variables → Path**.  
+4. Open a new Command Prompt and run `ccx -v` to verify.
+
+#### 2.4. Build from source (any OS)
+
+```bash
+# Prerequisites (Ubuntu example)
+sudo apt-get install gcc gfortran libopenmpi-dev libblas-dev liblapack-dev
+
+# Get source
+git clone https://github.com/calculix/calculix.git
+cd calculix
+
+# Compile single‑core version
+make ccx          # produces ./ccx
+
+# (optional) compile MPI version
+make ccx_mpi
+
+# Install system‑wide (optional)
+sudo cp ccx /usr/local/bin/
+```
+
+After compilation `ccx` (or `ccx_mpi`) must be in a directory that is part of `$PATH`.
+
+---
+
+### 3. Make the solver visible to the **agent’s** execution environment  
+
+If the agent runs inside a container, virtual environment, or remote sandbox, the binary must be installed **inside that environment**, not only on the host.
+
+#### 3.1. Docker example
+
+```Dockerfile
+FROM ubuntu:22.04
+
+# Install CalculiX
+RUN apt-get update && \
+    apt-get install -y calculix-ccx && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+COPY achtelc.inp /work/
+
+CMD ["ccx", "achtelc"]   # runs the solver on the input deck
+```
+
+Build & run:
+
+```bash
+docker build -t ccx-runner .
+docker run --rm ccx-runner
+```
+
+#### 3.2. Conda / virtualenv
+
+```bash
+conda create -n ccx-env -c conda-forge calculix
+conda activate ccx-env
+which ccx   # should point to <env>/bin/ccx
+```
+
+Start the agent from the activated environment.
+
+---
+
+### 4. Re‑run the model
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+
+* Verify that `ccx -v` prints the version at the top of `achtelc.log`.  
+* Check the generated files (`achtelc.dat`, `achtelc.frd`, `achtelc.log`).  
+* Post‑process with **cgx**, **ParaView**, **Gmsh**, etc.
+
+---
+
+### 5. Common “solver not found” pitfalls and fixes  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `ccx` works in a normal terminal but the agent still says “executable not found” | Agent runs with a stripped `PATH` or under a different user. | Add the full path to the binary in the agent configuration (e.g., `"solver_path": "/usr/local/bin/ccx"`), or export `PATH` before launching the agent. |
+| `ccx` is present but not executable (`Permission denied`) | Missing execute bit. | `chmod +x /path/to/ccx` |
+| Only `ccx_mpi` is installed, but the agent calls `ccx` | Name mismatch. | Install the non‑MPI binary, or change the agent to invoke `ccx_mpi`. |
+| Using Jupyter/VS Code terminal that was started **before** installing CalculiX | Environment variables not refreshed. | Restart the kernel/terminal, or prepend the path in the notebook: `import os; os.environ["PATH"] += os.pathsep + "/usr/local/bin"` |
+| Running inside Docker but the `Dockerfile` never installed CalculiX | Solver absent in container. | Add the installation step (see Docker example). |
+
+---
+
+### 6. Using the already‑generated input deck
+
+The file **`achtelc.inp`** is already available as an artifact. Once `ccx` is reachable you can:
+
+* Run it locally (`ccx achtelc`).  
+* Submit it to any cloud service that provides CalculiX (e.g., SimScale, OnScale).  
+* Edit the deck (material, loads, mesh) and re‑run without recreating it.
+
+---
+
+## Quick “copy‑paste” checklist
+
+```bash
+# 1. Is ccx in PATH?
+which ccx || echo "ccx not found"
+
+# 2. If not, install it (choose the line that matches your OS)
+# Ubuntu/Debian
+sudo apt-get update && sudo apt-get install -y calculix-ccx
+# macOS
+brew install calculix
+# Windows – download exe and add folder to PATH
+# Build from source (Linux/macOS)
+#   git clone https://github.com/calculix/calculix.git && cd calculix && make ccx && sudo cp ccx /usr/local/bin/
+
+# 3. Verify
+ccx -v
+
+# 4. Run the model
+ccx achtelc
+
+# 5. Check results
+ls -l achtelc.*   # .dat .frd .log etc.
+```
+
+---
+
+### TL;DR
+
+The failure is **environmental** – the CalculiX solver (`ccx`) is not present or not reachable where the agent tried to run it. Install `ccx` (or `ccx_mpi`) in the same environment the agent uses, ensure the binary is executable and listed in `PATH` (or give its absolute path to the agent), then re‑execute the model. Once the solver is found the run will finish normally and you will obtain the usual result files (`.dat`, `.frd`, `.log`). If you cannot install `ccx` locally, you can still use the generated `achtelc.inp` with any other compatible FE solver or a cloud‑based CalculiX service.
+
+=== 2026-04-20 13:32:09 ===
+Q: **What happened?**  
+
+The agent succeeded in writing the CalculiX input file **`achtelc.inp`**, but when it tried to start the solver (`ccx`) the executable could not be located in the execution environment. Because the solver was never invoked, the run finished with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```  
+
+and no result files (`.dat`, `.frd`, `.log`, …) were produced.
+
+---
+
+## Why the run failed
+The failure is **environment‑related**, not a problem with the model itself. The CalculiX solver (`ccx` or `ccx_mpi`) is either not installed, not in the system `PATH`, or not accessible from the environment in which the agent runs (e.g., a Docker container, a conda environment, a remote sandbox, etc.).
+
+---
+
+## How to fix it
+
+1. **Check whether `ccx` is available**  
+   ```bash
+   which ccx          # should return a full path
+   ccx -v             # should print the version, e.g. “CalculiX 2.19”
+   ```
+   If the command returns *“command not found”* (or the file is not executable), the solver is missing.
+
+2. **Install CalculiX** (choose the method that matches your platform)
+
+   * **Ubuntu / Debian**  
+     ```bash
+     sudo apt-get update && sudo apt-get install -y calculix-ccx
+     ```
+   * **Fedora / RHEL**  
+     ```bash
+     sudo dnf install calculix-ccx
+     ```
+   * **macOS (Homebrew)**  
+     ```bash
+     brew install calculix
+     ```
+   * **Windows** – download `ccx.exe` from https://www.calculix.de/, place it in a folder (e.g. `C:\Program Files\CalculiX`) and add that folder to the system **PATH**.
+   * **Build from source** (any OS) – see the “Build from source” section in the previous guide.
+
+3. **Make sure the binary is in the agent’s PATH**  
+   If the agent runs inside a container, conda environment, or other sandbox, install `ccx` **inside that environment**.  
+   *Docker example* – add `apt-get install calculix-ccx` to the Dockerfile.  
+   *Conda example* – `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env`.
+
+4. **Re‑run the model**  
+   ```bash
+   ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+   ```
+   Verify that `ccx -v` appears at the top of `achtelc.log` and that the result files (`achtelc.dat`, `achtelc.frd`, `achtelc.log`, …) are created.
+
+5. **If the solver is already installed but still “not found”**  
+   * The agent may be using a stripped `PATH`. Provide the absolute path to the binary in the agent’s configuration (e.g., `"solver_path": "/usr/local/bin/ccx"`).  
+   * Ensure the file has execute permission: `chmod +x /path/to/ccx`.  
+   * If only `ccx_mpi` is present, either install the non‑MPI `ccx` or configure the agent to call `ccx_mpi`.
+
+6. **Using the generated input deck**  
+   The file **`achtelc.inp`** is already available as an artifact. Once `ccx` is reachable you can run it locally, submit it to a cloud‑based CalculiX service, or edit the deck (e.g., change material density, load magnitude) and re‑run.
+
+---
+
+### TL;DR
+
+The run failed because the CalculiX solver (`ccx`) was not present or not reachable in the environment where the agent tried to execute it. Install `ccx` (or `ccx_mpi`) in that same environment, ensure it is executable and listed in `PATH` (or give its absolute path to the agent), then re‑run the model. After the solver is found the job will complete normally and you’ll obtain the usual result files (`.dat`, `.frd`, `.log`). If you cannot install `ccx` locally, you can still use the generated `achtelc.inp` with any other compatible FE solver or a cloud‑based CalculiX service.
+A: **What went wrong?**  
+The agent was able to write the input deck **`achtelc.inp`**, but when it tried to start the CalculiX solver (`ccx` or `ccx_mpi`) the executable could not be found. Because the solver never ran, no result files (`.dat`, `.frd`, `.log`, …) were produced and the job finished with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+The problem is **environment‑related** – the CalculiX binary is either not installed, not in the `PATH`, or not accessible from the sandbox in which the agent runs (Docker, conda, remote VM, etc.).
+
+---
+
+## How to fix it
+
+### 1. Verify that `ccx` is available
+```bash
+which ccx          # should print something like /usr/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+If you get *“command not found”* (or the file is not executable), the solver is missing or not reachable.
+
+---
+
+### 2. Install CalculiX in the **same environment** the agent uses  
+
+| Platform | Command / steps |
+|----------|-----------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL** | `sudo dnf install calculix-ccx` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/>  <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment Variables → Path** |
+| **Build from source** (any OS) | Follow the “Build from source” section of the CalculiX manual: <https://www.calculix.de/download.html> (requires a C compiler, `make`, `gfortran`, etc.) |
+| **Conda** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Docker** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity / other sandbox** | Install the package inside the container image exactly as you would on a host system. |
+
+> **Tip:** If you only have `ccx_mpi` installed, you can either use it (the agent must be told to call `ccx_mpi`) or install the non‑MPI `ccx` binary.
+
+---
+
+### 3. Ensure the binary is on the **PATH** (or give its absolute path)
+
+* **Check PATH**  
+  ```bash
+  echo $PATH | tr ':' '\n' | grep -i calculix
+  ```
+* **Add to PATH** (temporary, for the current session)  
+  ```bash
+  export PATH=$PATH:/usr/local/bin   # adjust to the directory that contains ccx
+  ```
+* **Permanent** – edit `~/.bashrc`, `~/.profile`, or the container’s environment file.
+
+*If you prefer not to modify PATH*, tell the agent the exact location, e.g.:
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+---
+
+### 4. Verify permissions
+
+```bash
+chmod +x /path/to/ccx          # make sure it is executable
+ls -l /path/to/ccx
+```
+
+If the file is owned by root and you are running as a non‑privileged user, ensure the execute bit is set for “others”.
+
+---
+
+### 5. Re‑run the model
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+
+You should now see a `achtelc.log` that starts with something like:
+
+```
+CalculiX 2.19 (ccx)  ...  (built on ...)
+...
+```
+
+and the expected result files (`achtelc.dat`, `achtelc.frd`, `achtelc.log`, …) will appear in the working directory.
+
+---
+
+### 6. If the solver is already installed but still “not found”
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` returns nothing inside the agent’s container | The container image does not contain the binary | Re‑build the image with `apt-get install calculix-ccx` (or copy the binary in) |
+| `ccx -v` works from a normal shell but fails when the agent runs | The agent runs with a stripped `PATH` environment variable | Export the full `PATH` before launching the agent, or configure the agent with `"solver_path": "/full/path/to/ccx"` |
+| Permission denied | Binary not executable for the user | `chmod +x /path/to/ccx` |
+| Only `ccx_mpi` exists | Agent is hard‑coded to call `ccx` | Either install the non‑MPI version or edit the agent configuration to call `ccx_mpi` |
+
+---
+
+## 7. Using the generated input deck elsewhere
+
+Even if you cannot install CalculiX locally, the file **`achtelc.inp`** is a standard Abaqus‑compatible input deck. You can:
+
+* Upload it to a cloud‑based CalculiX service (e.g., *CalculiX‑Cloud*, *SimScale*).  
+* Run it with another FE solver that accepts Abaqus‑style decks (e.g., **Abaqus/Standard**, **Code_Aster**, **Elmer**, **OpenFOAM** with the appropriate converter).  
+* Edit the deck (change material density, load magnitude, mesh refinement) and re‑run once `ccx` becomes available.
+
+---
+
+## TL;DR
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent uses** (host OS, Docker image, conda env, etc.).  
+2. **Make sure the binary is executable and on the `PATH`** (or give its absolute path to the agent).  
+3. **Re‑run** `ccx achtelc` – you should now obtain `.dat`, `.frd`, `.log`, … files.  
+
+Once the solver is reachable, the job will complete normally and you can analyse the results or modify the input deck as needed. If local installation is impossible, you can still use the generated `achtelc.inp` with any compatible FE solver or a cloud‑based CalculiX service.
+
+=== 2026-04-20 13:32:48 ===
+Q: **What went wrong?**  
+
+The agent succeeded in writing the CalculiX input file **`achtelc.inp`**, but when it tried to launch the solver (`ccx` or `ccx_mpi`) the executable could not be located in the environment where the agent was running. Because the solver never started, no result files (`.dat`, `.frd`, `.log`, …) were created and the job finished with a *failed* status:
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+The problem is **environment‑related**, not a modeling error. The CalculiX binary is either not installed, not in the system `PATH`, or not accessible from the sandbox (Docker container, conda environment, remote VM, etc.) in which the agent runs.
+
+---
+
+## How to fix it
+
+### 1. Verify that the solver is really missing
+```bash
+which ccx          # should return a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+If any of these commands return *“command not found”* (or the file is not executable), the solver is not available to the agent.
+
+### 2. Install CalculiX **in the same environment** the agent uses  
+
+| Platform | Install command / steps |
+|----------|------------------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL** | `sudo dnf install calculix-ccx` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from https://www.calculix.de/ <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment Variables → Path** |
+| **Build from source** (any OS) | Follow the CalculiX manual – `git clone https://github.com/calculix/calculix.git && cd calculix && make ccx && sudo cp ccx /usr/local/bin/` |
+| **Conda** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Docker** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Other sandbox (Singularity, remote VM, etc.)** | Install the package inside the sandbox exactly as you would on a host system. |
+
+> If you only have `ccx_mpi` installed, either install the non‑MPI `ccx` binary or configure the agent to call `ccx_mpi`.
+
+### 3. Ensure the binary is on the **PATH** (or give its absolute path)
+
+```bash
+export PATH=$PATH:/usr/local/bin   # adjust to the directory that contains ccx
+```
+
+*Permanent* – add the line to `~/.bashrc` or the container’s environment file.  
+*If you prefer not to modify PATH*, tell the agent the exact location, e.g.:
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+### 4. Check permissions
+```bash
+chmod +x /path/to/ccx   # make sure it is executable
+ls -l /path/to/ccx
+```
+The file must have the execute bit set for the user running the agent.
+
+### 5. Re‑run the analysis
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+You should now see a `achtelc.log` that starts with the CalculiX version line and the expected result files (`achtelc.dat`, `achtelc.frd`, `achtelc.log`, …) will appear.
+
+### 6. If the solver is already installed but still “not found”
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal shell but not inside the agent’s container | The container image lacks the binary | Re‑build the image with `apt-get install calculix-ccx` (or copy the binary in) |
+| `ccx -v` works from a regular terminal but fails when the agent runs | Agent runs with a stripped `PATH` | Export the full `PATH` before launching the agent, or set `"solver_path"` in the agent config |
+| Permission denied | Execute bit missing for the user | `chmod +x /path/to/ccx` |
+| Only `ccx_mpi` exists | Agent is hard‑coded to call `ccx` | Install the non‑MPI version or edit the agent to call `ccx_mpi` |
+
+---
+
+## Using the generated input deck elsewhere
+
+`achtelc.inp` is a standard Abaqus‑compatible deck. Even if you cannot install CalculiX locally you can:
+
+* Upload it to a cloud‑based CalculiX service (e.g., SimScale, CalculiX‑Cloud).  
+* Run it with another FE solver that accepts Abaqus‑style decks (Abaqus/Standard, Code_Aster, Elmer, etc.).  
+* Edit the deck (change material, loads, mesh) and re‑run once `ccx` becomes available.
+
+---
+
+## TL;DR
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent runs in** (host OS, Docker image, conda env, etc.).  
+2. **Make the binary executable and ensure it is on the `PATH`** (or give its absolute path to the agent).  
+3. **Run** `ccx achtelc` again – you should now obtain the normal result files (`.dat`, `.frd`, `.log`, …).  
+
+Once the solver is reachable, the job will complete successfully and you can analyse or modify the results as needed. If local installation is impossible, the generated `achtelc.inp` can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+A: **What went wrong?**  
+The agent was able to create the CalculiX input deck **`achtelc.inp`**, but when it tried to start the solver (`ccx` or `ccx_mpi`) the executable could not be found. Because the solver never launched, no result files (`.dat`, `.frd`, `.log`, …) were produced and the job finished with the status  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+The failure is **environment‑related**, not a mistake in the model.
+
+---
+
+## 1. Verify that the solver is really missing
+
+```bash
+# In the same shell / container that the agent uses
+which ccx          # should print a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+
+If either command returns *“command not found”* (or the file is not executable), the solver is not available to the agent.
+
+---
+
+## 2. Install CalculiX **in the exact environment** the agent runs in  
+
+| Platform / Situation | Command / Steps |
+|----------------------|-----------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL** | `sudo dnf install calculix-ccx` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in a folder, e.g. `C:\Program Files\CalculiX` <br>3. Add that folder to **System → Advanced → Environment Variables → Path** |
+| **Build from source** (any OS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Conda environment** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity, remote VM, CI runner, etc.** | Install the package inside that sandbox exactly as you would on a normal host. |
+
+> If you only have `ccx_mpi` installed, either install the non‑MPI `ccx` binary **or** tell the agent to call `ccx_mpi` instead.
+
+---
+
+## 3. Make the binary reachable (`PATH` or absolute path)
+
+### 3.1 Add the directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin          # adjust to the directory that contains ccx
+```
+
+*Permanent* – add the line to `~/.bashrc`, `~/.profile`, or the Dockerfile’s `ENV PATH=…`.
+
+### 3.2 Or give the agent the full path
+
+If you prefer not to touch `PATH`, pass the location in the agent’s configuration (the exact key depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+---
+
+## 4. Check file permissions
+
+```bash
+chmod +x /path/to/ccx          # make sure it is executable
+ls -l /path/to/ccx
+```
+
+The file must have the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5. Re‑run the analysis
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+
+You should now see a `achtelc.log` that starts with the CalculiX version line and the expected result files (`achtelc.dat`, `achtelc.frd`, `achtelc.log`, …) will appear.
+
+---
+
+## 6. Common “still not found” scenarios and fixes
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still reports “not found” | The agent runs inside a container / sandbox that does not contain the binary | Re‑build the container image with `apt-get install calculix-ccx` (or copy the binary in) |
+| `ccx -v` works from your login shell but fails when the agent launches | The agent’s environment has a stripped `PATH` | Export the full `PATH` before starting the agent, or set `"solver_path"` in the agent config |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership) |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the agent’s command line to use `ccx_mpi` |
+
+---
+
+## 7. Using the generated input deck elsewhere (if you cannot install CalculiX locally)
+
+* **Cloud FE services** – upload `achtelc.inp` to SimScale, CalculiX‑Cloud, or any service that accepts Abaqus‑style decks.  
+* **Other solvers** – the deck follows the Abaqus `.inp` syntax, so it can be run (with minor tweaks) in Abaqus/Standard, Code_Aster, Elmer, etc.  
+* **Share with a colleague** – they can run the deck on a machine that already has CalculiX installed.
+
+---
+
+## TL;DR (quick checklist)
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent uses** (host OS, Docker image, conda env, remote VM, …).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key.  
+4. **Run** `ccx achtelc` again – you should now obtain the normal result files (`.dat`, `.frd`, `.log`, …).  
+
+Once the solver is reachable, the job will finish with a *success* status and you can analyse or modify the results as needed. If local installation is impossible, the generated `achtelc.inp` can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+
+=== 2026-04-20 13:33:28 ===
+Q: **What went wrong?**  
+
+The workflow succeeded in writing the CalculiX input deck **`achtelc.inp`**, but when the agent tried to start the solver (`ccx` or `ccx_mpi`) the executable could not be found in the environment where the agent was running. Because the solver never launched, no result files (`.dat`, `.frd`, `.log`, …) were produced and the job finished with a *failed* status:
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+The failure is **environment‑related**, not a mistake in the model.
+
+---
+
+## 1. Verify that the solver is really missing
+
+Run the same shell (or container) that the agent uses and type:
+
+```bash
+which ccx          # should print a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+
+If either command returns *“command not found”* (or the file is not executable), the solver is not available to the agent.
+
+---
+
+## 2. Install CalculiX **in the exact environment** the agent runs in  
+
+| Platform / Situation | Install command / steps |
+|----------------------|--------------------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL** | `sudo dnf install calculix-ccx` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Put it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment Variables → Path** |
+| **Build from source** (any OS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Conda environment** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Other sandbox (Singularity, CI runner, remote VM, …)** | Install the package inside that sandbox exactly as you would on a normal host. |
+
+> If you only have `ccx_mpi` installed, either install the plain `ccx` binary **or** configure the agent to call `ccx_mpi` instead.
+
+---
+
+## 3. Make the binary reachable (`PATH` or absolute path)
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin   # adjust to the directory that contains ccx
+```
+
+*Permanent* – add the line to `~/.bashrc`, `~/.profile`, or set `ENV PATH` in a Dockerfile.
+
+### 3.2 Or give the agent the full path
+
+If you prefer not to modify `PATH`, pass the location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+---
+
+## 4. Check file permissions
+
+```bash
+chmod +x /path/to/ccx   # ensure it is executable
+ls -l /path/to/ccx
+```
+
+The file must have the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5. Re‑run the analysis
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+
+You should now see a `achtelc.log` that starts with the CalculiX version line and the expected result files (`achtelc.dat`, `achtelc.frd`, `achtelc.log`, …) will appear in the working directory.
+
+---
+
+## 6. Common “still not found” scenarios and fixes
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still says “not found” | The agent runs inside a container / sandbox that does not contain the binary | Re‑build the container image with `apt-get install calculix-ccx` (or copy the binary in) |
+| `ccx -v` works from your login shell but fails when the agent launches | The agent’s environment has a stripped `PATH` | Export the full `PATH` before starting the agent, or set `"solver_path"` in the agent config |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership) |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the agent’s command line to use `ccx_mpi` |
+
+---
+
+## 7. Using the generated input deck elsewhere
+
+`achtelx.inp` follows the Abaqus‑style `.inp` syntax, so it can be used with:
+
+* **Cloud FE services** – upload the file to SimScale, CalculiX‑Cloud, etc.  
+* **Other solvers** – Abaqus/Standard, Code_Aster, Elmer, etc. (minor tweaks may be needed).  
+* **Sharing** – a colleague with CalculiX installed can run the deck directly.
+
+---
+
+## TL;DR (quick checklist)
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent runs in** (host OS, Docker image, conda env, remote VM, …).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key.  
+4. **Run** `ccx achtelc` again – you should now obtain the normal result files (`.dat`, `.frd`, `.log`, …).  
+
+Once the solver is reachable, the job will finish with a *success* status and you can analyse or modify the results as needed. If local installation is impossible, the generated `achtelc.inp` can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+A: **What went wrong?**  
+The workflow was able to write the input file **`achtelc.inp`**, but when the agent tried to start CalculiX the program **`ccx` (or `ccx_mpi`) could not be found** in the execution environment. Because the solver never launched, no result files (`.dat`, `.frd`, `.log`, …) were created and the job finished with the status  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+The problem is **environment‑related**, not a mistake in the model or the input deck.
+
+---
+
+## 1. Confirm that the solver is really missing
+
+Open the same shell (or container) that the agent uses and run:
+
+```bash
+which ccx          # should print a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+
+If either command returns *“command not found”* (or the file is not executable), the solver is not available to the agent.
+
+---
+
+## 2. Install CalculiX **in the exact environment** the agent runs in  
+
+| Platform / Situation | Command / steps |
+|----------------------|-----------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL** | `sudo dnf install calculix-ccx` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Build from source** (any OS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Conda environment** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Other sandbox (Singularity, CI runner, remote VM, …)** | Install the package inside that sandbox exactly as you would on a normal host. |
+
+> If you only have `ccx_mpi` installed, either install the plain `ccx` binary **or** configure the agent to call `ccx_mpi` instead.
+
+---
+
+## 3. Make the binary reachable (`PATH` or absolute path)
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin   # adjust to the directory that contains ccx
+```
+
+*Permanent* – add the line to `~/.bashrc`, `~/.profile`, or set `ENV PATH` in a Dockerfile.
+
+### 3.2 Or give the agent the full path
+
+If you prefer not to touch `PATH`, set the solver location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+---
+
+## 4. Check file permissions
+
+```bash
+chmod +x /path/to/ccx          # ensure it is executable
+ls -l /path/to/ccx
+```
+
+The file must have the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5. Re‑run the analysis
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+
+You should now see a `achtelc.log` that starts with the CalculiX version line and the expected result files (`achtelc.dat`, `achtelc.frd`, `achtelc.log`, …) appear in the working directory. The job will finish with a **success** status.
+
+---
+
+## 6. Common “still not found” scenarios and how to fix them
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still says “not found” | The agent runs inside a container / sandbox that does not contain the binary | Re‑build the container image with `apt-get install calculix-ccx` (or copy the binary in) |
+| `ccx -v` works from your login shell but fails when the agent launches | The agent’s environment has a stripped `PATH` | Export the full `PATH` before starting the agent, or set `"solver_path"` in the agent config |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership) |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the agent’s command line to use `ccx_mpi` |
+
+---
+
+## 7. Using the generated input deck elsewhere
+
+`achtelc.inp` follows the Abaqus‑style `.inp` syntax, so you can:
+
+* **Upload to a cloud FE service** (e.g., SimScale, CalculiX‑Cloud).  
+* **Run with another solver** (Abaqus/Standard, Code_Aster, Elmer) – only minor syntax tweaks may be required.  
+* **Share with a colleague** who has CalculiX installed; they can run `ccx achtelc` directly.
+
+---
+
+## TL;DR – Quick checklist
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent runs in** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Run** `ccx achtelc` again – you should now obtain the normal result files (`.dat`, `.frd`, `.log`, …).  
+
+Once the solver is reachable, the job will finish with a *success* status and you can analyse or modify the results as needed. If a local installation is impossible, the generated `achtelc.inp` can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+
+=== 2026-04-20 13:34:09 ===
+Q: **What went wrong?**  
+
+The workflow succeeded in writing the CalculiX input file **`achtelc.inp`**, but when the agent tried to launch the solver it could not locate the program **`ccx` (or `ccx_mpi`)** in the execution environment. Because the solver never started, no result files (`.dat`, `.frd`, `.log`, …) were produced and the job finished with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+The issue is **environment‑related**, not a problem with the model or the input deck.
+
+---
+
+## 1. Verify that the solver is really missing
+Run the same shell (or container) that the agent uses:
+
+```bash
+which ccx          # should output a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+
+If either command returns *“command not found”* (or the file is not executable), the solver is not available to the agent.
+
+---
+
+## 2. Install CalculiX in the exact environment the agent runs in  
+
+| Environment | Install command / steps |
+|-------------|--------------------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL**   | `sudo dnf install calculix-ccx` |
+| **macOS (Homebrew)**| `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Build from source** (any OS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Conda environment** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Other sandbox (Singularity, CI runner, remote VM, …)** | Install the package inside that sandbox exactly as you would on a normal host. |
+
+> If only `ccx_mpi` is present, either install the plain `ccx` binary **or** configure the agent to call `ccx_mpi` instead.
+
+---
+
+## 3. Make the binary reachable
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin   # adjust to the directory that contains ccx
+```
+
+*Make this permanent* by adding the line to `~/.bashrc`, `~/.profile`, or by setting `ENV PATH` in a Dockerfile.
+
+### 3.2 Or give the agent the absolute path
+
+If you prefer not to modify `PATH`, set the solver location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+---
+
+## 4. Check permissions
+
+```bash
+chmod +x /path/to/ccx          # ensure it is executable
+ls -l /path/to/ccx
+```
+
+The file must have the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5. Re‑run the analysis
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+
+You should now see a `achtelc.log` that begins with the CalculiX version line and the expected result files (`achtelc.dat`, `achtelc.frd`, `achtelc.log`, …) appear. The job will finish with a **success** status.
+
+---
+
+## 6. Common “still not found” scenarios and fixes
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still reports “not found” | Agent runs inside a container/sandbox that lacks the binary | Re‑build the container image with `apt-get install calculix-ccx` (or copy the binary in) |
+| `ccx -v` works from your login shell but fails when the agent launches | Agent’s environment has a stripped `PATH` | Export the full `PATH` before starting the agent, or set `"solver_path"` in the config |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership) |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the command line to use `ccx_mpi` |
+
+---
+
+## 7. Using the generated input deck elsewhere
+
+`achtelc.inp` follows the Abaqus‑style `.inp` syntax, so you can:
+
+* **Upload to a cloud FE service** (e.g., SimScale, CalculiX‑Cloud).  
+* **Run with another solver** (Abaqus/Standard, Code_Aster, Elmer) – only minor syntax tweaks may be needed.  
+* **Share with a colleague** who already has CalculiX installed; they can run `ccx achtelc` directly.
+
+---
+
+## TL;DR – Quick checklist
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent runs in** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Run** `ccx achtelc` again – you should now obtain the normal result files (`.dat`, `.frd`, `.log`, …) and the job will finish with a *success* status.
+
+Once the solver is reachable, the workflow will complete successfully, and you can analyse or modify the results as needed. If a local installation is not possible, the generated `achtelc.inp` can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+A: **Root cause** – the agent can write the `.inp` file, but the **CalculiX executable (`ccx` or `ccx_mpi`) is not present or not reachable** in the environment where the agent runs.  
+Because the solver never starts, no result files are created and the workflow ends with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+Below is a complete, step‑by‑step checklist that will get the solver running again, no matter whether you are on a local machine, inside a container, a CI runner, or a remote VM.
+
+---
+
+## 1. Confirm that the binary is really missing
+
+```bash
+# In the same shell / container that the agent uses
+which ccx          # should print a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+
+*If either command returns “command not found” (or the file is not executable), the solver is not available to the agent.*
+
+---
+
+## 2. Install CalculiX in the exact execution environment  
+
+| Environment | Installation command / steps |
+|-------------|------------------------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL / CentOS** | `sudo dnf install -y calculix-ccx` |
+| **Alpine** | `apk add --no-cache calculix` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Conda** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Build from source** (any Linux/macOS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity / other sandbox** | Run the same install command **inside** the sandbox. |
+
+> If only `ccx_mpi` is installed, either install the plain `ccx` package **or** configure the agent to call `ccx_mpi` instead.
+
+---
+
+## 3. Make the binary reachable
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin          # adjust to the directory that contains ccx
+```
+
+*Persist the change* by adding the line to `~/.bashrc`, `~/.profile`, or by setting `ENV PATH` in a Dockerfile.
+
+### 3.2 Or give the agent the absolute path
+
+If you prefer not to touch `PATH`, set the solver location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+The agent will then invoke that exact file.
+
+---
+
+## 4. Verify permissions
+
+```bash
+chmod +x /path/to/ccx          # ensure the file is executable
+ls -l /path/to/ccx
+```
+
+The file should have the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5. Test the solver manually
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+
+You should see a header line with the CalculiX version and the creation of files such as `achtelc.dat`, `achtelc.frd`, `achtelc.log`. If this works, the agent will also succeed.
+
+---
+
+## 6. Re‑run the workflow
+
+Start the agent again (or re‑submit the job). The status should now be:
+
+```json
+{
+  "status": "success",
+  "message": "CalculiX run completed"
+}
+```
+
+All expected result files will be present in the working directory.
+
+---
+
+## 7. Common “still not found” pitfalls and how to fix them
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still reports “not found” | Agent runs inside a container/sandbox that does **not** contain the binary | Re‑build the container image with the install step, or copy the binary into the container and add it to `PATH`. |
+| `ccx -v` works from your login shell but fails when the agent launches | Agent’s environment has a stripped `PATH` | Export the full `PATH` before launching the agent, or set `"solver_path"` in the config file. |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership). |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the command line / config to use `ccx_mpi`. |
+| Binary is present but located in `/opt/calculix/bin` and not in `PATH` | `PATH` does not include that directory | `export PATH=$PATH:/opt/calculix/bin` (or set `solver_path`). |
+
+---
+
+## 8. Using the generated input deck elsewhere (optional)
+
+`achtelc.inp` follows the Abaqus‑style syntax, so you can:
+
+* Upload it to a cloud FE service (e.g., SimScale, CalculiX‑Cloud).  
+* Run it with another solver (Abaqus/Standard, Code_Aster, Elmer) – only minor syntax tweaks may be required.  
+* Share it with a colleague who already has CalculiX; they can simply run `ccx achtelc`.
+
+---
+
+## TL;DR – Quick checklist
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent uses** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Test manually**: `ccx achtelc` → you should get `.dat`, `.frd`, `.log`.  
+5. **Re‑run the agent** – the workflow will now finish with *success* and all result files will be available.
+
+Once the solver is reachable, the workflow completes normally and you can analyse or share the results as needed. If you cannot install CalculiX locally, the generated `achtelc.inp` can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+
+=== 2026-04-20 13:34:51 ===
+Q: **Root cause** – the agent can write the `.inp` file, but the **CalculiX executable (`ccx` or `ccx_mpi`) is not present or not reachable** in the environment where the agent runs.  
+Because the solver never starts, no result files are created and the workflow ends with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+Below is a complete, step‑by‑step checklist that will get the solver running again, no matter whether you are on a local machine, inside a container, a CI runner, or a remote VM.
+
+---
+
+## 1. Confirm that the binary is really missing  
+
+```bash
+# In the same shell / container that the agent uses
+which ccx          # should print a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```  
+
+*If either command returns “command not found” (or the file is not executable), the solver is not available to the agent.*
+
+---
+
+## 2. Install CalculiX in the exact execution environment  
+
+| Environment | Install command / steps |
+|-------------|--------------------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL / CentOS** | `sudo dnf install -y calculix-ccx` |
+| **Alpine** | `apk add --no-cache calculix` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Conda** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Build from source** (any Linux/macOS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity / other sandbox** | Run the same install command **inside** the sandbox. |
+
+> If only `ccx_mpi` is installed, either install the plain `ccx` binary **or** configure the agent to call `ccx_mpi` instead.
+
+---
+
+## 3. Make the binary reachable  
+
+### 3.1 Add its directory to `PATH`  
+
+```bash
+export PATH=$PATH:/usr/local/bin          # adjust to the directory that contains ccx
+```  
+
+*Persist the change* by adding the line to `~/.bashrc`, `~/.profile`, or by setting `ENV PATH` in a Dockerfile.
+
+### 3.2 Or give the agent the absolute path  
+
+If you prefer not to modify `PATH`, set the solver location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```  
+
+The agent will then invoke that exact file.
+
+---
+
+## 4. Verify permissions  
+
+```bash
+chmod +x /path/to/ccx          # ensure the file is executable
+ls -l /path/to/ccx
+```  
+
+The file should have the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5. Test the solver manually  
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```  
+
+You should see a header line with the CalculiX version and the creation of files such as `achtelc.dat`, `achtelc.frd`, `achtelc.log`. If this works, the agent will also succeed.
+
+---
+
+## 6. Re‑run the workflow  
+
+Start the agent again (or re‑submit the job). The status should now be:
+
+```json
+{
+  "status": "success",
+  "message": "CalculiX run completed"
+}
+```  
+
+All expected result files will be present in the working directory.
+
+---
+
+## 7. Common “still not found” pitfalls and fixes  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still reports “not found” | Agent runs inside a container/sandbox that does **not** contain the binary | Re‑build the container image with the install step, or copy the binary into the container and add it to `PATH`. |
+| `ccx -v` works from your login shell but fails when the agent launches | Agent’s environment has a stripped `PATH` | Export the full `PATH` before launching the agent, or set `"solver_path"` in the config file. |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership). |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the command line / config to use `ccx_mpi`. |
+| Binary is present but located in `/opt/calculix/bin` and not in `PATH` | `PATH` does not include that directory | `export PATH=$PATH:/opt/calculix/bin` (or set `solver_path`). |
+
+---
+
+## 8. Using the generated input deck elsewhere (optional)  
+
+`achtelc.inp` follows the Abaqus‑style syntax, so you can:
+
+* Upload it to a cloud FE service (e.g., SimScale, CalculiX‑Cloud).  
+* Run it with another solver (Abaqus/Standard, Code_Aster, Elmer) – only minor syntax tweaks may be required.  
+* Share it with a colleague who already has CalculiX; they can simply run `ccx achtelc`.
+
+---
+
+## TL;DR – Quick checklist  
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent uses** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Test manually**: `ccx achtelc` → you should get `.dat`, `.frd`, `.log`.  
+5. **Re‑run the agent** – the workflow will now finish with *success* and all result files will be available.
+
+Once the solver is reachable, the workflow completes normally and you can analyse or share the results as needed. If you cannot install CalculiX locally, the generated `achtelc.inp` can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+A: **Root‑cause:**  
+The agent can write the `.inp` file, but the CalculiX solver (`ccx` or `ccx_mpi`) is not installed **or** is not reachable from the environment in which the agent runs. Because the solver never starts, no result files are produced and the workflow ends with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+Below is a **complete, step‑by‑step checklist** that will get the solver running again, no matter whether you are on a local workstation, inside a container, a CI runner, or a remote VM.
+
+---
+
+## 1. Verify that the binary is really missing
+
+```bash
+# Run these commands in the *exact* environment the agent uses
+which ccx          # should return a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+
+*If either command reports “command not found” (or the file is not executable), the solver is not available to the agent.*
+
+---
+
+## 2. Install CalculiX in that environment  
+
+| Environment | Install command / steps |
+|-------------|--------------------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL / CentOS** | `sudo dnf install -y calculix-ccx` |
+| **Alpine** | `apk add --no-cache calculix` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Conda** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Build from source** (any Linux/macOS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity / other sandbox** | Run the same install command **inside** the sandbox. |
+
+> If only `ccx_mpi` is present, either install the plain `ccx` binary **or** configure the agent to call `ccx_mpi` instead.
+
+---
+
+## 3. Make the binary reachable  
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin          # adjust to the directory that contains ccx
+```
+
+*Persist the change* by adding the line to `~/.bashrc`, `~/.profile`, or by setting `ENV PATH` in a Dockerfile.
+
+### 3.2 Or give the agent the absolute path
+
+If you prefer not to touch `PATH`, set the solver location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+The agent will then invoke that exact file.
+
+---
+
+## 4. Verify execution permissions  
+
+```bash
+chmod +x /path/to/ccx          # ensure the file is executable
+ls -l /path/to/ccx
+```
+
+The file should show the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5. Test the solver manually  
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+
+You should see a header line with the CalculiX version and the creation of files such as `achtelc.dat`, `achtelc.frd`, `achtelc.log`. If this works, the agent will also succeed.
+
+---
+
+## 6. Re‑run the workflow  
+
+Start the agent again (or re‑submit the job). The status should now be:
+
+```json
+{
+  "status": "success",
+  "message": "CalculiX run completed"
+}
+```
+
+All expected result files will be present in the working directory.
+
+---
+
+## 7. Common “still not found” pitfalls & fixes  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still reports “not found” | Agent runs inside a container/sandbox that does **not** contain the binary | Re‑build the container image with the install step, or copy the binary into the container and add it to `PATH`. |
+| `ccx -v` works from your login shell but fails when the agent launches | Agent’s environment has a stripped `PATH` | Export the full `PATH` before launching the agent, or set `"solver_path"` in the config file. |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership). |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the command line / config to use `ccx_mpi`. |
+| Binary is present but located in `/opt/calculix/bin` and not in `PATH` | `PATH` does not include that directory | `export PATH=$PATH:/opt/calculix/bin` (or set `solver_path`). |
+
+---
+
+## 8. TL;DR – Quick checklist  
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent uses** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Test manually**: `ccx achtelc` → you should get `.dat`, `.frd`, `.log`.  
+5. **Re‑run the agent** – the workflow will now finish with *success* and all result files will be available.
+
+Once the solver is reachable, the workflow completes normally and you can analyse or share the results as needed. If you cannot install CalculiX locally, the generated `achtelc.inp` can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+
+=== 2026-04-20 13:35:33 ===
+Q: **Root‑cause** – the agent can write the `.inp` file, but the CalculiX solver (`ccx` or `ccx_mpi`) is **not installed or not reachable** from the environment in which the agent runs.  
+Because the solver never starts, no result files are produced and the workflow finishes with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+Below is a **complete, step‑by‑step checklist** that will get the solver running again, whether you are on a workstation, inside a container, a CI runner, or a remote VM.
+
+---
+
+## 1. Verify that the binary is really missing  
+
+Run these commands **in the exact environment the agent uses** (same container, same virtualenv, same user, etc.):
+
+```bash
+which ccx          # should return a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+
+*If either command reports “command not found” (or the file is not executable), the solver is not available to the agent.*
+
+---
+
+## 2. Install CalculiX in that environment  
+
+| Environment | Install command / steps |
+|-------------|--------------------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL / CentOS** | `sudo dnf install -y calculix-ccx` |
+| **Alpine** | `apk add --no-cache calculix` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Conda** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Build from source** (any Linux/macOS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity / other sandbox** | Run the same install command **inside** the sandbox. |
+
+> **If only `ccx_mpi` is present**, either install the plain `ccx` binary **or** configure the agent to call `ccx_mpi` instead.
+
+---
+
+## 3. Make the binary reachable  
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin          # adjust to the directory that contains ccx
+```
+
+*Persist the change* by adding the line to `~/.bashrc`, `~/.profile`, or by setting `ENV PATH` in a Dockerfile.
+
+### 3.2 Or give the agent the absolute path
+
+If you prefer not to modify `PATH`, set the solver location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+The agent will invoke that exact file.
+
+---
+
+## 4. Verify execution permissions  
+
+```bash
+chmod +x /path/to/ccx          # ensure the file is executable
+ls -l /path/to/ccx
+```
+
+The file should show the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5. Test the solver manually  
+
+```bash
+ccx achtelc          # reads achtelc.inp and creates .dat, .frd, .log, …
+```
+
+You should see a header line with the CalculiX version and the creation of files such as `achtelc.dat`, `achtelc.frd`, `achtelc.log`. If this works, the agent will also succeed.
+
+---
+
+## 6. Re‑run the workflow  
+
+Start the agent again (or re‑submit the job). The status should now be:
+
+```json
+{
+  "status": "success",
+  "message": "CalculiX run completed"
+}
+```
+
+All expected result files (`.dat`, `.frd`, `.log`, etc.) will be present in the working directory.
+
+---
+
+## 7. Common “still not found” pitfalls & fixes  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still reports “not found” | Agent runs inside a container/sandbox that does **not** contain the binary | Re‑build the container image with the install step, or copy the binary into the container and add it to `PATH`. |
+| `ccx -v` works from your login shell but fails when the agent launches | Agent’s environment has a stripped `PATH` | Export the full `PATH` before launching the agent, or set `"solver_path"` in the config file. |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership). |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the command line / config to use `ccx_mpi`. |
+| Binary is present but located in `/opt/calculix/bin` and not in `PATH` | `PATH` does not include that directory | `export PATH=$PATH:/opt/calculix/bin` (or set `solver_path`). |
+
+---
+
+## 8. TL;DR – Quick checklist  
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent uses** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Test manually**: `ccx achtelc` → you should obtain `.dat`, `.frd`, `.log`.  
+5. **Re‑run the agent** – the workflow will now finish with *success* and all result files will be available.
+
+Once the solver is reachable, the workflow completes normally and you can analyse or share the results as needed. If you cannot install CalculiX locally, the generated `achtelc.inp` can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+A: **Root‑cause** – The agent can create the `*.inp` file, but the CalculiX executable (`ccx` or `ccx_mpi`) is not present **or** cannot be found in the environment where the agent runs. Because the solver never starts, no result files are written and the workflow ends with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+Below is a **complete, step‑by‑step checklist** that will make the solver available again, no matter whether you are on a workstation, inside a container, a CI runner, or a remote VM.
+
+---
+
+## 1️⃣ Verify that the binary is really missing  
+
+Run these commands **in the exact environment the agent uses** (same container, same virtualenv, same user).
+
+```bash
+which ccx          # should print a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+
+*If either command returns “command not found” (or the file is not executable), the solver is not reachable to the agent.*
+
+---
+
+## 2️⃣ Install CalculiX in that environment  
+
+| Environment | Install command / steps |
+|-------------|--------------------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL / CentOS** | `sudo dnf install -y calculix-ccx` |
+| **Alpine** | `apk add --no-cache calculix` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Conda** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Build from source** (any Linux/macOS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity / other sandbox** | Run the same install command **inside** the sandbox. |
+
+> **If only `ccx_mpi` is present**, either install the plain `ccx` binary **or** configure the agent to call `ccx_mpi` instead.
+
+---
+
+## 3️⃣ Make the binary reachable  
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin          # adjust to the directory that contains ccx
+```
+
+*Persist the change* by adding the line to `~/.bashrc`, `~/.profile`, or by setting `ENV PATH` in a Dockerfile.
+
+### 3.2 Or give the agent the absolute path
+
+If you prefer not to touch `PATH`, set the solver location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+The agent will invoke that exact file.
+
+---
+
+## 4️⃣ Verify execution permissions  
+
+```bash
+chmod +x /path/to/ccx          # ensure the file is executable
+ls -l /path/to/ccx
+```
+
+The file should show the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5️⃣ Test the solver manually  
+
+```bash
+ccx mymodel          # reads mymodel.inp and creates .dat, .frd, .log, …
+```
+
+You should see a header line with the CalculiX version and the creation of files such as `mymodel.dat`, `mymodel.frd`, `mymodel.log`. If this works, the agent will also succeed.
+
+---
+
+## 6️⃣ Re‑run the workflow  
+
+Start the agent again (or re‑submit the job). The status should now be:
+
+```json
+{
+  "status": "success",
+  "message": "CalculiX run completed"
+}
+```
+
+All expected result files (`.dat`, `.frd`, `.log`, …) will be present in the working directory.
+
+---
+
+## 7️⃣ Common “still not found” pitfalls & fixes  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still reports “not found” | Agent runs inside a container/sandbox that does **not** contain the binary | Re‑build the container image with the install step, or copy the binary into the container and add it to `PATH`. |
+| `ccx -v` works from your login shell but fails when the agent launches | Agent’s environment has a stripped `PATH` | Export the full `PATH` before launching the agent, or set `"solver_path"` in the config file. |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership). |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the command line / config to use `ccx_mpi`. |
+| Binary is present but located in `/opt/calculix/bin` and not in `PATH` | `PATH` does not include that directory | `export PATH=$PATH:/opt/calculix/bin` (or set `solver_path`). |
+
+---
+
+## 8️⃣ TL;DR – Quick checklist  
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent uses** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Test manually**: `ccx mymodel` → you should obtain `.dat`, `.frd`, `.log`.  
+5. **Re‑run the agent** – the workflow will now finish with *success* and all result files will be available.
+
+Once the solver is reachable, the workflow completes normally and you can analyse or share the results as needed. If you cannot install CalculiX locally, the generated `*.inp` file can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+
+=== 2026-04-20 13:36:16 ===
+Q: **Root‑cause** – The agent can write the `*.inp` file, but the CalculiX executable (`ccx` or `ccx_mpi`) is **not installed or not reachable** from the environment in which the agent runs. Because the solver never starts, no result files are produced and the workflow finishes with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+Below is a **complete, step‑by‑step checklist** that will make the solver available again, no matter whether you are on a workstation, inside a container, a CI runner, or a remote VM.
+
+---
+
+## 1️⃣ Verify that the binary is really missing  
+
+Run these commands **in the exact environment the agent uses** (same container, same virtualenv, same user).
+
+```bash
+which ccx          # should print a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+
+*If either command returns “command not found” (or the file is not executable), the solver is not reachable to the agent.*
+
+---
+
+## 2️⃣ Install CalculiX in that environment  
+
+| Environment | Install command / steps |
+|-------------|--------------------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL / CentOS** | `sudo dnf install -y calculix-ccx` |
+| **Alpine** | `apk add --no-cache calculix` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Conda** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Build from source** (any Linux/macOS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity / other sandbox** | Run the same install command **inside** the sandbox. |
+
+> **If only `ccx_mpi` is present**, either install the plain `ccx` binary **or** configure the agent to call `ccx_mpi` instead.
+
+---
+
+## 3️⃣ Make the binary reachable  
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin          # adjust to the directory that contains ccx
+```
+
+*Persist the change* by adding the line to `~/.bashrc`, `~/.profile`, or by setting `ENV PATH` in a Dockerfile.
+
+### 3.2 Or give the agent the absolute path
+
+If you prefer not to modify `PATH`, set the solver location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+The agent will invoke that exact file.
+
+---
+
+## 4️⃣ Verify execution permissions  
+
+```bash
+chmod +x /path/to/ccx          # ensure the file is executable
+ls -l /path/to/ccx
+```
+
+The file should show the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5️⃣ Test the solver manually  
+
+```bash
+ccx mymodel          # reads mymodel.inp and creates .dat, .frd, .log, …
+```
+
+You should see a header line with the CalculiX version and the creation of files such as `mymodel.dat`, `mymodel.frd`, `mymodel.log`. If this works, the agent will also succeed.
+
+---
+
+## 6️⃣ Re‑run the workflow  
+
+Start the agent again (or re‑submit the job). The status should now be:
+
+```json
+{
+  "status": "success",
+  "message": "CalculiX run completed"
+}
+```
+
+All expected result files (`.dat`, `.frd`, `.log`, …) will be present in the working directory.
+
+---
+
+## 7️⃣ Common “still not found” pitfalls & fixes  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still reports “not found” | Agent runs inside a container/sandbox that does **not** contain the binary | Re‑build the container image with the install step, or copy the binary into the container and add it to `PATH`. |
+| `ccx -v` works from your login shell but fails when the agent launches | Agent’s environment has a stripped `PATH` | Export the full `PATH` before launching the agent, or set `"solver_path"` in the config file. |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership). |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the command line / config to use `ccx_mpi`. |
+| Binary is present but located in `/opt/calculix/bin` and not in `PATH` | `PATH` does not include that directory | `export PATH=$PATH:/opt/calculix/bin` (or set `solver_path`). |
+
+---
+
+## 8️⃣ TL;DR – Quick checklist  
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent uses** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Test manually**: `ccx mymodel` → you should obtain `.dat`, `.frd`, `.log`.  
+5. **Re‑run the agent** – the workflow will now finish with *success* and all result files will be available.
+
+Once the solver is reachable, the workflow completes normally and you can analyse or share the results as needed. If you cannot install CalculiX locally, the generated `*.inp` file can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+A: **Root‑cause** – The agent can write the `*.inp` file, but the CalculiX solver (`ccx` or `ccx_mpi`) is not installed or cannot be found in the environment where the agent runs. Because the solver never starts, no result files are produced and the workflow ends with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+Below is a **complete, step‑by‑step checklist** that will make the solver available again, regardless of whether you are on a workstation, inside a container, a CI runner, or a remote VM.
+
+---
+
+## 1️⃣ Confirm the binary is really missing  
+
+Run these commands **in the exact environment the agent uses** (same container, virtualenv, user, etc.):
+
+```bash
+which ccx          # should print a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print the version, e.g. “CalculiX 2.19”
+```
+
+If either command returns *command not found* (or the file is not executable), the solver is not reachable.
+
+---
+
+## 2️⃣ Install CalculiX in that environment  
+
+| Environment | Install command / steps |
+|-------------|--------------------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL / CentOS** | `sudo dnf install -y calculix-ccx` |
+| **Alpine** | `apk add --no-cache calculix` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in a folder (e.g. `C:\Program Files\CalculiX`) <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Conda** | `conda create -n ccx-env -c conda-forge calculix && conda activate ccx-env` |
+| **Build from source** (any Linux/macOS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Docker / OCI image** | Add to your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity / other sandbox** | Run the same install command **inside** the sandbox. |
+
+> If only `ccx_mpi` is present, either install the plain `ccx` binary **or** configure the agent to call `ccx_mpi` instead.
+
+---
+
+## 3️⃣ Make the binary reachable  
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin          # adjust to the directory that contains ccx
+```
+
+*Persist the change* by adding the line to `~/.bashrc`, `~/.profile`, or by setting `ENV PATH` in a Dockerfile.
+
+### 3.2 Or give the agent the absolute path
+
+If you prefer not to touch `PATH`, set the solver location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+The agent will invoke that exact file.
+
+---
+
+## 4️⃣ Verify execution permissions  
+
+```bash
+chmod +x /path/to/ccx          # ensure the file is executable
+ls -l /path/to/ccx
+```
+
+The file should show the execute bit (`-rwxr-xr-x` or similar) for the user that runs the agent.
+
+---
+
+## 5️⃣ Test the solver manually  
+
+```bash
+ccx mymodel          # reads mymodel.inp and creates .dat, .frd, .log, …
+```
+
+You should see a header line with the CalculiX version and the creation of files such as `mymodel.dat`, `mymodel.frd`, `mymodel.log`. If this works, the agent will also succeed.
+
+---
+
+## 6️⃣ Re‑run the workflow  
+
+Start the agent again (or re‑submit the job). The status should now be:
+
+```json
+{
+  "status": "success",
+  "message": "CalculiX run completed"
+}
+```
+
+All expected result files (`.dat`, `.frd`, `.log`, …) will be present in the working directory.
+
+---
+
+## 7️⃣ Common “still not found” pitfalls & fixes  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal terminal but the agent still reports “not found” | Agent runs inside a container/sandbox that does **not** contain the binary | Re‑build the container image with the install step, or copy the binary into the container and add it to `PATH`. |
+| `ccx -v` works from your login shell but fails when the agent launches | Agent’s environment has a stripped `PATH` | Export the full `PATH` before launching the agent, or set `"solver_path"` in the config file. |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership). |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the command line / config to use `ccx_mpi`. |
+| Binary is present but located in `/opt/calculix/bin` and not in `PATH` | `PATH` does not include that directory | `export PATH=$PATH:/opt/calculix/bin` (or set `solver_path`). |
+
+---
+
+## 8️⃣ TL;DR – Quick checklist  
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) inside the exact environment the agent uses** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Test manually**: `ccx mymodel` → you should obtain `.dat`, `.frd`, `.log`.  
+5. **Re‑run the agent** – the workflow will now finish with *success* and all result files will be available.
+
+Once the solver is reachable, the workflow completes normally and you can analyse or share the results as needed. If you cannot install CalculiX locally, the generated `*.inp` file can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+
+=== 2026-04-20 13:37:00 ===
+Q: **Root‑cause** – The agent can create the `*.inp` file, but the CalculiX executable (`ccx` or `ccx_mpi`) is not present (or not on the `PATH`) in the environment where the agent runs. Consequently the solver never starts, no `.dat/.frd/.log` files are written and the workflow ends with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+Below is a **complete, step‑by‑step checklist** to get the solver back into the agent’s runtime environment.
+
+---
+
+## 1️⃣ Verify the binary really is missing  
+
+Run these commands **in the exact environment the agent uses** (same container, virtualenv, user, etc.):
+
+```bash
+which ccx          # expected: /usr/local/bin/ccx  (or similar)
+ccx -v             # expected: CalculiX 2.xx
+```
+
+*If either returns “command not found” (or the file is not executable), the solver is not reachable.*
+
+---
+
+## 2️⃣ Install CalculiX in that environment  
+
+| Platform / Env | Command / steps |
+|----------------|-----------------|
+| **Ubuntu / Debian** | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL / CentOS** | `sudo dnf install -y calculix-ccx` |
+| **Alpine** | `apk add --no-cache calculix` |
+| **macOS (Homebrew)** | `brew install calculix` |
+| **Windows** | 1. Download `ccx.exe` from <https://www.calculix.de/>  <br>2. Put it in e.g. `C:\Program Files\CalculiX`  <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Conda** | `conda create -n ccx -c conda-forge calculix && conda activate ccx` |
+| **Build from source** (any Linux/macOS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Docker / OCI image** | In your `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity / other sandbox** | Run the same install command **inside** the sandbox. |
+
+> **If only `ccx_mpi` is present** – either install the plain `ccx` binary or change the agent configuration to call `ccx_mpi`.
+
+---
+
+## 3️⃣ Make the binary discoverable  
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin   # adjust if the binary lives elsewhere
+```
+
+*Persist the change* (e.g. add the line to `~/.bashrc`, `~/.profile`, or set `ENV PATH` in a Dockerfile).
+
+### 3.2 Or give the agent an absolute path
+
+If you prefer not to modify `PATH`, set the solver location in the agent’s config (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+The agent will then invoke that exact file.
+
+---
+
+## 4️⃣ Ensure the binary is executable  
+
+```bash
+chmod +x /path/to/ccx   # make sure the user running the agent can execute it
+ls -l /path/to/ccx      # should show -rwxr-xr-x (or similar)
+```
+
+---
+
+## 5️⃣ Test the solver manually  
+
+```bash
+ccx mymodel          # reads mymodel.inp and creates .dat, .frd, .log, …
+```
+
+You should see a header line with the CalculiX version and the creation of files such as `mymodel.dat`, `mymodel.frd`, `mymodel.log`. If this works, the agent will also be able to run the solver.
+
+---
+
+## 6️⃣ Re‑run the workflow  
+
+Start the agent again (or re‑submit the job). The expected final status is now:
+
+```json
+{
+  "status": "success",
+  "message": "CalculiX run completed"
+}
+```
+
+All result files (`.dat`, `.frd`, `.log`, …) will appear in the working directory.
+
+---
+
+## 7️⃣ Common “still not found” pitfalls & how to fix them  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal shell but the agent still says “not found” | Agent runs inside a container/sandbox that does **not** contain the binary | Re‑build the container image with the install step, or copy the binary into the container and add its directory to `PATH`. |
+| `ccx -v` works from your login shell but fails when the agent launches | The agent’s environment has a stripped `PATH` | Export the full `PATH` before launching the agent, or set `"solver_path"` in the config file. |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership). |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the command line / config to use `ccx_mpi`. |
+| Binary lives in `/opt/calculix/bin` but that directory isn’t on `PATH` | `PATH` does not include the directory | `export PATH=$PATH:/opt/calculix/bin` (or set `solver_path`). |
+
+---
+
+## 8️⃣ TL;DR – Quick checklist  
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) in the exact environment the agent runs** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Test manually**: `ccx mymodel` → you should obtain `.dat`, `.frd`, `.log`.  
+5. **Re‑run the agent** – the workflow will now finish with *success* and all result files will be available.
+
+Once the CalculiX executable is reachable, the workflow completes normally and you can analyse or share the results as needed. If you cannot install CalculiX locally, the generated `*.inp` file can still be used with any compatible FE solver or a cloud‑based CalculiX service.
+A: **Root‑cause** – The agent can write the `*.inp` file, but the CalculiX solver (`ccx` or `ccx_mpi`) is not available in the runtime environment (or it is not on the `PATH`). Because the executable cannot be found, the solver never starts, no `.dat/.frd/.log` files are produced and the workflow ends with  
+
+```json
+{
+  "status": "failed",
+  "message": "CalculiX executable not found"
+}
+```
+
+Below is a **complete, step‑by‑step checklist** that will bring the solver back into the agent’s environment and make the workflow succeed.
+
+---
+
+## 1️⃣ Confirm the binary is really missing
+
+Run the commands **exactly where the agent runs** (same container, virtualenv, user, etc.):
+
+```bash
+which ccx          # should return a full path, e.g. /usr/local/bin/ccx
+ccx -v             # should print “CalculiX 2.xx …”
+```
+
+If either command returns *command not found* (or the file is not executable), the solver is not reachable.
+
+---
+
+## 2️⃣ Install CalculiX in that environment  
+
+| Platform / Environment | Installation command / steps |
+|------------------------|------------------------------|
+| **Ubuntu / Debian**    | `sudo apt-get update && sudo apt-get install -y calculix-ccx` |
+| **Fedora / RHEL / CentOS** | `sudo dnf install -y calculix-ccx` |
+| **Alpine**             | `apk add --no-cache calculix` |
+| **macOS (Homebrew)**   | `brew install calculix` |
+| **Windows**            | 1. Download `ccx.exe` from <https://www.calculix.de/> <br>2. Place it in e.g. `C:\Program Files\CalculiX` <br>3. Add that folder to **System → Advanced → Environment → Path** |
+| **Conda**              | `conda create -n ccx -c conda-forge calculix && conda activate ccx` |
+| **Build from source** (any Linux/macOS) | ```bash\ngit clone https://github.com/calculix/calculix.git\ncd calculix\nmake ccx\nsudo cp ccx /usr/local/bin/\n``` |
+| **Docker / OCI image** | In the `Dockerfile` (Debian‑based example): <br>`RUN apt-get update && apt-get install -y calculix-ccx` |
+| **Singularity / other sandbox** | Run the same install command **inside** the sandbox. |
+
+> **Note:** If only `ccx_mpi` is present, either install the plain `ccx` package or configure the agent to call `ccx_mpi`.
+
+---
+
+## 3️⃣ Make the binary discoverable  
+
+### 3.1 Add its directory to `PATH`
+
+```bash
+export PATH=$PATH:/usr/local/bin   # adjust if the binary lives elsewhere
+```
+
+*Persist the change* (e.g. add the line to `~/.bashrc`, `~/.profile`, or set `ENV PATH` in a Dockerfile).
+
+### 3.2 Or give the agent an absolute path
+
+If you prefer not to touch `PATH`, set the solver location in the agent’s configuration (key name depends on the wrapper you use, e.g. `solver_path`):
+
+```json
+{
+  "solver_path": "/opt/calculix/bin/ccx"
+}
+```
+
+The agent will then invoke that exact file.
+
+---
+
+## 4️⃣ Ensure the binary is executable  
+
+```bash
+chmod +x /path/to/ccx          # give execute permission
+ls -l /path/to/ccx             # should show -rwxr-xr-x (or similar)
+```
+
+The user that runs the agent must have execute rights.
+
+---
+
+## 5️⃣ Test the solver manually (outside the agent)
+
+```bash
+ccx mymodel          # reads mymodel.inp and creates .dat, .frd, .log, …
+```
+
+You should see a header with the CalculiX version and the creation of files such as `mymodel.dat`, `mymodel.frd`, `mymodel.log`. If this works, the agent will also be able to run the solver.
+
+---
+
+## 6️⃣ Re‑run the workflow
+
+Start the agent again (or re‑submit the job). The expected final status is now:
+
+```json
+{
+  "status": "success",
+  "message": "CalculiX run completed"
+}
+```
+
+All result files (`.dat`, `.frd`, `.log`, …) will appear in the working directory.
+
+---
+
+## 7️⃣ Common “still not found” pitfalls & fixes  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `which ccx` works in a normal shell but the agent still says “not found” | Agent runs inside a container/sandbox that does **not** contain the binary | Re‑build the container image with the install step, or copy the binary into the container and add its directory to `PATH`. |
+| `ccx -v` works from your login shell but fails when the agent launches | Agent’s environment has a stripped `PATH` | Export the full `PATH` before launching the agent, or set `"solver_path"` in the config file. |
+| `Permission denied` when the agent tries to execute `ccx` | Execute bit missing for the user inside the sandbox | `chmod +x /path/to/ccx` (or adjust ownership). |
+| Only `ccx_mpi` exists, but the agent calls `ccx` | Agent is hard‑coded to the non‑MPI binary | Install the plain `ccx` package **or** edit the command line / config to use `ccx_mpi`. |
+| Binary lives in `/opt/calculix/bin` but that directory isn’t on `PATH` | `PATH` does not include the directory | `export PATH=$PATH:/opt/calculix/bin` (or set `solver_path`). |
+
+---
+
+## 8️⃣ TL;DR – Quick checklist  
+
+1. **Install CalculiX (`ccx` or `ccx_mpi`) in the exact environment the agent runs** (host OS, Docker image, conda env, remote VM, etc.).  
+2. **Make the binary executable** (`chmod +x …`).  
+3. **Add its directory to `PATH`** *or* give the agent the absolute path via a config key (`solver_path`).  
+4. **Test manually**: `ccx mymodel` → you should obtain `.dat`, `.frd`, `.log`.  
+5. **Re‑run the agent** – the workflow will now finish with *success* and all result files will be available.
+
+Once the CalculiX executable is reachable, the agent can launch the solver, generate the `.dat/.frd/.log` files, and the overall workflow completes normally. If you cannot install CalculiX locally, you can still use the generated `*.inp` file with any compatible FE solver or a cloud‑based CalculiX service.
+

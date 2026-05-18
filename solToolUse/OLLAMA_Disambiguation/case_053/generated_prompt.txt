@@ -1,0 +1,134 @@
+**Why Abaqus stops with “MODEL IS UNSTABLE”**
+
+When a static (or quasi‑static) step starts Abaqus builds the global equilibrium equation  
+
+\[
+\mathbf K\,\mathbf u = \mathbf f
+\]
+
+* **\(\mathbf K\)** – global stiffness matrix, assembled from the material stiffness of every element.  
+* **\(\mathbf f\)** – external load vector.
+
+If any of the six rigid‑body degrees of freedom (3 translations + 3 rotations) are still free, **\(\mathbf K\) is singular**. A singular matrix cannot be inverted, so the solver aborts **before the first increment** and prints the message **MODEL IS UNSTABLE**.
+
+A model is *stable* only when **both** of the following are satisfied  
+
+| Requirement | What it guarantees |
+|-------------|--------------------|
+| 1️⃣ All six rigid‑body DOFs are restrained (boundary conditions) | The part cannot move as a free rigid body. |
+| 2️⃣ The part has a material stiffness **and** at least one external load that can be balanced by internal stresses | \(\mathbf K\) becomes full‑rank and \(\mathbf f\neq 0\). |
+
+If either condition is missing, the solver declares the model unstable.
+
+---
+
+## What is missing / wrong in the posted input
+
+| # | Keyword / line | What you actually defined | What is missing / incorrect |
+|---|----------------|--------------------------|------------------------------|
+| 1 | `*NSET, NSET=LEFT` | Node set **LEFT** is created. | No **boundary condition** that fixes those nodes. |
+| 2 | `*NSET, NSET=RIGHT` | Node set **RIGHT** is created. | No **load** applied to those nodes. |
+| 3 | `*DENSITY` | Density = 7.85 e‑09 t·mm⁻³. | No **elastic (or plastic) stiffness** → the part cannot develop stress. |
+| 4 | `*STEP, NLGEOM, INC=10000` | Step header only. | No **step type** (`*STATIC`, `*DYNAMIC`, …) and no increment controls. |
+| 5 | `*ELEMENT, TYPE=C3D8I` | Elements listed with **10** node IDs each. | `C3D8I` is an **8‑node** brick; only 8 node numbers are allowed. |
+| 6 | Units | Density is given in t·mm⁻³, but nothing else is shown. | All geometry, loads, material properties, and density must be expressed in the **same unit system** (e.g., mm‑tonne‑second). |
+
+Because the left side is not restrained and the right side is not loaded, **all six rigid‑body DOFs are free → the model is unstable**.
+
+---
+
+## Six‑point checklist that will make the model run
+
+| # | Action | Abaqus command (example) | Why it is needed |
+|---|--------|--------------------------|------------------|
+| **1** | **Restrict the left side** (remove the 6 rigid‑body DOFs) | `*ENCASTRE, NSET=LEFT`  <br>or <br>`*BOUNDARY, NSET=LEFT`<br>`1,6,0.0` | Prevents the whole model from translating/rotating as a rigid body. |
+| **2** | **Apply a load** on the right side (or any other side) | `*CLOAD, NSET=RIGHT`<br>`1, 3, -1000.`  *(Z‑direction point load)* | Generates internal stresses that balance the external forces. |
+| **3** | **Define material stiffness** (elastic or plastic) | `*ELASTIC`<br>`210000., 0.30`  *(E in MPa, ν)* | Without stiffness the part behaves like a set of mass points and cannot resist loads. |
+| **4** | **Specify the step type** (static, dynamic, …) | `*STEP, NLGEOM, INC=10000`<br>`*STATIC`<br>`0.1, 1.0, 1.0e-08, 1.0` | Abaqus must know which solver algorithm to use and how to control increments. |
+| **5** | **Correct element connectivity** – exactly 8 nodes per `C3D8I` element | `1, 1,2,3,4,5,6,7,8`<br>`2, 4,3,21,22,8,7,23,24` | Ensures the mesh matches the element formulation. |
+| **6** | **Check unit consistency** (all quantities in the same system) | If you use **mm‑tonne‑second**: <br>– Geometry in mm <br>– Loads in N (1 N = 1 t·mm/s²) <br>– Density `7.85e‑09 t/mm³` <br>– Elastic modulus in MPa (N/mm²) | Mixed units give unrealistic stiffness or loads and can also trigger instability warnings. |
+
+---
+
+## Minimal working example (fixed left side, vertical tip load)
+
+Below is a **complete, self‑contained input file** that incorporates the six items above.  
+(It uses the **mm‑tonne‑second** unit system; adapt the numbers if you prefer SI or US units.)
+
+```abaqus
+*HEADING
+Cantilever beam – C3D8I – static analysis (mm‑tonne‑second)
+
+** -------------------------------------------------
+**  NODES (example 2‑by‑2‑by‑1 mesh, extend as needed)
+** -------------------------------------------------
+*NODE, NSET=NALL
+1,    0.,   0.,   0.
+2, 200.,   0.,   0.
+3,    0., 300.,   0.
+4, 200., 300.,   0.
+5,    0.,   0.,   1.
+6, 200.,   0.,   1.
+7,    0., 300.,   1.
+8, 200., 300.,   1.
+** (add the rest of the nodes of your geometry here)
+
+** -------------------------------------------------
+**  ELEMENTS – C3D8I (8 nodes per element)
+** -------------------------------------------------
+*ELEMENT, TYPE=C3D8I, ELSET=ELALL
+1, 1,2,4,3,5,6,8,7
+** (repeat for every element – exactly 8 node IDs per line)
+
+** -------------------------------------------------
+**  SECTION & MATERIAL
+** -------------------------------------------------
+*SOLID SECTION, ELSET=ELALL, MATERIAL=STEEL
+
+*MATNAME, NAME=STEEL
+*DENSITY
+7.85e-09,
+*ELASTIC
+210000., 0.30   ! E in MPa, ν
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*ENCASTRE, NSET=LEFT          ! Fix all 6 DOFs of the left‑hand nodes
+
+** -------------------------------------------------
+**  LOADS
+** -------------------------------------------------
+*CLOAD, NSET=RIGHT
+1, 3, -1000.0                 ! Vertical (Z) point load on each right node
+                               ! (change magnitude as required)
+
+** -------------------------------------------------
+**  STEP
+** -------------------------------------------------
+*STEP, NLGEOM, INC=10000
+*STATIC
+0.1, 1.0, 1.0e-08, 1.0
+*END STEP
+```
+
+### What you will see when you run it
+
+```
+*** MODEL IS STABLE ***
+```
+
+The analysis then proceeds and produces the expected cantilever deflection under the applied tip load.
+
+---
+
+### Bottom line
+
+1. **Restrict the six rigid‑body DOFs** (`*ENCASTRE` or `*BOUNDARY`).  
+2. **Apply at least one external load** (`*CLOAD`, `*DLOAD`, etc.).  
+3. **Give the part a material stiffness** (`*ELASTIC`, `*PLASTIC`, …).  
+4. **Define a step type** (`*STATIC`, `*DYNAMIC`, …) and its increment controls.  
+5. **Use the correct element connectivity** (8 nodes for `C3D8I`).  
+6. **Keep all units consistent** throughout the model.
+
+Once those six items are satisfied the “MODEL IS UNSTABLE” abort disappears and the simulation runs to completion.

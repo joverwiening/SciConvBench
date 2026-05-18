@@ -1,0 +1,47 @@
+Simulate 2D conjugate heat transfer (CHT) in a buoyant cavity with a central solid block using chtMultiRegionFoam.
+
+Solver: chtMultiRegionFoam (transient multi-region CHT solver)
+
+Geometry & mesh:
+- Overall domain: 1.0 m x 1.0 m x 0.01 m (2D via empty front/back).
+- Central solid block: 0.4 m x 0.4 m centered inside the cavity.
+- Create a single mesh with blockMesh and split it into 2 cellZones ('fluid' and 'solid') using topoSet.
+- Run: splitMeshRegions -cellZones -overwrite
+This produces region directories: constant/fluid, constant/solid, system/fluid, system/solid, and 0/fluid, 0/solid.
+
+Physical models:
+- Fluid region (constant/fluid/thermophysicalProperties): air as compressible perfect gas (heRhoThermo, perfectGas, Sutherland transport, Cp ~ 1005 J/kg/K, molWeight ~ 28.9 kg/kmol).
+  Use laminar or RAS turbulence; if using turbulence, set constant/fluid/momentumTransport (e.g., RAS kOmegaSST).
+- Solid region (constant/solid/thermophysicalProperties): copper-like solid (heSolidThermo with rho=8960 kg/m^3, Cp=385 J/kg/K, kappa=401 W/m/K).
+- Gravity (constant/g): (0 -9.81 0)
+
+Fields and boundary/initial conditions:
+Create separate initial-condition folders 0/fluid and 0/solid.
+- 0/fluid: U, p_rgh, T (and turbulence fields if enabled).
+- 0/solid: T.
+
+Initial conditions:
+- Fluid: U=(0 0 0), T=300 K, p_rgh=0.
+- Solid: T=300 K.
+
+Outer-wall thermal BCs:
+- Fluid outer walls:
+  - leftWall: T fixedValue 310 K
+  - rightWall: T fixedValue 290 K
+  - topWall/bottomWall: T zeroGradient (adiabatic)
+  - U noSlip everywhere on the cavity walls
+  - p_rgh fixedFluxPressure on all cavity walls
+- Solid outer boundary: only exists if the solid touches the outer domain; otherwise the solid has only interface patches.
+
+Interface coupling (fluid<->solid):
+At the region interface patches, use temperature-coupled baffle conditions:
+- fluid side: compressible::turbulentTemperatureCoupledBaffleMixed (or turbulentTemperatureCoupledBaffleMixed if running laminar)
+- solid side: compressible::turbulentTemperatureCoupledBaffleMixed
+The cht solver handles the thermal continuity via these coupled conditions; momentum is solved only in the fluid region.
+
+Numerics:
+- Provide system/<region>/fvSchemes and fvSolution.
+- For fluid, solve p_rgh with GAMG and U/T with smoothSolver; include PIMPLE settings (transient).
+- For solid, solve T with smoothSolver.
+
+Run control (system/controlDict): endTime 50; deltaT 0.01; adjustTimeStep yes; maxCo 0.5; writeInterval 1.

@@ -1,0 +1,45 @@
+Use FEniCS legacy (dolfin) to solve a small‑strain linear elasticity problem in 2‑D plane‑stress with unit thickness.
+
+Define material constants:
+- Young’s modulus E = 70e9 Pa
+- Poisson’s ratio ν = 0.33
+- Density ρ = 2700 kg/m³
+- Gravitational acceleration g = 9.81 m/s² (body force = (0, ‑ρ g))
+
+Construct the stepped polygon domain with vertices (0,0) → (0.8,0) → (0.8,0.2) → (0.5,0.2) → (0.5,0.5) → (0.3,0.5) → (0.3,0.2) → (0,0.2) → back to (0,0).
+
+Generate a conforming triangular mesh of exactly 72 linear triangles by meshing each rectangular sub‑region with uniform quadrilateral cells and splitting each cell into two triangles:
+- Bottom rectangle (0 ≤ x ≤ 0.8, 0 ≤ y ≤ 0.2): 6 divisions in x, 3 divisions in y → 18 quads → 36 triangles.
+- Left step (0 ≤ x ≤ 0.3, 0.2 ≤ y ≤ 0.5): 5 divisions in x, 2 divisions in y → 10 quads → 20 triangles.
+- Middle step (0.3 ≤ x ≤ 0.5, 0.2 ≤ y ≤ 0.5): 4 divisions in x, 2 divisions in y → 8 quads → 16 triangles.
+
+Define the vector‑valued displacement function space V = VectorFunctionSpace(mesh, "Lagrange", degree=1) and the trial and test functions u, v ∈ V.
+
+Use the reduced plane‑stress constitutive matrix
+D = (E/(1‑ν**2)) * [[1, ν, 0],
+                   [ν, 1, 0],
+                   [0, 0, (1‑ν)/2]]
+
+Form the strain ε(u) = sym(∇u) and the stress σ(u) = D·ε(u) (as a 3‑component vector for σ_xx, σ_yy, σ_xy).
+
+Define the weak form:
+a = inner(σ(u), ε(v)) * dx
+L = dot(Constant((0, -ρ*g)), v) * dx   # gravity body force
+
+Apply Neumann traction on the top horizontal segment y = 0.5 for 0.3 ≤ x ≤ 0.5:
+t_y(x) = -8000 * x   (Pa)
+Define a SubDomain for that segment, create a Measure ds with that subdomain, and add
+L += t_y(x) * v[1] * ds(top_traction)
+
+Apply Dirichlet condition u = (0,0) on the entire bottom edge y = 0 (fixed boundary).
+
+Assemble the linear system and solve with a direct solver, e.g. solve(A, u.vector(), b, "lu").
+
+Compute the von Mises stress from the Cauchy stress components:
+σ_vm = sqrt(σ_xx**2 - σ_xx*σ_yy + σ_yy**2 + 3*σ_xy**2)
+
+Project the von Mises field onto a scalar FunctionSpace for visualization.
+
+Save the displacement vector field and the von Mises scalar field to VTK/XDMF files for post‑processing.
+
+The code must be written for the legacy dolfin API, use only linear triangular elements, and employ the direct LU solver.

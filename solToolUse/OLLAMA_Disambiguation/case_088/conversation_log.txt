@@ -1,0 +1,2121 @@
+=== 2026-04-17 20:24:33 ===
+Q: **What the error means**
+
+`*BOUNDARY,FIXED` is a keyword that can only be used in an **explicit‑dynamic** step.  
+Your model is a static analysis (the step has no *DYNAMIC* or *EXPLICIT* option), so when Abaqus reads the second step it stops with
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In a static (or implicit‑dynamic) analysis the way to “fix” a node set is
+with the **ENCASTRE** option (or with a displacement‑type boundary
+condition).  
+
+---
+
+**How to fix it**
+
+Replace the second step with a standard static step and use the
+`ENCASTRE` option (or a displacement‑type definition).  The simplest
+form is:
+
+```abaqus
+*STEP
+*BOUNDARY, ENCASTRE
+FIX
+*END STEP
+```
+
+or, if you prefer to list the DOFs explicitly:
+
+```abaqus
+*STEP
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! U1 = U2 = U3 = 0
+*END STEP
+```
+
+`FIX` is the node set that contains the nodes you want to hold
+completely fixed (you already defined it with `*NSET, NSET=FIX`).
+
+---
+
+**A complete minimal example**
+
+Below is a trimmed version of your input that runs without the error.
+Only the parts that are needed to illustrate the fix are shown; the
+rest of the model (material, elements, etc.) can stay exactly as you
+have written it.
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis
+*PREPRINT, ECHO=YES
+*NODE
+...                ! (your node list)
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                ! (your element list)
+*MATERIAL, NAME=EL
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE
+FIX
+*END STEP
+```
+
+If you also need to apply a load, add a separate step (or a load
+definition in the same step) using `*CLOAD`, `*DLOAD`, or a prescribed
+displacement, e.g.:
+
+```abaqus
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, 100.0   ! example point load in the X‑direction
+*END STEP
+```
+
+---
+
+**Summary**
+
+- `*BOUNDARY,FIXED` → **not allowed** in a static step.  
+- Use `*BOUNDARY, ENCASTRE` (or `*BOUNDARY, TYPE=DISPLACEMENT`) to fix
+  nodes in a static analysis.  
+- Keep the node set that you want to hold fixed (here `FIX`) and refer
+  to it in the `*BOUNDARY` card.  
+
+After making this change the model will run, and you can then add the
+desired loads in the appropriate step.
+A: **Answer – why the error occurs and how to correct it**
+
+`*BOUNDARY,FIXED` is a **keyword that belongs only to an explicit‑dynamic step** (the step must be declared with `*DYNAMIC, EXPLICIT`).  
+In a static or implicit‑dynamic analysis Abaqus does **not** recognise the
+`FIXED` option, therefore when the second step is read the program stops
+with  
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+To “fix” a set of nodes in a static (or implicit‑dynamic) analysis you must
+use one of the following forms:
+
+| Form | When to use | What it does |
+|------|-------------|--------------|
+| `*BOUNDARY, ENCASTRE` | Any static/implicit‑dynamic step | All three translational DOFs (U1‑U3) are set to zero (the node is completely restrained). |
+| `*BOUNDARY, TYPE=DISPLACEMENT` | Any static/implicit‑dynamic step | Allows you to list the individual DOFs you want to prescribe (e.g. `U1=0, U2=0, U3=0`). |
+| `*BOUNDARY, TYPE=ROTATION` | When you need to restrain rotational DOFs (for beam/ shell elements). |
+
+Below is a **complete, minimal, working input file** that shows the
+necessary changes.  Only the parts that are required for the fix are
+shown; everything else (material definition, element connectivity, etc.)
+can stay exactly as you have written it.
+
+---
+
+## 1. Full corrected input (minimal example)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes with ENCASTRE)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! your node list (unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! your element list (unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! example – keep your own material data
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE
+FIX                     ! <-- this line replaces *BOUNDARY,FIXED
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load in X‑direction on node set LOAD
+*END STEP
+```
+
+### What changed?
+
+| Line | Old version | New version | Reason |
+|------|-------------|-------------|--------|
+| `*BOUNDARY,FIXED` | `*BOUNDARY,FIXED` | `*BOUNDARY, ENCASTRE` | `FIXED` is illegal in a static step; `ENCASTRE` does the same job (U1=U2=U3=0). |
+| `FIX` (node‑set name) | unchanged | unchanged | The node set that you already defined (`FIX`) is now referenced by the ENCASTRE card. |
+| Load step | optional | added `*CLOAD` (or any other load definition you need) | Shows how to apply a load after the structure has been restrained. |
+
+---
+
+## 2. Alternative – explicit DOF list
+
+If you prefer to write the three DOFs explicitly (or you only want to
+restrain a subset of them) you can replace the `ENCASTRE` card with a
+`TYPE=DISPLACEMENT` card:
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0        ! U1 = U2 = U3 = 0 for every node in set FIX
+*END STEP
+```
+
+*Explanation of the fields*  
+
+- **FIX** – name of the node set.  
+- **1, 3** – start‑DOF = 1 (U1), end‑DOF = 3 (U3).  
+- **0.0** – prescribed displacement value.
+
+You could also write three separate lines:
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 1, 0.0
+FIX, 2, 2, 0.0
+FIX, 3, 3, 0.0
+```
+
+Both forms are accepted by a static/implicit‑dynamic analysis.
+
+---
+
+## 3. Adding other types of loads (optional)
+
+The example above uses a point load (`*CLOAD`).  Depending on what you need,
+you can also use:
+
+| Load type | Keyword | Typical use |
+|-----------|---------|-------------|
+| Pressure on a surface | `*DLOAD` (type = PRESSURE) | Fluid pressure, contact pressure |
+| Distributed body force | `*DLOAD` (type = GRAVITY) | Gravity, centrifugal force |
+| Prescribed displacement (instead of fixing) | `*BOUNDARY, TYPE=DISPLACEMENT` with a non‑zero value | Apply a known displacement |
+| Temperature field | `*INITIAL CONDITIONS, TYPE=TEMPERATURE` | Thermal‑mechanical coupling |
+
+Just make sure that the load step **follows** the step in which the
+boundary condition is applied (or you can combine them in a single step
+if the load is time‑independent).
+
+---
+
+## 4. Quick checklist – “Did I fix the model?”
+
+1. **Step type** – The step that contains the boundary condition is
+   `*STATIC` (or `*DYNAMIC, IMPLICIT`). No `EXPLICIT` keyword is present.
+2. **Boundary card** – Uses either `*BOUNDARY, ENCASTRE` **or**
+   `*BOUNDARY, TYPE=DISPLACEMENT`. No `FIXED` option.
+3. **Node set name** – The node set (`FIX`) is defined **before** the step.
+4. **Load definition** – Added in a later step (or the same step if
+   appropriate) with `*CLOAD`, `*DLOAD`, etc.
+5. **Run** – Submit the job; Abaqus should now read the input without
+   the “boundary condition not compatible with the analysis type”
+   error.
+
+---
+
+### TL;DR
+
+* `*BOUNDARY,FIXED` → **only** for explicit‑dynamic steps.  
+* For static/implicit‑dynamic analyses use **`*BOUNDARY, ENCASTRE`** (or
+  `*BOUNDARY, TYPE=DISPLACEMENT` with DOFs 1‑3 set to 0).  
+* Keep your node set (`FIX`) and reference it on the ENCASTRE card.  
+* Add loads in a separate step (or the same step) with `*CLOAD`,
+  `*DLOAD`, etc.
+
+After making the change the model will run without the compatibility
+error, and you can continue to apply the loads you need.
+
+=== 2026-04-17 20:25:11 ===
+Q: **Why the error occurs**
+
+`*BOUNDARY,FIXED` is a keyword that can be used **only in an explicit‑dynamic
+step** (the step must be declared with `*DYNAMIC, EXPLICIT`).  
+Your model is a static analysis – the first step is a normal static step
+(and the second step has no *DYNAMIC* or *EXPLICIT* option).  
+When Abaqus reads the second step it finds a boundary condition that is
+not allowed for the analysis type and stops with
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+**How to fix it**
+
+In a static (or implicit‑dynamic) analysis the way to “fix” a node set is
+with the **ENCASTRE** option (or a displacement‑type boundary condition).
+Replace the second step by a normal static step and use `ENCASTRE`
+instead of `FIXED`.
+
+---
+
+### Minimal corrected input (only the parts that changed)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! keep your own material data
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE
+FIX                     ! <-- replaces *BOUNDARY,FIXED
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+**Explanation of the change**
+
+- `*BOUNDARY,FIXED` → **removed** (illegal in a static step).  
+- `*BOUNDARY, ENCASTRE` → allowed in any static/implicit‑dynamic step; it
+  sets U1 = U2 = U3 = 0 for every node in the set `FIX`.  
+- The node set `FIX` is already defined earlier in the input, so it can be
+  referenced directly on the ENCASTRE card.  
+
+If you prefer to list the three DOFs explicitly you can use the
+displacement form instead:
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0        ! U1 = U2 = U3 = 0 for all nodes in set FIX
+*END STEP
+```
+
+Both `ENCASTRE` and `TYPE=DISPLACEMENT` are compatible with static
+analyses.
+
+---
+
+### Quick checklist
+
+1. **Step type** – static (`*STATIC`) or implicit dynamic (`*DYNAMIC,
+   IMPLICIT`). No explicit step.
+2. **Boundary card** – `*BOUNDARY, ENCASTRE` (or `*BOUNDARY,
+   TYPE=DISPLACEMENT` with DOFs 1‑3 = 0).  
+3. **Node set** – `FIX` is defined before the step and referenced on the
+   boundary card.
+4. **Loads** – added in a later step (`*CLOAD`, `*DLOAD`, etc.) if needed.
+
+After making this change the model will read correctly and you can
+continue with the load application.
+A: ## Why the error occurs  
+
+`*BOUNDARY,FIXED` is a **keyword that can be used only in an explicit‑dynamic step**  
+(`*DYNAMIC, EXPLICIT`).  
+
+In your model the first step is a normal static step (`*STATIC`) and the
+second step is also a static step (no `*DYNAMIC` or `*EXPLICIT` option).  
+When Abaqus reads the second step it finds a boundary condition that is
+not allowed for the analysis type and aborts with  
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In other words, you are trying to apply a “fixed” condition in a static
+analysis, which Abaqus does not permit.
+
+---
+
+## How to fix it  
+
+### 1. Use a boundary condition that is allowed in static (or implicit‑dynamic) analyses  
+
+* **ENCASTRE** – the simplest way to fully restrain a node set (U1=U2=U3=0).  
+* **DISPLACEMENT** – the generic form of `*BOUNDARY` where you specify the
+  DOFs and the prescribed value (e.g. `1,3,0.0`).
+
+Both of these are legal in any static or implicit‑dynamic step.
+
+### 2. Replace the offending card  
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX
+```
+
+or, equivalently,
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+### 3. Keep the rest of the model unchanged (material, mesh, loads, etc.).
+
+---
+
+## Minimal corrected input (only the parts that changed)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! keep your own material data
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE
+FIX                     ! <-- replaces *BOUNDARY,FIXED
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+If you prefer the generic displacement form, replace the two lines inside the first step with:
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both versions give the same physical result (all three translational DOFs
+of every node in set **FIX** are restrained).
+
+---
+
+## Quick checklist to avoid the same mistake again  
+
+| Item | What to verify |
+|------|----------------|
+| **Step type** | Is the step declared as `*STATIC`, `*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`? Use `*BOUNDARY,FIXED` **only** with `*DYNAMIC, EXPLICIT`. |
+| **Boundary card** | For static/implicit‑dynamic steps use `*BOUNDARY, ENCASTRE` or `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| **Node set** | The node set (`FIX` in the example) must be defined **before** it is referenced. |
+| **Loads** | Apply loads (`*CLOAD`, `*DLOAD`, etc.) in a later step after the restraints are set. |
+| **Consistency** | No mixed use of explicit‑only keywords in a static analysis. |
+
+---
+
+## Alternative approaches (if you really need `*BOUNDARY,FIXED`)
+
+* **Switch to an explicit‑dynamic analysis** – declare the step as  
+
+  ```abaqus
+  *STEP
+  *DYNAMIC, EXPLICIT
+  *BOUNDARY, FIXED
+  FIX
+  *END STEP
+  ```
+
+  This is rarely needed for a simple static cantilever; it will also
+  change the solution algorithm (mass‑scaled, time‑increment control, etc.).
+
+* **Use a very stiff spring** – sometimes people emulate a “fixed” condition
+  in a static analysis by applying a spring with an extremely high stiffness
+  (`*SPRING, TYPE=COMPRESSION`, `K=1e12`). This is more cumbersome and
+  generally unnecessary when `ENCASTRE` is available.
+
+---
+
+## Summary  
+
+*The error is caused by using `*BOUNDARY,FIXED` in a static step.*  
+Replace it with a boundary condition that is allowed in static/implicit‑dynamic
+analyses (`ENCASTRE` or `TYPE=DISPLACEMENT`). After the change the model
+reads correctly and you can proceed with the load step(s).  
+
+If you follow the checklist above you should not encounter this incompatibility again.
+
+=== 2026-04-17 20:25:42 ===
+Q: **Why the error occurs**
+
+`*BOUNDARY,FIXED` is a keyword that **may be used only in an explicit‑dynamic step**  
+(the step must be declared with `*DYNAMIC, EXPLICIT`).  
+
+Your model is a static analysis – the first step is a normal static step
+(`*STATIC`) and the second step also has no explicit‑dynamic option.  
+When Abaqus reads the second step it finds a boundary condition that is
+not allowed for the analysis type and aborts with  
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In other words, you are trying to apply a “fixed” condition in a static
+analysis, which Abaqus does not permit.
+
+---
+
+**How to fix it**
+
+In a static (or implicit‑dynamic) analysis the way to fully restrain a
+node set is to use the **ENCASTRE** option (or the generic displacement
+form of `*BOUNDARY`). Replace the offending card with one of the
+following:
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX                ! all three translational DOFs of every node in set FIX are set to zero
+```
+
+or, equivalently,
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0    ! prescribe U1 = U2 = U3 = 0 for the nodes in set FIX
+```
+
+Both cards are legal in any static or implicit‑dynamic step.
+
+---
+
+### Minimal corrected input (only the parts that changed)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! keep your own material data
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE
+FIX                     ! <-- replaces *BOUNDARY,FIXED
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+If you prefer the generic displacement form, replace the two lines inside the first step with:
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both versions give the same physical result (all three translational
+DOFs of every node in set **FIX** are restrained).
+
+---
+
+### Quick checklist to avoid the same mistake again
+
+| Check | What to verify |
+|-------|----------------|
+| **Step type** | `*BOUNDARY,FIXED` → only with `*DYNAMIC, EXPLICIT`. |
+| **Static/implicit step** | Use `*BOUNDARY, ENCASTRE` or `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| **Node set** | The node set (`FIX`) must be defined before it is referenced. |
+| **Loads** | Apply loads (`*CLOAD`, `*DLOAD`, etc.) in a later step after the restraints are set. |
+
+---
+
+**Summary**
+
+The error is caused by using `*BOUNDARY,FIXED` in a static analysis.
+Replace it with a boundary condition that is allowed in static/implicit‑dynamic
+steps (`ENCASTRE` or `TYPE=DISPLACEMENT`). After this change the input
+file is compatible with the analysis type, and the model will run
+without the reported error.
+A: **Why the error occurs**
+
+`*BOUNDARY, FIXED` is a **keyword that may be used only in an explicit‑dynamic step**  
+(the step must be declared with `*DYNAMIC, EXPLICIT`).  
+
+Your model is a **static analysis** – the first step is `*STATIC` and the second
+step is also a static step. When Abaqus reads the second step it finds a
+boundary condition that is not allowed for the analysis type and aborts with  
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In other words, you are trying to apply a “fixed” condition in a static
+analysis, which Abaqus does not permit.
+
+---
+
+## How to fix it
+
+### 1. Use a boundary condition that is legal in static (or implicit‑dynamic) steps  
+
+| Desired effect | Static‑compatible card |
+|----------------|------------------------|
+| Fully restrain all translational DOFs of a node set | `*BOUNDARY, ENCASTRE` |
+| Fully restrain all translational DOFs (generic form) | `*BOUNDARY, TYPE=DISPLACEMENT`<br>`<node‑set>, 1, 3, 0.0` |
+
+Both give the same physical result (U1 = U2 = U3 = 0 for every node in the set).
+
+### 2. Replace the offending line(s)
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE          ! <-- replace *BOUNDARY,FIXED
+FIX                          ! name of the node set that must be fixed
+*END STEP
+```
+
+or, using the generic displacement form:
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0               ! prescribe U1‑U3 = 0 for the nodes in set FIX
+*END STEP
+```
+
+### 3. Keep the rest of the model unchanged (materials, elements, loads, etc.).
+
+---
+
+## Minimal corrected input (only the parts that changed)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+If you prefer the generic displacement form, replace the two lines inside the first step with:
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both versions give the same physical result (all three translational DOFs of every node in set **FIX** are restrained).
+
+---
+
+## Quick checklist – avoid the same mistake again
+
+| What to check | Correct setting |
+|----------------|-----------------|
+| **Step type** | `*BOUNDARY,FIXED` → only with `*DYNAMIC, EXPLICIT`. |
+| **Static/implicit step** | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| **Node set definition** | The node set (e.g., `FIX`) must be defined **before** it is referenced. |
+| **Load application** | Apply loads (`*CLOAD`, `*DLOAD`, etc.) in a later step after the restraints are set. |
+| **Material & section** | Ensure material and section definitions are placed before the first step. |
+
+---
+
+### TL;DR
+
+*The error is caused by using `*BOUNDARY,FIXED` in a static analysis.*  
+Replace it with a static‑compatible boundary condition (`ENCASTRE` or the
+generic displacement form). After this change the input file is compatible
+with the analysis type and the model will run without the reported error.
+
+=== 2026-04-17 20:26:11 ===
+Q: **Why the error occurs**
+
+`*BOUNDARY, FIXED` is an **explicit‑dynamic only** keyword.  
+It may be used only in a step that is declared as  
+
+```abaqus
+*DYNAMIC, EXPLICIT
+```
+
+Your model is a static analysis (`*STATIC` steps). When Abaqus reads the
+second step it finds a boundary condition that is not allowed for a
+static analysis and aborts with
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+So the problem is the use of `*BOUNDARY,FIXED` in a static step.
+
+---
+
+**How to fix it**
+
+In a static (or implicit‑dynamic) analysis you must use a boundary
+condition that is allowed for that analysis type.  
+To fully restrain a node set use either
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX
+```
+
+or the generic displacement form
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both cards set U1 = U2 = U3 = 0 for every node in the set **FIX** and are
+legal in any static or implicit‑dynamic step.
+
+---
+
+### Minimal corrected input (only the changed parts)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+(If you prefer the generic displacement form, replace the two lines inside the first step with  
+`*BOUNDARY, TYPE=DISPLACEMENT`  
+`FIX, 1, 3, 0.0`.)
+
+---
+
+**Quick checklist to avoid the same mistake**
+
+1. `*BOUNDARY,FIXED` → only with `*DYNAMIC, EXPLICIT`.  
+2. For static or implicit‑dynamic steps use `ENCASTRE` or `TYPE=DISPLACEMENT`.  
+3. Define the node set (`FIX`) before referencing it on the boundary card.  
+4. Apply loads in a later step after the restraints are set.
+
+After making the above change the input file is compatible with the
+analysis type, and the model will run without the reported error.
+A: **Why the error occurs**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY, FIXED` written as `*BOUNDARY, FIXED`) is an **explicit‑dynamic only** keyword.  
+Abaqus allows it **only** in a step that is declared
+
+```abaqus
+*DYNAMIC, EXPLICIT
+```
+
+In your model the analysis is static (`*STATIC`). When Abaqus reads the
+second step it finds a boundary condition that is not permitted for a
+static step, so it aborts with the message
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In short: you are trying to use a boundary‑condition card that belongs to
+explicit dynamics in a static (or implicit‑dynamic) analysis.
+
+---
+
+**How to fix it**
+
+For a static (or implicit‑dynamic) analysis you must use a boundary‑
+condition that is legal for that analysis type.  
+To fully restrain a node set you can use either
+
+1. **Encastre (all three translational DOFs fixed)**  
+
+   ```abaqus
+   *BOUNDARY, ENCASTRE
+   FIX
+   ```
+
+2. **Generic displacement form** (the same effect, but written
+   explicitly)  
+
+   ```abaqus
+   *BOUNDARY, TYPE=DISPLACEMENT
+   FIX, 1, 3, 0.0
+   ```
+
+Both cards set `U1 = U2 = U3 = 0` for every node in the set **FIX** and are
+legal in any `*STATIC` or `*DYNAMIC, IMPLICIT` step.
+
+---
+
+### Minimal corrected input (only the parts that change)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+---
+
+### Quick checklist – avoid the same mistake again
+
+| Action | Allowed in … | Example |
+|--------|--------------|---------|
+| `*BOUNDARY, FIXED` | `*DYNAMIC, EXPLICIT` only | `*BOUNDARY, FIXED` |
+| `*BOUNDARY, ENCASTRE` | `*STATIC`, `*DYNAMIC, IMPLICIT`, `*DYNAMIC, EXPLICIT` | `*BOUNDARY, ENCASTRE` |
+| `*BOUNDARY, TYPE=DISPLACEMENT` | All analysis types | `*BOUNDARY, TYPE=DISPLACEMENT` |
+| Define node set before using it | – | `*NSET, NSET=FIX …` |
+| Apply loads **after** restraints are defined | – | `*CLOAD` in a later step |
+
+---
+
+**Result**
+
+After replacing the illegal `*BOUNDARY, FIXED` card with either
+`*BOUNDARY, ENCASTRE` (or the displacement form) the input file is
+compatible with the static analysis type, and Abaqus will run without
+the reported error.
+
+=== 2026-04-17 20:26:41 ===
+Q: **Why the error occurs**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is an **explicit‑dynamic‑only** keyword.  
+It may be used only in a step that is declared as  
+
+```abaqus
+*DYNAMIC, EXPLICIT
+```
+
+Your model is a **static** analysis (`*STATIC` steps). When Abaqus reads the
+second step it finds a boundary‑condition card that is not permitted for a
+static step, so it aborts with
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In short, a boundary‑condition that belongs to explicit dynamics is being
+used in a static analysis.
+
+---
+
+**How to fix it**
+
+For a static (or implicit‑dynamic) analysis you must use a boundary
+condition that is legal for that analysis type.  
+To fully restrain a node set you can use either of the following
+cards (both are allowed in `*STATIC` steps):
+
+1. **Encastre** – fixes all three translational DOFs:
+
+   ```abaqus
+   *BOUNDARY, ENCASTRE
+   FIX          ! name of the node set to be fixed
+   ```
+
+2. **Generic displacement form** (same effect, written explicitly):
+
+   ```abaqus
+   *BOUNDARY, TYPE=DISPLACEMENT
+   FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+   ```
+
+Both cards set `U1 = U2 = U3 = 0` for every node in the set **FIX** and are
+legal in any static or implicit‑dynamic step.
+
+---
+
+### Minimal corrected input (only the changed parts)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*(If you prefer the generic displacement form, replace the two lines inside the first step with  
+`*BOUNDARY, TYPE=DISPLACEMENT`  
+`FIX, 1, 3, 0.0`.)*
+
+---
+
+### Quick checklist – avoid the same mistake again
+
+| What to check | Correct setting |
+|---------------|-----------------|
+| Use of `*BOUNDARY,FIXED` | Only with `*DYNAMIC, EXPLICIT`. |
+| Static/implicit steps | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition | Must be defined before it is referenced. |
+| Load application | Apply loads (`*CLOAD`, `*DLOAD`, …) in a later step after restraints. |
+
+After replacing the illegal `*BOUNDARY,FIXED` card with either
+`*BOUNDARY, ENCASTRE` (or the displacement form), the input file is
+compatible with the static analysis type and the model will run without
+the reported error.
+A: **Why the error occurs**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is an **explicit‑dynamic‑only** keyword.  
+It may be used only in a step that is declared as  
+
+```abaqus
+*DYNAMIC, EXPLICIT
+```
+
+Your model contains only `*STATIC` steps. When Abaqus reads the second step it finds a
+boundary‑condition card that is not permitted for a static step, therefore it aborts with
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In short – a boundary condition that belongs to **explicit dynamics** is being used in a **static** (or implicit‑dynamic) analysis.
+
+---
+
+## How to fix it
+
+For a static (or implicit‑dynamic) analysis you must use a boundary‑condition card that is legal for that analysis type.  
+To fully restrain a node set you can use either of the following forms – both are accepted in `*STATIC` steps.
+
+| Form | Syntax | What it does |
+|------|--------|--------------|
+| **Encastre** (fixes all three translational DOFs) | `*BOUNDARY, ENCASTRE`<br>`<node‑set‑name>` | Sets `U1 = U2 = U3 = 0` for every node in the set |
+| **Generic displacement form** (explicitly prescribes the three DOFs) | `*BOUNDARY, TYPE=DISPLACEMENT`<br>`<node‑set‑name>, 1, 3, 0.0` | Same effect as *ENCASTRE* but written as a displacement prescription |
+
+Both cards are legal in any static or implicit‑dynamic step.
+
+---
+
+### Minimal corrected input (only the changed parts)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! name of the node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+> **If you prefer the generic displacement form**, replace the two lines inside the first step with  
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives give the same physical constraint (all translational DOFs = 0) and are accepted by a static analysis.
+
+---
+
+## Quick checklist – avoid the same mistake again
+
+| What to verify | Correct setting |
+|----------------|-----------------|
+| **Use of `*BOUNDARY,FIXED`** | Only together with `*DYNAMIC, EXPLICIT`. |
+| **Static/implicit steps** | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| **Node‑set definition** | Must be defined **before** it is referenced in a boundary‑condition card. |
+| **Load application** | Apply loads (`*CLOAD`, `*DLOAD`, `*PRESCRIBED DISPLACEMENT`, …) **after** the restraints have been defined, typically in a later step. |
+| **Analysis type consistency** | All cards used in a step must be compatible with the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+---
+
+### Bottom line
+
+Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form (`*BOUNDARY, TYPE=DISPLACEMENT`). After this change the input file is compatible with the static analysis type and Abaqus will run without the reported error.
+
+=== 2026-04-17 20:27:12 ===
+Q: **Why the error appears**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is an **explicit‑dynamic‑only** keyword.  
+Abaqus allows it only in a step that is declared as
+
+```abaqus
+*DYNAMIC, EXPLICIT
+```
+
+Your model contains only `*STATIC` steps. When Abaqus reads the second step it finds a
+boundary‑condition card that is not permitted for a static analysis, so it aborts with
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In short – a boundary‑condition that belongs to explicit dynamics is being used in a static (or implicit‑dynamic) analysis.
+
+---
+
+## How to fix it
+
+For a static (or implicit‑dynamic) analysis you must use a boundary‑condition card that is legal for that analysis type.  
+To fully restrain a node set you can use either of the following forms – both are accepted in `*STATIC` steps.
+
+### 1. Encastre (fixes all three translational DOFs)
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX          ! name of the node set to be fully restrained
+```
+
+### 2. Generic displacement form (explicitly prescribes the three DOFs)
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+```
+
+Both cards set `U1 = U2 = U3 = 0` for every node in the set **FIX** and are legal in any `*STATIC` (or `*DYNAMIC, IMPLICIT`) step.
+
+---
+
+### Minimal corrected input (only the parts that change)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives give the same physical constraint (all translational DOFs = 0) and are accepted by a static analysis.
+
+---
+
+## Quick checklist – avoid the same mistake again
+
+| What to verify | Correct setting |
+|----------------|-----------------|
+| Use of `*BOUNDARY,FIXED` | Only with `*DYNAMIC, EXPLICIT`. |
+| Static/implicit steps | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition | Must be defined **before** it is referenced. |
+| Load application | Apply loads (`*CLOAD`, `*DLOAD`, etc.) **after** the restraints are defined, typically in a later step. |
+| Analysis‑type consistency | All cards in a step must be compatible with the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+---
+
+**Bottom line:** Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form (`*BOUNDARY, TYPE=DISPLACEMENT`). After this change the input file is compatible with the static analysis type, and Abaqus will run without the reported error.
+A: **Why the error occurs**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is an **explicit‑dynamic‑only** keyword.  
+Abaqus will accept it **only** in a step that is declared
+
+```abaqus
+*DYNAMIC, EXPLICIT
+```
+
+Your model contains only `*STATIC` steps. When Abaqus reads the second step it finds a
+boundary‑condition card that is not permitted for a static (or implicit‑dynamic) analysis, so it aborts with
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In short – a boundary‑condition that belongs to explicit dynamics is being used in a static (or implicit‑dynamic) analysis.
+
+---
+
+## How to fix it
+
+Replace the illegal `*BOUNDARY,FIXED` card with a boundary‑condition that is legal for static (or implicit‑dynamic) steps.  
+Both of the following forms will fully restrain the node set **FIX** (U1 = U2 = U3 = 0) and are accepted in any `*STATIC` (or `*DYNAMIC, IMPLICIT`) step.
+
+### Option 1 – Encastre (the shortest form)
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX          ! name of the node set to be fully restrained
+```
+
+### Option 2 – Generic displacement form
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+```
+
+Either option can be used; choose the one you prefer.
+
+---
+
+## Minimal corrected input (only the parts that change)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives give the same physical constraint (all translational DOFs = 0) and are accepted by a static analysis.
+
+---
+
+## Quick checklist – avoid the same mistake again
+
+| What to verify | Correct setting |
+|----------------|-----------------|
+| Use of `*BOUNDARY,FIXED` | Only with `*DYNAMIC, EXPLICIT`. |
+| Static/implicit steps | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition | Must be defined **before** it is referenced. |
+| Load application | Apply loads (`*CLOAD`, `*DLOAD`, etc.) **after** the restraints are defined, typically in a later step. |
+| Analysis‑type consistency | All cards in a step must be compatible with the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+---
+
+**Bottom line:** Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form (`*BOUNDARY, TYPE=DISPLACEMENT`). After this change the input file is compatible with the static analysis type, and Abaqus will run without the reported error.
+
+=== 2026-04-17 20:27:42 ===
+Q: **Why the error appears**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is an **explicit‑dynamic‑only** keyword.  
+Abaqus will accept it only in a step that is declared as  
+
+```abaqus
+*DYNAMIC, EXPLICIT
+```
+
+Your model contains only `*STATIC` steps. When Abaqus reads the second step it finds a
+boundary‑condition card that is not permitted for a static (or implicit‑dynamic) analysis, so it aborts with
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In short – a boundary condition that belongs to explicit dynamics is being used in a static analysis.
+
+---
+
+## How to fix it
+
+Replace the illegal `*BOUNDARY,FIXED` card with a boundary‑condition that is legal for static (or implicit‑dynamic) steps.  
+Both of the following forms will fully restrain the node set **FIX** (U1 = U2 = U3 = 0) and are accepted in any `*STATIC` step.
+
+### Option 1 – Encastre (shortest form)
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX          ! name of the node set to be fully restrained
+```
+
+### Option 2 – Generic displacement form
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+```
+
+Either option can be used; choose the one you prefer.
+
+---
+
+## Minimal corrected input (only the parts that change)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives give the same physical constraint (all translational DOFs = 0) and are accepted by a static analysis.
+
+---
+
+## Quick checklist – avoid the same mistake again
+
+| What to verify | Correct setting |
+|----------------|-----------------|
+| Use of `*BOUNDARY,FIXED` | Only with `*DYNAMIC, EXPLICIT`. |
+| Static/implicit steps | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition | Must be defined **before** it is referenced. |
+| Load application | Apply loads (`*CLOAD`, `*DLOAD`, etc.) **after** the restraints are defined, typically in a later step. |
+| Analysis‑type consistency | All cards in a step must be compatible with the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+---
+
+**Bottom line:** Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form (`*BOUNDARY, TYPE=DISPLACEMENT`). After this change the input file is compatible with the static analysis type, and Abaqus will run without the reported error.
+A: **Why the error occurs**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is a **keyword that can only be used in an explicit‑dynamic step** (`*DYNAMIC, EXPLICIT`).  
+Your model contains only `*STATIC` steps, so when Abaqus reads the second step it finds a boundary‑condition that is illegal for a static (or implicit‑dynamic) analysis and aborts with  
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In short – a boundary condition that belongs to **explicit dynamics** is being used in a **static** analysis.
+
+---
+
+## How to fix it
+
+Replace the illegal `*BOUNDARY,FIXED` card with a boundary‑condition that is allowed in static (or implicit‑dynamic) steps.  
+Both of the forms below fully restrain the node set **FIX** (U1 = U2 = U3 = 0) and are accepted by any `*STATIC` step.
+
+### Option 1 – Encastre (shortest form)
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX          ! name of the node set to be fully restrained
+```
+
+### Option 2 – Generic displacement form
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+```
+
+Choose whichever you prefer; the physics is identical.
+
+---
+
+## Minimal corrected input (only the parts that change)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives give the same physical constraint (all translational DOFs = 0) and are accepted by a static analysis.
+
+---
+
+## Quick checklist – avoid the same mistake again
+
+| What to verify | Correct setting |
+|----------------|-----------------|
+| Use of `*BOUNDARY,FIXED` | **Only** with `*DYNAMIC, EXPLICIT`. |
+| Static/implicit steps | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition | Must be defined **before** it is referenced. |
+| Load application | Apply loads (`*CLOAD`, `*DLOAD`, etc.) **after** the restraints are defined, typically in a later step. |
+| Analysis‑type consistency | All cards in a step must be compatible with the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+---
+
+**Bottom line:**  
+Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form (`*BOUNDARY, TYPE=DISPLACEMENT`). After this change the input file is compatible with the static analysis type, and Abaqus will run without the reported error.
+
+=== 2026-04-17 20:28:13 ===
+Q: **Why the error appears**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is an **explicit‑dynamic‑only** keyword.  
+Abaqus accepts it only in a step that is declared
+
+```abaqus
+*DYNAMIC, EXPLICIT
+```
+
+Your model contains only `*STATIC` steps, so when Abaqus reads the second step it finds a boundary‑condition that is illegal for a static (or implicit‑dynamic) analysis and aborts with
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In short – a boundary condition that belongs to explicit dynamics is being used in a static analysis.
+
+---
+
+## How to fix it
+
+Replace the illegal `*BOUNDARY,FIXED` card with a boundary condition that is allowed in static (or implicit‑dynamic) steps.  
+Both of the following forms fully restrain the node set **FIX** (U1 = U2 = U3 = 0) and are accepted by any `*STATIC` step.
+
+### Option 1 – Encastre (shortest form)
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX          ! name of the node set to be fully restrained
+```
+
+### Option 2 – Generic displacement form
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+```
+
+Choose whichever you prefer; the physics is identical.
+
+---
+
+## Minimal corrected input (only the parts that change)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives give the same physical constraint (all translational DOFs = 0) and are accepted by a static analysis.
+
+---
+
+## Quick checklist – avoid the same mistake again
+
+| What to verify | Correct setting |
+|----------------|-----------------|
+| Use of `*BOUNDARY,FIXED` | **Only** with `*DYNAMIC, EXPLICIT`. |
+| Static/implicit steps | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition | Must be defined **before** it is referenced. |
+| Load application | Apply loads (`*CLOAD`, `*DLOAD`, etc.) **after** the restraints are defined, typically in a later step. |
+| Analysis‑type consistency | All cards in a step must be compatible with the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+---
+
+**Bottom line:** Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form (`*BOUNDARY, TYPE=DISPLACEMENT`). After this change the input file is compatible with the static analysis type, and Abaqus will run without the reported error.
+A: **Why the error occurs**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is an **explicit‑dynamic‑only** keyword.  
+Abaqus will accept it **only** in a step that is declared
+
+```abaqus
+*DYNAMIC, EXPLICIT
+```
+
+Your model contains only `*STATIC` steps. When Abaqus reads the second step it finds a boundary‑condition that is illegal for a static (or implicit‑dynamic) analysis, so it aborts with
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+In short – a boundary condition that belongs to explicit dynamics is being used in a static analysis.
+
+---
+
+## How to fix it
+
+Replace the illegal `*BOUNDARY,FIXED` card with a boundary condition that is allowed in static (or implicit‑dynamic) steps. Both of the forms below fully restrain the node set **FIX** (U1 = U2 = U3 = 0) and are accepted by any `*STATIC` step.
+
+### Option 1 – Encastre (shortest form)
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX          ! name of the node set to be fully restrained
+```
+
+### Option 2 – Generic displacement form
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+```
+
+Choose whichever you prefer; the physics is identical.
+
+---
+
+## Minimal corrected input (only the parts that change)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives give the same physical constraint (all translational DOFs = 0) and are accepted by a static analysis.
+
+---
+
+## Quick checklist – avoid the same mistake again
+
+| What to verify                              | Correct setting |
+|---------------------------------------------|-----------------|
+| Use of `*BOUNDARY,FIXED`                     | **Only** with `*DYNAMIC, EXPLICIT`. |
+| Static/implicit steps                        | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition                         | Must be defined **before** it is referenced. |
+| Load application                            | Apply loads (`*CLOAD`, `*DLOAD`, etc.) **after** the restraints are defined, typically in a later step. |
+| Analysis‑type consistency                   | All cards in a step must be compatible with the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+---
+
+**Bottom line:** Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form (`*BOUNDARY, TYPE=DISPLACEMENT`). After this change the input file is compatible with the static analysis type, and Abaqus will run without the reported error.
+
+=== 2026-04-17 20:28:42 ===
+Q: `*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is a keyword that **may be used only in an explicit‑dynamic step** (`*DYNAMIC, EXPLICIT`).  
+All the steps in your model are static (`*STATIC`). Consequently, when Abaqus reads the second step it finds a boundary condition that is illegal for a static (or implicit‑dynamic) analysis and aborts with  
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+### How to fix it
+
+Replace the illegal `*BOUNDARY,FIXED` card with a boundary condition that is allowed in static steps.  
+Both of the following forms fully restrain the node set **FIX** (U1 = U2 = U3 = 0) and are accepted by any `*STATIC` step.
+
+**Option 1 – Encastre (shortest form)**  
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX          ! name of the node set to be fully restrained
+```
+
+**Option 2 – Generic displacement form**  
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+```
+
+Either choice gives the same physical constraint.
+
+### Minimal corrected input (only the changed lines)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives give the same constraint (U1 = U2 = U3 = 0) and are valid for a static analysis.
+
+### Quick checklist – avoid the same mistake again
+
+| What to verify                              | Correct setting |
+|---------------------------------------------|-----------------|
+| Use of `*BOUNDARY,FIXED`                    | Only with `*DYNAMIC, EXPLICIT`. |
+| Static or implicit‑dynamic steps             | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition                         | Must be defined **before** it is referenced. |
+| Load application                            | Apply loads (`*CLOAD`, `*DLOAD`, …) **after** the restraints are defined. |
+| Analysis‑type consistency                   | All cards in a step must match the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+**Bottom line:** Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form. After this change the input file is compatible with the static analysis type, and Abaqus will run without the reported error.
+A: **Why the error occurs**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is a **special‑purpose** boundary‑condition card that can only be used in an **explicit‑dynamic** step (`*DYNAMIC, EXPLICIT`).  
+All the steps in your model are declared with `*STATIC`. When Abaqus reads the second step it finds a `*BOUNDARY,FIXED` card that is illegal for a static (or implicit‑dynamic) analysis, so it aborts with  
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+---
+
+## How to fix it
+
+Replace the illegal `*BOUNDARY,FIXED` card with a boundary condition that is allowed in static steps. Both of the options below fully restrain the node set **FIX** (U1 = U2 = U3 = 0) and are accepted by any `*STATIC` step.
+
+### Option 1 – Encastre (shortest form)
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX          ! name of the node set to be fully restrained
+```
+
+### Option 2 – Generic displacement form
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+```
+
+Either choice gives the same physical constraint.
+
+---
+
+## Minimal corrected input (only the changed lines)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives give the same constraint (U1 = U2 = U3 = 0) and are valid for a static analysis.
+
+---
+
+## Quick checklist – avoid the same mistake again
+
+| What to verify                              | Correct setting |
+|---------------------------------------------|-----------------|
+| Use of `*BOUNDARY,FIXED`                    | Only with `*DYNAMIC, EXPLICIT`. |
+| Static or implicit‑dynamic steps             | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition                         | Must be defined **before** it is referenced. |
+| Load application                            | Apply loads (`*CLOAD`, `*DLOAD`, …) **after** the restraints are defined. |
+| Analysis‑type consistency                   | All cards in a step must match the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+**Bottom line:** Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form. After this change the input file is compatible with the static analysis type, and Abaqus will run without the reported error.
+
+=== 2026-04-17 20:29:12 ===
+Q: `*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is a **special‑purpose** boundary‑condition card that may be used **only in an explicit‑dynamic step** (`*DYNAMIC, EXPLICIT`).  
+All the steps in your model are declared with `*STATIC`. When Abaqus reads the second step it encounters a `*BOUNDARY,FIXED` card that is illegal for a static (or implicit‑dynamic) analysis, so the job aborts with  
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+### How to fix it
+Replace the illegal `*BOUNDARY,FIXED` card with a boundary condition that is allowed in static steps. Both of the following forms fully restrain the node set **FIX** (U1 = U2 = U3 = 0) and are accepted by any `*STATIC` step.
+
+**Option 1 – Encastre (shortest form)**  
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX          ! name of the node set to be fully restrained
+```
+
+**Option 2 – Generic displacement form**  
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+```
+
+Either choice gives the same physical constraint.
+
+### Minimal corrected input (only the changed lines)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives impose the same constraint (U1 = U2 = U3 = 0) and are valid for a static analysis.
+
+### Quick checklist – avoid the same mistake again
+
+| What to verify                              | Correct setting |
+|---------------------------------------------|-----------------|
+| Use of `*BOUNDARY,FIXED`                    | Only with `*DYNAMIC, EXPLICIT`. |
+| Static or implicit‑dynamic steps             | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition                         | Must be defined **before** it is referenced. |
+| Load application                            | Apply loads (`*CLOAD`, `*DLOAD`, …) **after** the restraints are defined. |
+| Analysis‑type consistency                   | All cards in a step must match the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+**Bottom line:** Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form. After this change the input file is compatible with the static analysis type, and Abaqus will run without the reported error.
+A: **Why the job aborts**
+
+`*BOUNDARY, FIXED` (or `*BOUNDARY,FIXED`) is a **special‑purpose** boundary‑condition card that Abaqus accepts **only** in an **explicit‑dynamic** step (`*DYNAMIC, EXPLICIT`).  
+All the steps in your model are declared with `*STATIC`. When the second step is read Abaqus finds a `*BOUNDARY,FIXED` card, recognises that this card is illegal for a static (or implicit‑dynamic) analysis, and stops with  
+
+```
+The boundary condition defined on the node set LOAD in step 2 is not
+compatible with the analysis type.
+```
+
+---
+
+## How to fix it
+
+Replace the illegal `*BOUNDARY,FIXED` card with a boundary condition that is allowed in static steps. Both of the following forms fully restrain the node set **FIX** (U1 = U2 = U3 = 0) and are accepted by any `*STATIC` step.
+
+### Option 1 – Encastre (shortest form)
+
+```abaqus
+*BOUNDARY, ENCASTRE
+FIX          ! name of the node set to be fully restrained
+```
+
+### Option 2 – Generic displacement form
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0   ! prescribe U1 = U2 = U3 = 0
+```
+
+Either choice gives the same physical constraint; pick the one you prefer.
+
+---
+
+## Minimal corrected input (only the changed lines)
+
+```abaqus
+*HEADING
+Cantilever beam – static analysis (fixed nodes)
+
+*PREPRINT, ECHO=YES
+
+*NODE
+...                     ! (your node list – unchanged)
+
+*NSET, NSET=FIX
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*ELEMENT, TYPE=C3D20R, ELSET=Eall
+...                     ! (your element list – unchanged)
+
+*MATERIAL, NAME=EL
+*ELASTIC
+210000., 0.3            ! (your material data)
+
+*SOLID SECTION, ELSET=Eall, MATERIAL=EL
+
+*STEP
+*STATIC
+*BOUNDARY, ENCASTRE     ! <-- legal in static steps
+FIX                     ! node set to be fully restrained
+*END STEP
+
+*STEP
+*STATIC
+*CLOAD
+LOAD, 1, -500.0        ! example point load on node set LOAD
+*END STEP
+```
+
+*If you prefer the generic displacement form, replace the two lines inside the first step with*
+
+```abaqus
+*BOUNDARY, TYPE=DISPLACEMENT
+FIX, 1, 3, 0.0
+```
+
+Both alternatives impose the same constraint (U1 = U2 = U3 = 0) and are valid for a static analysis.
+
+---
+
+## Quick checklist – avoid the same mistake again
+
+| What to verify                              | Correct setting |
+|---------------------------------------------|-----------------|
+| Use of `*BOUNDARY,FIXED`                    | Only with `*DYNAMIC, EXPLICIT`. |
+| Static or implicit‑dynamic steps             | Use `*BOUNDARY, ENCASTRE` **or** `*BOUNDARY, TYPE=DISPLACEMENT`. |
+| Node‑set definition                         | Must be defined **before** it is referenced. |
+| Load application                            | Apply loads (`*CLOAD`, `*DLOAD`, …) **after** the restraints are defined. |
+| Analysis‑type consistency                   | All cards in a step must match the step type (`*STATIC`, `*DYNAMIC, EXPLICIT`, `*DYNAMIC, IMPLICIT`). |
+
+**Bottom line:** Replace the illegal `*BOUNDARY,FIXED` card with either `*BOUNDARY, ENCASTRE` or the generic displacement form. After this change the input file is compatible with the static analysis type, and Abaqus will run without the reported error.
+

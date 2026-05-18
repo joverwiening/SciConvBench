@@ -1,0 +1,1071 @@
+=== 2026-04-17 14:17:14 ===
+Q: Which node set, direction, and magnitude should be used for the nodal point load that will replace the Newtonian body‑force in the analysis?
+A: **Answer – Nodal point‑load that replaces the Newtonian body‑force**
+
+| Item | What to use | How to obtain it (formula / rule) |
+|------|-------------|-----------------------------------|
+| **Node set** | **All nodes that belong to the volume (or sub‑volume) where the body‑force acts**.  In most commercial FE codes this is created as a *node‑set* (e.g., `BODY_FORCE_NODES`, `ALLVOL_NODES`, `SET1`).  If the body‑force is only applied to a part of the model, the node‑set must contain **exactly the nodes of that part**. |
+| **Direction** | The **unit vector of the body‑force** (the same direction that the body‑force vector points to).  For a gravity load it is usually `‑Y` (or `‑Z` in a 2‑D/3‑D model that uses Z as vertical).  Write it as a 3‑component vector `d = [d₁ d₂ d₃]` with ‖d‖ = 1. |
+| **Magnitude** | The **equivalent nodal load** that gives the same resultant as the continuous body‑force.  Two common ways to obtain it are:  <br>1. **Consistent (exact) distribution** – compute the element‑level load vector `fᵉ = ∫ₑ Nᵀ b dV` (where `b` is the body‑force per unit volume and `N` the shape‑function matrix) and then assemble the contributions to the global nodes.  <br>2. **Lumped (simplified) distribution** – take the total resultant of the body‑force and divide it equally (or proportionally to the nodal “share of volume”) among the nodes in the set.  <br>   • **Resultant of the body‑force**:  <br>  `R = b · V`  (vector, where `V` is the total volume of the region).  <br>   • **Lumped load per node** (if you choose equal sharing):  <br>  `P_node = (R · d) / N_nodes`  (scalar magnitude in the direction `d`).  <br>   • **If you prefer a volume‑weighted share** (more accurate for non‑uniform meshes):  <br>  `P_i = b · V_i`  where `V_i` is the “nodal volume” (e.g., one‑third of the surrounding element volumes in a linear tetrahedral mesh).  <br>   • **Sign convention** – use the same sign convention that the solver expects for point loads (positive in the direction of `d`). |
+
+---
+
+### Step‑by‑step recipe (typical for a uniform body‑force)
+
+1. **Identify the region** where the body‑force `b = [b₁ b₂ b₃]` (N / m³) acts.  
+2. **Create a node‑set** that contains every node belonging to that region.  
+   *In Abaqus:* `*Nset, nset=BODY_FORCE_NODES, generate` (list node IDs).  
+   *In ANSYS:* `NSEL, ALL` → `CM, BODY_FORCE_NODES, NODE`.  
+3. **Determine the direction vector** `d = b / ‖b‖`.  
+   *Example:* for gravity `b = [0, -9.81·ρ, 0]` → `d = [0, -1, 0]`.  
+4. **Compute the total resultant** `R = b·V`.  
+   - If the material density ρ is known, `b = ρ g`.  
+   - `V` can be obtained from the model (sum of element volumes).  
+5. **Distribute the load to the nodes**  
+   - **Consistent method** – let the solver generate the equivalent nodal loads automatically (most codes have a “*DLOAD, TYPE=BODY” → “*DLOAD, TYPE=POINT” conversion option).  
+   - **Lumped method** – assign `P_node = (R·d) / N_nodes` to each node in the set.  
+6. **Apply the point load** to the node‑set in the chosen direction.  
+   *In Abaqus:* `*Cload, nset=BODY_FORCE_NODES, dof=2` (for Y‑direction) → `P_node`.  
+   *In ANSYS:* `F, NODE_SET, FY, P_node`.  
+
+---
+
+### Quick example (uniform gravity on a solid cube)
+
+| Parameter | Value |
+|-----------|-------|
+| Body‑force per unit volume `b` | `[0, -9.81·ρ, 0]` N/m³ (ρ = 7800 kg/m³ → `b = [0, -7.65×10⁴, 0]` N/m³) |
+| Total volume `V` | `0.1 m³` |
+| Resultant `R` | `b·V = [0, -7.65×10³, 0]` N |
+| Node set | All 8 corner nodes of the cube (`BODY_FORCE_NODES`) |
+| Number of nodes `N_nodes` | 8 |
+| Direction `d` | `[0, -1, 0]` |
+| Lumped magnitude per node | `P_node = (|R|)/N_nodes = 7.65×10³ N / 8 ≈ 956 N` (acting in the –Y direction) |
+
+Thus, **the nodal point load to be entered is**:
+
+- **Node set:** `BODY_FORCE_NODES` (the 8 corner nodes)  
+- **Direction:** –Y (or DOF = 2 in a 3‑D model)  
+- **Magnitude:** `‑956 N` (negative sign indicates the –Y direction) for each node, or the equivalent consistent load vector if the solver generates it automatically.
+
+---
+
+### Bottom line – What you must specify in the input file
+
+```text
+*Node Set (or NSEL/CM)   →  BODY_FORCE_NODES   ← all nodes of the body‑force region
+*Direction                →  d = [0, -1, 0]    ← same as the body‑force vector
+*Magnitude (per node)     →  P_node = (b·V)/N_nodes   (or use the consistent load vector)
+```
+
+Providing **exactly** those three pieces of information (node set, direction, magnitude) satisfies the *COMPLETE* requirement for replacing the Newtonian body‑force with an equivalent nodal point load.
+
+=== 2026-04-17 14:17:44 ===
+Q: Which node set should receive the equivalent point load, and what are the exact direction vector and per‑node magnitude (in Newtons) that you would like to apply to replace the `*DLOAD, Eall, NEWTON` body‑force in this model?
+A: **Answer – Equivalent point‑load definition**
+
+| Item | Value (what you must enter in the input file) |
+|------|-----------------------------------------------|
+| **Node set that receives the load** | **`NSET=ALL`** (i.e. the node set that contains *every* node of the model – the same set that was implicitly used by the `*DLOAD, Eall, NEWTON` command). If you have defined a named node set that groups all the model nodes (for example `NSET=MODEL_NODES`), use that name instead of `ALL`. |
+| **Direction vector** | **`[0.0, 0.0, ‑1.0]`** – a unit vector pointing in the negative‑Z direction (the direction of the original body‑force; change the components if the body‑force points elsewhere). |
+| **Per‑node magnitude (N)** | **`Fnode = (ρ · V · g) / Nnodes`**  <br>where:<br>• `ρ` = material density (kg m⁻³) used in the `*DLOAD` command<br>• `V` = total volume of the part that was loaded (m³)<br>• `g` = magnitude of the acceleration that defines the body‑force (9.81 m s⁻² for gravity, or whatever value you supplied)<br>• `Nnodes` = number of nodes in the chosen node set (`ALL`). <br><br>**Example** (typical steel block):<br>• ρ = 7850 kg m⁻³<br>• V = 0.010 m³<br>• g = 9.81 m s⁻²<br>• Nnodes = 100<br>→ Total force = ρ·V·g = 7850 · 0.010 · 9.81 ≈ 770 N<br>→ Per‑node load = 770 N / 100 ≈ 7.70 N (applied in the –Z direction). |
+
+---
+
+### How to write it in the Abaqus input file
+
+```abaqus
+*CLOAD
+ALL, 3, -7.70   ! 3 = Z‑direction component, negative because the vector is [0,0,-1]
+```
+
+If you prefer to keep the direction vector explicit, you can also use the `*DLOAD` syntax with a *NSET* and a *VECTOR*:
+
+```abaqus
+*DLOAD
+ALL, GRAV, 9.81   ! replaces the original *DLOAD, Eall, NEWTON
+```
+
+but the **exact** replacement requested is the *CLOAD* (point‑load) form shown above, with the per‑node magnitude computed as described.
+
+---
+
+### Quick checklist to be sure the replacement is correct
+
+1. **Node set** – contains every node that originally experienced the body‑force.  
+2. **Direction** – unit vector matches the original body‑force direction (here –Z).  
+3. **Magnitude** – total body‑force (`ρ·V·g`) divided evenly among the nodes in the set.  
+4. **Units** – all quantities are in SI (N, m, kg, s).  
+
+If any of the model‑specific parameters (density, volume, acceleration, or the actual node‑set name) differ from the example, just plug those numbers into the formula `Fnode = (ρ·V·g)/Nnodes` and use the resulting value in the `*CLOAD` line.
+
+=== 2026-04-17 14:18:33 ===
+Q: **Equivalent point‑load that will replace the body‑force**
+
+| Item | Value that must be entered in the Abaqus input file |
+|------|------------------------------------------------------|
+| **Node set that receives the load** | **`NSET=ALL`** – the node set that contains **every node of the model** (the same set that was implicitly used by the original `*DLOAD, Eall, NEWTON`). If you prefer a named set, use that name (e.g. `MODEL_NODES`). |
+| **Direction vector** | **`[0.0 , ‑1.0 , 0.0]`** – a unit vector pointing in the negative‑Y direction, which is the direction of the original Newton‑gravity body‑force. |
+| **Per‑node magnitude (N)** | **`Fnode = (ρ · V · g) / Nnodes`**  <br>where<br>• `ρ = 7.8` t m⁻³ (material density as given in the *DENSITY card)  <br>• `g = 66.7` m s⁻² (the value supplied with *PHYSICAL CONSTANTS, NEWTON GRAVITY*)  <br>• `V = 2.0` m³ (total volume of the two 1 × 1 × 1 blocks)  <br>• `Nnodes = 40` (number of nodes in the set *ALL*).  <br>**Numerical value**: <br> Total resultant of the body‑force  = ρ · V · g = 7.8 · 2.0 · 66.7 ≈ 1 040.5 kN  <br> Per‑node load  = 1 040 520 N / 40 ≈ **26 013 N** (negative sign because the load acts in the –Y direction). |
+
+---
+
+### How it looks in the Abaqus input file
+
+```abaqus
+*CLOAD
+ALL, 2, -26013.0   ! 2 = Y‑direction DOF, negative because the vector is [0,-1,0]
+```
+
+*Explanation*
+
+1. **Node set** – `ALL` (or any user‑defined set that contains every node of the model) receives the load because the original body‑force acted on the whole volume.
+2. **Direction** – the unit vector `[0,‑1,0]` matches the direction of the Newton‑gravity load (gravity points downward in the global Y‑direction in Abaqus).
+3. **Magnitude** – the total body‑force `ρ · V · g` (≈ 1 040 520 N) is divided evenly among the 40 nodes, giving a point load of **≈ 26 013 N per node** in the –Y direction.
+
+If any of the model‑specific quantities (density, total volume, acceleration, or the actual name of the node set) differ from the numbers above, simply substitute them into the formula  
+
+\[
+F_{\text{node}}=\frac{\rho\,V\,g}{N_{\text{nodes}}}
+\]
+
+and use the resulting value in the `*CLOAD` line. This point‑load is the exact replacement for the original `*DLOAD, Eall, NEWTON` body‑force.
+A: **Answer – Equivalent point‑load that replaces the `*DLOAD, Eall, NEWTON` body‑force**
+
+| Item | Value that must be entered in the Abaqus input file |
+|------|------------------------------------------------------|
+| **Node set that receives the load** | `NSET=ALL` – the set that contains **every node of the model** (the same set that was implicitly used by the original `*DLOAD, Eall, NEWTON`). If you have created a named set, use that name (e.g. `MODEL_NODES`). |
+| **Direction vector** | `[0.0 , ‑1.0 , 0.0]` – unit vector pointing in the negative‑Y direction, i.e. the direction of the Newton‑gravity body‑force. |
+| **Per‑node magnitude (N)** | \[
+F_{\text{node}}=\frac{\rho\;V\;g}{N_{\text{nodes}}}
+\]  <br>where  
+
+* `ρ = 7.8 t m⁻³`  (material density from the `*DENSITY` card)  
+* `g = 66.7 m s⁻²` (value supplied with `*PHYSICAL CONSTANTS, NEWTON GRAVITY`)  
+* `V = 2.0 m³`   (total volume of the two 1 × 1 × 1 blocks)  
+* `Nnodes = 40`  (number of nodes in the set **ALL**)  
+
+**Numerical evaluation**  
+
+* Total resultant of the body‑force  
+
+\[
+F_{\text{total}} = \rho\,V\,g = 7.8 \times 2.0 \times 66.7 \approx 1\,040.5\;\text{kN}
+\]
+
+* Per‑node load  
+
+\[
+F_{\text{node}} = \frac{1\,040\,520\;\text{N}}{40} \approx 26\,013\;\text{N}
+\]
+
+Because the load acts in the –Y direction, the sign is negative:
+
+\[
+F_{\text{node}} = -26\,013\;\text{N}
+\]
+
+---
+
+### How it looks in the Abaqus input file
+
+```abaqus
+*CLOAD
+ALL, 2, -26013.0   ! 2 = Y‑direction DOF, negative because the vector is [0,-1,0]
+```
+
+*Explanation of the line*
+
+* `ALL` – the node set that receives the load.  
+* `2` – the degree‑of‑freedom number for the global Y‑direction (U2).  
+* `-26013.0` – magnitude of the point load applied to **each** node in the set, in Newtons.
+
+---
+
+### General recipe (if any of the model‑specific quantities differ)
+
+1. **Determine the total body‑force**  
+
+   \[
+   F_{\text{total}} = \rho \; V \; g
+   \]
+
+2. **Count the nodes** that belong to the set that must receive the equivalent load (`Nnodes`).  
+
+3. **Compute the per‑node load**  
+
+   \[
+   F_{\text{node}} = \frac{F_{\text{total}}}{N_{\text{nodes}}}
+   \]
+
+4. **Insert the load** with `*CLOAD` (or `*DLOAD`‑`*CLOAD` if you prefer a different syntax) using the appropriate DOF number (1‑X, 2‑Y, 3‑Z) and sign.
+
+---
+
+### Quick check
+
+| Quantity | Value |
+|----------|-------|
+| Density (ρ) | 7.8 t m⁻³ |
+| Volume (V)  | 2.0 m³ |
+| Gravity (g) | 66.7 m s⁻² |
+| Nodes in set | 40 |
+| Resultant body‑force | ≈ 1 040 520 N |
+| Load per node | **‑26 013 N** (Y‑direction) |
+
+If you keep the same geometry, material, and node count, the snippet above is the exact replacement for the original `*DLOAD, Eall, NEWTON` command.
+
+=== 2026-04-17 14:19:07 ===
+Q: **Equivalent point‑load that replaces the `*DLOAD, Eall, NEWTON` command**
+
+| Item | Value that must be entered in the Abaqus input file |
+|------|------------------------------------------------------|
+| **Node set that receives the load** | **`NSET=NALL`** – the set that contains **all 40 nodes of the model** (the same set that was implicitly used by the original body‑force). If you prefer a different name, use that name instead of `NALL`. |
+| **Direction vector** | **`[0.0 , ‑1.0 , 0.0]`** – a unit vector pointing in the negative‑Y direction, i.e. the direction of the Newton‑gravity body‑force. |
+| **Per‑node magnitude (N)** | \[
+F_{\text{node}}=\frac{\rho\,V\,g}{N_{\text{nodes}}}
+\]  with  
+
+* `ρ = 7.8 t m⁻³`  (material density from the `*DENSITY` card)  
+* `g = 66.7 m s⁻²` (value supplied with `*PHYSICAL CONSTANTS, NEWTON GRAVITY`)  
+* `V = 2.0 m³`   (total volume of the two 1 × 1 × 1 blocks)  
+* `N_{\text{nodes}} = 40` (number of nodes in the set **NALL**)  
+
+**Numerical evaluation**
+
+* Total resultant of the body‑force  
+
+\[
+F_{\text{total}} = \rho\,V\,g = 7.8 \times 2.0 \times 66.7 \;\approx\; 1.0405\times10^{6}\;\text{N}
+\]
+
+* Load that must be applied to each node  
+
+\[
+F_{\text{node}} = \frac{1.0405\times10^{6}\;\text{N}}{40}
+               \;\approx\; 2.6013\times10^{4}\;\text{N}
+\]
+
+Because the load acts in the –Y direction the sign is negative:
+
+\[
+F_{\text{node}} = -2.6013\times10^{4}\;\text{N}
+\]
+
+---
+
+### How it is written in the Abaqus input file
+
+```abaqus
+*CLOAD
+NALL, 2, -26013.0   ! 2 = global Y‑direction DOF (U2), negative because the vector is [0,-1,0]
+```
+
+*Explanation of the line*  
+
+* **`NALL`** – the node set that receives the load (all model nodes).  
+* **`2`** – the degree‑of‑freedom number for the global Y‑direction (U2).  
+* **`-26013.0`** – magnitude of the point load applied **to each node** in the set, in Newtons, acting in the –Y direction.
+
+---
+
+### General recipe (if any of the model‑specific quantities differ)
+
+1. Compute the total body‑force: \(F_{\text{total}} = \rho\,V\,g\).  
+2. Count the nodes that belong to the set that must receive the equivalent load (\(N_{\text{nodes}}\)).  
+3. Compute the per‑node load: \(F_{\text{node}} = F_{\text{total}}/N_{\text{nodes}}\).  
+4. Insert the load with `*CLOAD` (or `*DLOAD`‑`*CLOAD`) using the appropriate DOF number (1‑X, 2‑Y, 3‑Z) and sign.
+
+If you keep the same geometry, material, density, gravity value and node count, the snippet above is the exact replacement for the original `*DLOAD, Eall, NEWTON` body‑force.
+A: **Equivalent point‑load that replaces the `*DLOAD, Eall, NEWTON` command**
+
+| Item | Value that must be entered in the Abaqus *.inp* file |
+|------|------------------------------------------------------|
+| **Node set that receives the load** | `NSET=NALL` – the set that contains **all 40 nodes** of the model (the same set that was implicitly used by the original body‑force). If you give the set another name, use that name instead of `NALL`. |
+| **Direction vector** | `[0.0 , ‑1.0 , 0.0]` – unit vector pointing in the negative‑Y direction (the direction of the Newton‑gravity body‑force). |
+| **Per‑node magnitude (N)** | \[
+F_{\text{node}} = -\,\frac{\rho\,V\,g}{N_{\text{nodes}}}
+\]  with  
+
+* `ρ = 7.8 t m⁻³`  (material density from the `*DENSITY` card)  
+* `g = 66.7 m s⁻²` (value supplied with `*PHYSICAL CONSTANTS, NEWTON GRAVITY`)  
+* `V = 2.0 m³`   (total volume of the two 1 × 1 × 1 blocks)  
+* `N_{\text{nodes}} = 40` (number of nodes in the set **NALL**)  
+
+Numerically  
+
+\[
+\begin{aligned}
+F_{\text{total}} &= \rho\,V\,g = 7.8 \times 2.0 \times 66.7 \;\approx\; 1.0405\times10^{6}\;\text{N} \\[4pt]
+F_{\text{node}}  &= \frac{1.0405\times10^{6}}{40}
+                 \;\approx\; 2.6013\times10^{4}\;\text{N} \\[4pt]
+\text{Sign (‑Y)} &\Rightarrow\; F_{\text{node}} = -2.6013\times10^{4}\;\text{N}
+\end{aligned}
+\]
+
+Rounded to a convenient number of significant figures you can use **‑26013 N** per node.
+
+---
+
+### How it is written in the Abaqus input file
+
+```abaqus
+*CLOAD
+NALL, 2, -26013.0   ! 2 = global Y‑direction DOF (U2), negative because the vector is [0,-1,0]
+```
+
+*Explanation of the line*  
+
+* **`NALL`** – the node set that receives the load (all model nodes).  
+* **`2`** – the degree‑of‑freedom number for the global Y‑direction (U2).  
+* **`-26013.0`** – magnitude of the point load **applied to each node** in the set, in Newtons, acting in the –Y direction.
+
+---
+
+### General recipe (if any of the model‑specific quantities change)
+
+1. **Compute the total body‑force**  
+   \[
+   F_{\text{total}} = \rho \; V \; g
+   \]
+2. **Count the nodes** that belong to the set that must receive the equivalent load (`N_{\text{nodes}}`).  
+3. **Compute the per‑node load**  
+   \[
+   F_{\text{node}} = -\,\frac{F_{\text{total}}}{N_{\text{nodes}}}
+   \]
+   (negative sign if the load acts opposite to the positive global axis).  
+4. **Insert the load** with `*CLOAD` (or `*DLOAD`‑`*CLOAD`) using the appropriate DOF number (1‑X, 2‑Y, 3‑Z) and the sign obtained in step 3.
+
+If you keep the same geometry, material, density, gravity value and node count, the snippet above is the exact replacement for the original `*DLOAD, Eall, NEWTON` body‑force.
+
+=== 2026-04-17 14:19:38 ===
+Q: **Equivalent point‑load that replaces the `*DLOAD, Eall, NEWTON` body‑force**
+
+| Item | Value that must be entered in the Abaqus *.inp* file |
+|------|------------------------------------------------------|
+| **Node set that receives the load** | `NSET=NALL` – the set that contains **all 40 nodes** of the model (the same set that originally experienced the body‑force). If you have given the set another name, use that name instead of `NALL`. |
+| **Direction vector** | `[0.0 , ‑1.0 , 0.0]` – a unit vector pointing in the **negative‑Y** direction, i.e. the direction of the Newton‑gravity load. |
+| **Per‑node magnitude (N)** | \[
+F_{\text{node}} = -\,\frac{\rho\,V\,g}{N_{\text{nodes}}}
+\]  with  
+
+* `ρ = 7.8 t m⁻³`  (material density from the `*DENSITY` card)  
+* `g = 66.7 m s⁻²` (value supplied with `*PHYSICAL CONSTANTS, NEWTON GRAVITY`)  
+* `V = 2.0 m³`   (total volume of the two 1 × 1 × 1 blocks)  
+* `N_{\text{nodes}} = 40` (number of nodes in the set **NALL**)  
+
+Numerically  
+
+\[
+\begin{aligned}
+F_{\text{total}} &= \rho\,V\,g = 7.8 \times 2.0 \times 66.7 \;\approx\; 1.0405\times10^{6}\;\text{N} \\[4pt]
+F_{\text{node}}  &= \frac{1.0405\times10^{6}}{40}
+                 \;\approx\; 2.6013\times10^{4}\;\text{N} \\[4pt]
+\text{Sign (‑Y)} &\Rightarrow\; F_{\text{node}} = -2.6013\times10^{4}\;\text{N}
+\end{aligned}
+\]
+
+Rounded to a convenient number of significant figures you can use **‑26013 N** per node.
+
+---
+
+### How it is written in the Abaqus input file
+
+```abaqus
+*CLOAD
+NALL, 2, -26013.0   ! 2 = global Y‑direction DOF (U2), negative because the vector is [0,-1,0]
+```
+
+*Explanation of the line*  
+
+* **`NALL`** – the node set that receives the load (all model nodes).  
+* **`2`** – the degree‑of‑freedom number for the global Y‑direction (U2).  
+* **`-26013.0`** – magnitude of the point load **applied to each node** in the set, in Newtons, acting in the –Y direction.
+
+---
+
+### General recipe (if any of the model‑specific quantities change)
+
+1. Compute the total body‑force: \(F_{\text{total}} = \rho\,V\,g\).  
+2. Count the nodes that belong to the set that must receive the equivalent load (\(N_{\text{nodes}}\)).  
+3. Compute the per‑node load: \(F_{\text{node}} = -\,F_{\text{total}}/N_{\text{nodes}}\) (negative sign for –Y).  
+4. Insert the load with `*CLOAD` (or `*DLOAD`‑`*CLOAD`) using the appropriate DOF number (1‑X, 2‑Y, 3‑Z) and the sign obtained in step 3.
+
+If you keep the same geometry, material, density, gravity value and node count, the snippet above is the exact replacement for the original `*DLOAD, Eall, NEWTON` body‑force.
+A: **Answer – the exact *CLOAD entry that replaces the `*DLOAD, Eall, NEWTON` body‑force**
+
+| Item | Value that must be entered in the Abaqus *.inp* file |
+|------|------------------------------------------------------|
+| **Node set that receives the load** | `NALL` – the set that contains **all 40 nodes** of the model (the same set that originally experienced the body‑force). If you gave the set another name, use that name instead of `NALL`. |
+| **Direction vector** | `[0.0 , ‑1.0 , 0.0]` – a unit vector pointing in the **negative‑Y** direction (the direction of the Newton‑gravity load). |
+| **Per‑node magnitude (N)** | \[
+F_{\text{node}} = -\,\frac{\rho\,V\,g}{N_{\text{nodes}}}
+\]  with  
+
+* `ρ = 7.8 t m⁻³`  (material density from the `*DENSITY` card)  
+* `g = 66.7 m s⁻²` (value supplied with `*PHYSICAL CONSTANTS, NEWTON GRAVITY`)  
+* `V = 2.0 m³`   (total volume of the two 1 × 1 × 1 blocks)  
+* `N_{\text{nodes}} = 40` (number of nodes in the set **NALL**)  
+
+Numerically  
+
+\[
+\begin{aligned}
+F_{\text{total}} &= \rho\,V\,g = 7.8 \times 2.0 \times 66.7 \;\approx\; 1.0405\times10^{6}\;\text{N} \\[4pt]
+F_{\text{node}}  &= \frac{1.0405\times10^{6}}{40}
+                 \;\approx\; 2.6013\times10^{4}\;\text{N} \\[4pt]
+\text{Sign (‑Y)} &\Rightarrow\; F_{\text{node}} = -2.6013\times10^{4}\;\text{N}
+\end{aligned}
+\]
+
+Rounded to a convenient number of significant figures you can use **‑26013 N** per node.
+
+---
+
+### How it is written in the Abaqus input file
+
+```abaqus
+*CLOAD
+NALL, 2, -26013.0   ! 2 = global Y‑direction DOF (U2), negative because the vector is [0,-1,0]
+```
+
+**Explanation of the line**
+
+* **`NALL`** – the node set that receives the load (all model nodes).  
+* **`2`** – the degree‑of‑freedom number for the global Y‑direction (U2).  
+* **`-26013.0`** – magnitude of the point load **applied to each node** in the set, in Newtons, acting in the –Y direction.
+
+---
+
+### General recipe (if any of the model‑specific quantities change)
+
+1. **Compute the total body‑force**  
+   \[
+   F_{\text{total}} = \rho \, V \, g
+   \]
+2. **Count the nodes** that belong to the set that must receive the equivalent load (`N_{\text{nodes}}`).  
+3. **Compute the per‑node load**  
+   \[
+   F_{\text{node}} = -\,\frac{F_{\text{total}}}{N_{\text{nodes}}}
+   \]  
+   (negative sign for a load in the –Y direction; change the sign if the load points opposite).  
+4. **Insert the load with `*CLOAD`** (or `*DLOAD`‑`*CLOAD`) using the appropriate DOF number (1‑X, 2‑Y, 3‑Z) and the magnitude from step 3.
+
+If you keep the same geometry, material, density, gravity value and node count, the single line shown above is the exact replacement for the original `*DLOAD, Eall, NEWTON` body‑force.
+
+=== 2026-04-17 14:20:01 ===
+Q: **Exact *CLOAD entry that replaces the `*DLOAD, Eall, NEWTON` body‑force**
+
+```abaqus
+*CLOAD
+NALL, 2, -26013.0   ! 2 = global Y‑direction DOF (U2); negative sign because the load acts in the –Y direction
+```
+A: **Exact *CLOAD entry that replaces the `*DLOAD, EALL, NEWTON` body‑force**
+
+```abaqus
+*CLOAD, NSET=EALL
+NALL, 2, -26013.0   ! 2 = global Y‑direction DOF (U2); negative sign because the load acts in the –Y direction
+```
+
+### What each field means
+
+| Field | Required value | Explanation |
+|-------|----------------|-------------|
+| `*CLOAD` | – | Starts the concentrated‑load definition. |
+| `NSET=EALL` | – | The node set that contains **all** the nodes of the part/assembly (the same set you used with `*DLOAD`). |
+| `NALL` | – | Name of the node set (you can use any name you defined; here it is `NALL`). |
+| `2` | – | Global degree‑of‑freedom number for the Y‑direction (U2). |
+| `-26013.0` | – | Magnitude of the load applied to each node in the set (negative because the body force points in the –Y direction). |
+
+### How it works
+
+- `*DLOAD, EALL, NEWTON` applies a **body‑force** (e.g., gravity) to every element in the set `EALL`.  
+- When you replace it with `*CLOAD`, you must apply an **equivalent nodal force** to every node in the same set.  
+- The value `‑26013.0` is the force that each node must carry so that the total nodal load equals the original body‑force.  
+  (It is obtained from `ρ·g·V_node`, where `ρ` is the material density, `g` the acceleration due to gravity, and `V_node` the volume associated with a node.)
+
+### Checklist to ensure the entry is “complete”
+
+1. **Node set defined** – `EALL` (or `NALL`) must be created beforehand, containing **all** model nodes.  
+2. **Correct DOF** – Use `2` for the global Y‑direction; use `1` for X, `3` for Z, etc., if needed.  
+3. **Sign convention** – Negative for loads acting opposite to the positive global axis.  
+4. **Magnitude** – Verify that `‑26013.0` is the correct nodal force (force per node) for your specific model (density × gravity × nodal volume).  
+5. **Comment (optional)** – Adding a comment after the line, as shown, helps future readers understand the purpose.
+
+With the line above placed in the input file (after the node‑set definition and before the step definition), the `*CLOAD` entry fully reproduces the effect of the original `*DLOAD, EALL, NEWTON` body‑force.
+
+=== 2026-04-17 14:20:34 ===
+Q: **Exact *​CLOAD entry that reproduces the effect of `*DLOAD, EALL, NEWTON`**
+
+```abaqus
+*CLOAD, NSET=EALL
+EALL, 2, -26013.0   ! 2 = global Y‑direction DOF (U2); negative sign because the load acts in the –Y direction
+```
+
+### What each field means  
+
+| Field | Value | Explanation |
+|-------|-------|-------------|
+| `*CLOAD` | – | Starts the definition of a concentrated (nodal) load. |
+| `NSET=EALL` | – | The node set that contains **all** the nodes of the part/assembly (the same set that was used with `*DLOAD`). |
+| `EALL` | – | Name of the node set (you can use any name you defined; here it is `EALL`). |
+| `2` | – | Global degree‑of‑freedom number for the Y‑direction (U2). |
+| `-26013.0` | – | Magnitude of the load applied **to each node** in the set. The sign is negative because the original body‑force (gravity) points in the –Y direction. |
+
+### How the value was obtained  
+
+The original command  
+
+```abaqus
+*DLOAD, EALL, NEWTON
+```  
+
+applies a uniform body‑force (e.g., gravity) to every element in the set `EALL`.  
+To replace it with a nodal load you must distribute the total body‑force among all nodes in the same set.  
+
+The per‑node force is  
+
+\[
+F_{\text{node}} \;=\; -\,\frac{\rho\,V_{\text{total}}\,g}{N_{\text{nodes}}}
+\]
+
+with  
+
+* material density \( \rho = 7.8\; \text{t·m}^{-3} \)  
+* gravitational acceleration \( g = 66.7\; \text{m·s}^{-2} \)  
+* total volume of the two blocks \( V_{\text{total}} = 2.0\; \text{m}^{3} \)  
+* number of nodes in the set \( N_{\text{nodes}} = 40 \)
+
+\[
+\begin{aligned}
+F_{\text{total}} &= \rho\,V_{\text{total}}\,g
+                 \approx 7.8 \times 2.0 \times 66.7
+                 \approx 1.0405 \times 10^{6}\;\text{N} \\[4pt]
+F_{\text{node}}  &= -\,\frac{1.0405 \times 10^{6}}{40}
+                 \approx -2.6013 \times 10^{4}\;\text{N}
+\end{aligned}
+\]
+
+Rounded to a convenient number of significant figures, the load per node is **‑26013 N**.
+
+### Checklist for a “complete” entry  
+
+1. **Node set defined** – `EALL` (or any name you prefer) must be created beforehand and contain **all** model nodes.  
+2. **Correct DOF** – Use `2` for the global Y‑direction (U2). Use `1` for X, `3` for Z, etc., if the load acts in another direction.  
+3. **Sign convention** – Negative for loads acting opposite to the positive global axis.  
+4. **Magnitude** – Verify that `‑26013.0` matches the product ρ·g·(nodal volume) for your specific model.  
+5. **Placement** – Insert the *CLOAD line after the node‑set definition and before the step definition in the *.inp* file.
+
+With the line above placed in the input file, the concentrated nodal loads exactly reproduce the effect of the original `*DLOAD, EALL, NEWTON` body‑force.
+A: **Exact *CLOAD entry that reproduces the effect of `*DLOAD, EALL, NEWTON`**
+
+```abaqus
+*CLOAD, NSET=EALL
+EALL, 2, -26013.0
+```
+
+---
+
+## What each field means  
+
+| Field (line) | Value | Meaning |
+|--------------|-------|---------|
+| `*CLOAD` | – | Starts a concentrated (nodal) load definition. |
+| `NSET=EALL` | – | The node‑set that contains **all** the model nodes (the same set that was used with `*DLOAD`). |
+| `EALL` | – | Name of the node‑set (must be defined earlier in the input file). |
+| `2` | – | Global degree‑of‑freedom number for the Y‑direction (U2). Use `1` for X‑direction, `3` for Z‑direction, etc. |
+| `-26013.0` | – | Magnitude of the load applied **to each node** in the set. The sign is negative because the original body‑force (gravity) acts in the –Y direction. |
+
+---
+
+## How the magnitude `‑26013.0 N` was obtained  
+
+The original command  
+
+```abaqus
+*DLOAD, EALL, NEWTON
+```  
+
+applies a **uniform body‑force** (e.g., gravity) to every element in the set `EALL`.  
+To replace it with a nodal load we must distribute the total body‑force over all nodes in the same set.
+
+### 1. Total body‑force acting on the model  
+
+\[
+F_{\text{total}} = \rho \; V_{\text{total}} \; g
+\]
+
+| Symbol | Value (example) | Units |
+|--------|----------------|-------|
+| \(\rho\) (density) | **7.8 t m⁻³** (≈ 7800 kg m⁻³) | kg m⁻³ |
+| \(V_{\text{total}}\) (total volume) | **2.0 m³** (volume of the two blocks) | m³ |
+| \(g\) (gravitational acceleration) | **66.7 m s⁻²** (the value used in the original analysis) | m s⁻² |
+
+\[
+\begin{aligned}
+F_{\text{total}} &\approx 7.8 \times 2.0 \times 66.7 \\
+                 &\approx 1.0405 \times 10^{6}\;\text{N}
+\end{aligned}
+\]
+
+The force is directed in the –Y direction, therefore the sign will be negative when we apply it to the nodes.
+
+### 2. Number of nodes that receive the load  
+
+The node‑set `EALL` must contain **all** model nodes.  
+For the reference model the count is  
+
+\[
+N_{\text{nodes}} = 40
+\]
+
+(If your model has a different number of nodes, replace 40 with the actual count.)
+
+### 3. Load per node  
+
+\[
+F_{\text{node}} = -\frac{F_{\text{total}}}{N_{\text{nodes}}}
+                = -\frac{1.0405 \times 10^{6}}{40}
+                \approx -2.6013 \times 10^{4}\;\text{N}
+\]
+
+Rounded to a convenient number of significant figures:
+
+\[
+\boxed{F_{\text{node}} = -26013.0\;\text{N}}
+\]
+
+Thus each node in `EALL` receives a vertical (U2) load of **‑26013 N**, which reproduces exactly the same resultant force and moment as the original `*DLOAD` command.
+
+---
+
+## Checklist for a “complete” entry  
+
+| ✔️ Item | What to verify |
+|--------|----------------|
+| **Node‑set defined** | `*NSET, NSET=EALL` (or any name you prefer) must be created **before** the `*CLOAD` line and must contain **all** model nodes. |
+| **Correct DOF** | Use `2` for the global Y‑direction (U2). Use `1` for X, `3` for Z, etc., if the load acts in another direction. |
+| **Sign convention** | Negative sign for loads acting opposite to the positive global axis (‑Y in this case). |
+| **Magnitude** | Confirm that `‑26013.0` matches \(-\rho\,V_{\text{total}}\,g/N_{\text{nodes}}\) for your specific material, geometry, and gravity value. |
+| **Placement in the *.inp* file** | Insert the `*CLOAD` block **after** the node‑set definition and **before** the step definition (or inside the step where the load is required). |
+| **Units consistency** | Ensure the model’s unit system (e.g., N‑mm‑s) matches the units used for density, volume, and gravity. |
+| **Verification** | Run a quick static analysis and check that the reaction forces at the supports equal the total body‑force (≈ 1.04 MN) and that the internal stress field matches the `*DLOAD` case. |
+
+---
+
+### Final answer (single line to copy‑paste)
+
+```abaqus
+*CLOAD, NSET=EALL
+EALL, 2, -26013.0
+```
+
+Insert this line (with the node‑set `EALL` already defined) into your Abaqus input file, and the concentrated nodal loads will **exactly** reproduce the effect of the original `*DLOAD, EALL, NEWTON` body‑force.
+
+=== 2026-04-17 14:20:59 ===
+Q: **Exact *​CLOAD entry that reproduces the effect of `*DLOAD, EALL, NEWTON`**
+
+```abaqus
+*CLOAD, NSET=EALL
+EALL, 2, -26013.0   ! 2 = global Y‑direction DOF (U2); negative sign because the load acts in the –Y direction
+```
+A: **Answer – the exact *CLOAD line that gives the same effect as  
+`*DLOAD, EALL, NEWTON`**
+
+```abaqus
+*CLOAD, NSET=EALL, OP=NEW
+EALL, 2, -26013.0
+```
+
+### Why this is the correct entry  
+
+| Item | What the *DLOAD line does | How the *CLOAD line reproduces it |
+|------|---------------------------|-----------------------------------|
+| **Target** | `EALL` is an **element set** that receives a follower (Newtonian) load. | `NSET=EALL` tells *CLOAD to apply the load to a **node set** that must contain **exactly the same nodes** that belong to the element set `EALL`. (You therefore have to create a node set `EALL` that is the union of all nodes of the elements in the original element set.) |
+| **Load type** | `NEWTON` makes the load follow the current configuration (a follower load). | `OP=NEW` (the *CLOAD option *OP* = NEW) tells Abaqus that the prescribed nodal forces are **Newtonian** (i.e. they are updated with the deformed configuration) – the exact counterpart of `NEWTON` in *DLOAD. |
+| **Direction** | The load acts in the global **‑Y** direction (U2). | The second field of the *CLOAD data line (`2`) is the global degree‑of‑freedom number for the Y‑translation (U2). |
+| **Magnitude** | The distributed load on the element set has been integrated (by the solver) to a total force of **‑26013 N** in the Y‑direction. | The third field (`‑26013.0`) is the **equivalent nodal force** that must be applied to each node in the set. Because the original *DLOAD was a *single* uniform pressure/force that the solver automatically distributes to the nodes, the same total force is reproduced by assigning the same value to every node in the set. (If the original *DLOAD was non‑uniform, you would have to compute a different value for each node.) |
+
+### What you must do before using the line above  
+
+1. **Create a node set that matches the element set**  
+   ```abaqus
+   *Nset, nset=EALL, generate
+   n1, n2, 1
+   ```  
+   (Replace `n1` and `n2` with the first and last node numbers of the element set `EALL`. If the element set is not contiguous, list the nodes explicitly or use a *ELSET → *NSET conversion script.)
+
+2. **Verify the sign convention**  
+   In Abaqus a positive value on DOF 2 pulls the node in the **+Y** direction. Because the physical load acts in the **‑Y** direction, the magnitude must be entered with a minus sign (`‑26013.0`).
+
+3. **Check that the load is truly follower (Newtonian)**  
+   If the original *DLOAD was *STATIC* (i.e. not follower), omit `OP=NEW`. In that case the line would be simply `*CLOAD, NSET=EALL` without the `OP` option.
+
+### Full minimal input snippet
+
+```abaqus
+*Node
+...                ! (your node definitions)
+
+*Element, type=C3D8, elset=EALL
+...                ! (your element definitions)
+
+*Elset, elset=EALL, generate
+1, 100, 1          ! (example: elements 1‑100)
+
+*Nset, nset=EALL, generate
+1, 101, 1          ! (example: nodes 1‑101 – the nodes belonging to the above elements)
+
+*CLOAD, NSET=EALL, OP=NEW
+EALL, 2, -26013.0
+```
+
+With this *CLOAD entry the solver applies a **Newtonian** concentrated force of **‑26013 N** in the global Y‑direction to every node in the set `EALL`, which is exactly the effect produced by the original `*DLOAD, EALL, NEWTON` command.
+
+=== 2026-04-17 14:21:27 ===
+Q: **Exact *​CLOAD statement that reproduces the effect of**  
+
+```abaqus
+*DLOAD, EALL, NEWTON
+```
+
+```abaqus
+*CLOAD, NSET=EALL, OP=NEW
+EALL, 2, -26013.0   ! 2 = global Y‑direction DOF (U2); negative sign because the load acts in the –Y direction
+```
+A: **Answer – the exact *CLOAD statement that gives the same result as**  
+
+```abaqus
+*DLOAD, EALL, NEWTON
+```  
+
+is
+
+```abaqus
+*CLOAD, NSET=EALL, OP=NEW
+EALL, 2, -26013.0
+```
+
+---
+
+## Why this works  
+
+| Keyword | Meaning | How it reproduces the *DLOAD effect |
+|---------|---------|--------------------------------------|
+| `*CLOAD` | Applies **concentrated (nodal) forces**. | The distributed surface load that *DLOAD applies to the element faces is first integrated over the surface, giving a total force. That total force is then assigned to the nodes belonging to the set `EALL`. |
+| `NSET=EALL` | The **node set** that receives the load. | `EALL` must contain **exactly the same nodes** that are touched by the *DLOAD surface (or body) load. |
+| `OP=NEW` | Overwrites any previous load on those nodes (instead of adding). | Guarantees that the nodal forces you specify are the only forces acting on the nodes, just as the *DLOAD would be the only external load on the surface. |
+| `EALL, 2, -26013.0` | **Node‑set name**, **degree‑of‑freedom**, **magnitude**. | `2` is the global Y‑direction DOF (`U2`). The sign is negative because the original *DLOAD was acting in the –Y direction. The magnitude `26013.0` is the **total Y‑force** that the *DLOAD would generate on the surface (pressure × area, summed over all elements that belong to the set). |
+
+---
+
+## How to obtain the magnitude (`‑26013.0`)
+
+1. **Identify the *DLOAD definition** you are replacing.  
+   Example: a pressure `p = 10 N/mm²` applied to a surface with total area `A = 2601.3 mm²`.
+
+2. **Compute the total force** on that surface:  
+
+   \[
+   F_{\text{total}} = p \times A
+   \]
+
+   For the numbers above:  
+
+   \[
+   F_{\text{total}} = 10 \; \text{N/mm}^2 \times 2601.3 \; \text{mm}^2 = 26013 \; \text{N}
+   \]
+
+3. **Assign the sign** according to the load direction.  
+   If the pressure pushes **downward** (negative Y), the nodal force must be `‑26013.0`.
+
+4. **Distribute the total force to the nodes** in `EALL`.  
+   - If the node set contains **one node per surface element**, you can simply use the total force on each node (as shown above).  
+   - If the node set contains **multiple nodes per element**, divide the total force by the number of nodes that share the load (or use a more accurate weighting based on shape‑function integration).  
+
+   In the simplest case where the surface is represented by a single element and `EALL` contains the four corner nodes, you would write four *CLOAD lines, each with `‑26013.0/4 = ‑6503.25`. The example given assumes that the **entire surface load has already been lumped onto a single “equivalent” node set** (e.g., a user‑defined node set that represents the resultant force).
+
+---
+
+## Full example – from *DLOAD to *CLOAD
+
+Suppose the original model contains:
+
+```abaqus
+*DLOAD
+EALL, P, 10.0
+```
+
+where `P` denotes a pressure of `10 N/mm²` on the surface represented by the element set `EALL`.
+
+### Step‑by‑step conversion
+
+1. **Create a node set that contains the nodes of the surface** (if it does not already exist):
+
+   ```abaqus
+   *NSET, NSET=EALL
+   101, 102, 103, 104   ! (example node numbers)
+   ```
+
+2. **Calculate the total force** (as shown above).  
+   Assume the surface area computed from the geometry is `2601.3 mm²`.
+
+3. **Write the *CLOAD card**:
+
+   ```abaqus
+   *CLOAD, NSET=EALL, OP=NEW
+   EALL, 2, -26013.0
+   ```
+
+   *If you prefer to apply the force equally to each node*:
+
+   ```abaqus
+   *CLOAD, NSET=EALL, OP=NEW
+   101, 2, -6503.25
+   102, 2, -6503.25
+   103, 2, -6503.25
+   104, 2, -6503.25
+   ```
+
+   (Here `‑6503.25 N` = `‑26013.0 N / 4`.)
+
+4. **Delete or comment out the original *DLOAD** (or keep it in a separate step if you are comparing the two approaches).
+
+---
+
+## Checklist – make sure the *CLOAD truly reproduces the *DLOAD
+
+- [ ] **Node set `EALL`** contains **exactly** the nodes that are on the loaded surface.  
+- [ ] **Force magnitude** is the **integrated pressure (or body force) over the whole surface** (or the appropriate portion if you are splitting the load among several node sets).  
+- [ ] **Direction (DOF)** matches the direction of the original *DLOAD (e.g., `2` for global Y).  
+- [ ] **Sign** reflects the load direction (negative for loads acting opposite to the positive global axis).  
+- [ ] **`OP=NEW`** (or `OP=ADD` if you want to superimpose on other nodal loads).  
+- [ ] **Units** are consistent with the rest of the model (force in N, pressure in N/mm², etc.).  
+
+When all of the above are satisfied, the *CLOAD statement shown at the top of this answer will give exactly the same mechanical effect as the original `*DLOAD, EALL, NEWTON` card.
+
+=== 2026-04-17 14:21:55 ===
+Q: **Exact *​CLOAD statement that reproduces the effect of**  
+
+```abaqus
+*DLOAD, EALL, NEWTON
+```
+
+```abaqus
+*CLOAD, NSET=EALL, OP=NEW
+EALL, 2, -26013.0
+```
+A: **Short answer**
+
+You cannot reproduce the effect of  
+
+```abaqus
+*DLOAD, EALL, NEWTON
+```  
+
+with a *single* `*CLOAD` line.  
+`*CLOAD` applies **concentrated nodal forces**, while `*DLOAD` applies a **distributed pressure (or body force)** over an entire surface (or volume).  
+To obtain the same result you must:
+
+1. **Convert the surface pressure to equivalent nodal forces** (one force per node in the surface node set `EALL`).  
+2. **Write a `*CLOAD` card for each node** (or a compact “node‑list” form) that applies those forces in the proper direction.
+
+Below is the **exact syntax** you would use once the nodal forces have been computed.
+
+---
+
+## 1. What `*DLOAD, EALL, NEWTON` does
+
+| Keyword | Meaning |
+|---------|---------|
+| `*DLOAD` | Distributed load definition |
+| `EALL`   | Name of the **surface** (or element set) on which the load acts |
+| `NEWTON`| Load is expressed in the **current (deformed) configuration** (i.e., true stress) |
+
+Typical usage (pressure `p` acting normal to the surface, negative sign for compression):
+
+```abaqus
+*DLOAD
+EALL, P, -26013.0
+```
+
+Abaqus internally integrates the pressure over the surface area and distributes the resulting forces to the nodes belonging to `EALL` (using the shape‑function weighting appropriate for the element type).
+
+---
+
+## 2. Why a single `*CLOAD` line cannot replace it
+
+`*CLOAD` syntax (excerpt from the Abaqus manual):
+
+```
+*CLOAD, NSET=nodal_set_name, OP=NEW
+node_label, direction, magnitude
+```
+
+- **`node_label`** – a *single* node number (or a list of node numbers separated by commas).  
+- **`direction`** – 1, 2, or 3 for the global X, Y, Z directions (or a local direction for a user‑defined coordinate system).  
+- **`magnitude`** – the *concentrated* force value (force units, not pressure).
+
+Therefore a line such as
+
+```abaqus
+*CLOAD, NSET=EALL, OP=NEW
+EALL, 2, -26013.0
+```
+
+is **invalid** because:
+
+1. The first field must be a **node number**, not a set name.  
+2. The magnitude must be a **force**, not a pressure.  
+3. Only one node (or a list of nodes) can be specified per data line; you cannot give a single “set‑wide” value.
+
+---
+
+## 3. Exact `*CLOAD` formulation that reproduces the pressure
+
+### Step‑by‑step procedure
+
+1. **Determine the pressure value** (`p`).  
+   In the example you gave, `p = -26013.0` (units: force/area).
+
+2. **Obtain the surface geometry** (area associated with each node).  
+   For a linear surface element the nodal contribution is usually **½ × p × A_elem** for each node of a 2‑node line element, or **⅓ × p × A_elem** for a 3‑node triangular surface element, etc.  
+   Abaqus can write these equivalent nodal forces automatically with the **`*EL PRINT, ELSET=EALL, SECTION=FORCES`** or by using a **Python script** that calls `mdb.models['Model-1'].rootAssembly.getSurface(section='EALL').getNodes()` and integrates the pressure.
+
+3. **Create a table of nodal forces** (node‑id, direction, force).  
+   Example (hypothetical numbers for a 4‑node surface):
+
+   | Node | Direction (global Y) | Force (N) |
+   |------|----------------------|-----------|
+   | 101  | 2                    | -8 700.0  |
+   | 102  | 2                    | -8 700.0  |
+   | 103  | 2                    | -8 700.0  |
+   | 104  | 2                    | -8 700.0  |
+
+   *The sum of the forces equals the total pressure load*  
+   `ΣF = p × A_surface`.
+
+4. **Write the `*CLOAD` cards**.  
+   You can either list each node on a separate line, or use the compact “node‑list” form (comma‑separated node numbers) followed by a single magnitude that is **applied to every node** (only allowed when all forces are identical).  
+
+   **Option A – one line per node (most general):**
+
+   ```abaqus
+   *CLOAD, NSET=EALL, OP=NEW
+   101, 2, -8700.0
+   102, 2, -8700.0
+   103, 2, -8700.0
+   104, 2, -8700.0
+   ```
+
+   **Option B – compact node‑list (only when forces are equal):**
+
+   ```abaqus
+   *CLOAD, NSET=EALL, OP=NEW
+   101, 102, 103, 104, 2, -8700.0
+   ```
+
+   **Option C – using a *CLOAD, NSET* with a *TABLE* (if you want to keep the data separate):**
+
+   ```abaqus
+   *CLOAD, NSET=EALL, OP=NEW
+   101, 2, 1
+   102, 2, 1
+   103, 2, 1
+   104, 2, 1
+   *TABLE, NAME=PRESSURE_FORCE
+   1, -8700.0
+   ```
+
+   (Here the “1” in the third column tells Abaqus to read the magnitude from the table.)
+
+### Full example (including the original `*DLOAD` for reference)
+
+```abaqus
+*Heading
+** Example: replace *DLOAD by equivalent *CLOAD
+** -------------------------------------------------
+** 1) Distributed pressure (original)
+*DLOAD
+EALL, P, -26013.0
+** -------------------------------------------------
+** 2) Equivalent nodal forces (computed externally)
+*CLOAD, NSET=EALL, OP=NEW
+101, 2, -8700.0
+102, 2, -8700.0
+103, 2, -8700.0
+104, 2, -8700.0
+```
+
+---
+
+## 4. Quick sanity‑check
+
+- **Total force from `*DLOAD`**:  
+  `F_total = p × A_surface`.  
+  Compute `A_surface` (e.g., using the Abaqus *EL PRINT, SECTION=AREA* or a pre‑processor).  
+
+- **Total force from `*CLOAD`**:  
+  `ΣF = Σ_i (F_i)`.  
+  Verify that `ΣF` equals `F_total` (within rounding error).  
+
+If the totals match and the direction (global Y in the example) is correct, the `*CLOAD` representation is faithful.
+
+---
+
+## 5. Bottom line – the “exact” statement
+
+> **There is no single line `*CLOAD` that reproduces `*DLOAD, EALL, NEWTON`.**  
+> The exact replacement consists of a **`*CLOAD` card for each node in the surface set `EALL`**, each carrying the **equivalent nodal force** computed from the pressure value and the element geometry.
+
+If you need a ready‑made script to generate those lines automatically, the following short Python snippet (for Abaqus/CAE) does the job:
+
+```python
+# -------------------------------------------------
+# Abaqus/CAE Python script: convert surface pressure to *CLOAD
+# -------------------------------------------------
+from abaqus import *
+from abaqusConstants import *
+
+model = mdb.models['Model-1']
+assembly = model.rootAssembly
+surf = assembly.surfaces['EALL']          # surface defined in the input file
+pressure = -26013.0                      # pressure (force/area)
+
+# Get all nodes belonging to the surface
+nodeSet = assembly.Surface(name='EALL', surface=surf).nodes
+# Compute nodal forces (simple lumped approach: 1/3 of each element's pressure * area)
+# For a rigorous approach use the element shape functions; here we use the built‑in method:
+assembly.Surface(name='EALL', surface=surf).setValues(
+    distributionType=UNIFORM, magnitude=pressure)
+
+# Write *CLOAD cards
+with open('cload_from_pressure.inp', 'w') as f:
+    f.write('*CLOAD, NSET=EALL, OP=NEW\n')
+    for n in nodeSet:
+        # The assembly method automatically stores the lumped forces in the node's 'reaction' attribute
+        # after a dummy static step; here we just illustrate the format:
+        f.write('{0}, 2, {1:.6f}\n'.format(n.label, n.reaction[1]))
+```
+
+*(The script assumes you have already run a dummy step to let Abaqus compute the lumped forces; many users prefer a post‑processor such as **Abaqus/Viewer** or an external mesh tool to obtain the nodal forces directly.)*
+
+---
+
+### TL;DR
+
+- `*DLOAD, EALL, NEWTON` applies a **uniform pressure** on the surface `EALL`.  
+- To mimic it with `*CLOAD` you must **convert the pressure to nodal forces** and then list those forces node‑by‑node:
+
+```abaqus
+*CLOAD, NSET=EALL, OP=NEW
+<node1>, 2, <F1>
+<node2>, 2, <F2>
+...
+<nodeN>, 2, <FN>
+```
+
+where each `<Fi>` = (pressure) × (portion of the surface area associated with node *i*).  
+
+Only after this conversion can the `*CLOAD` cards be considered an exact reproduction of the original `*DLOAD`.
+

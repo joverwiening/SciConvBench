@@ -1,0 +1,3196 @@
+=== 2026-04-17 18:32:16 ===
+Q: Below is a **step‑by‑step review of the model you posted**, the reasons why the results look the way they do, and a set of **concrete actions you can take** to get the behaviour you expect (plastic deformation, correct loading, full‑field output, etc.).
+
+---
+
+## 1. What the current output is telling you
+
+| Increment | vx (node 100) | vy | vz |
+|-----------|---------------|----|----|
+| 1 – 100 | 0.001 → 0.050 | 0 | 0 |
+
+* The only non‑zero component is **vx**, i.e. the node moves only in the global **X‑direction**.  
+* The displacement grows almost linearly with the step time (≈ 5 µs).  
+* No plastic strain is reported – the material is still behaving **elastically**.
+
+**Why?**  
+
+1. **Load direction** – `*DLOAD 32,P2,-100.` applies a pressure (P2) that, in the default global coordinate system, is **normal to the X‑face** of the element set “32”. Consequently the reaction is a pure X‑direction traction.  
+2. **Boundary conditions** – All nodes in `Nfix` are fully constrained (U1=U2=U3=0). The only free node in the model is node 100, so the whole deformation is forced to be a rigid translation of that single node.  
+3. **Load magnitude** – A pressure of –100 units on a 1 mm‑thick beam of steel (ρ ≈ 7.8 g cm⁻³) produces a stress far below the first yield point you defined (15 MPa). Hence the material never reaches the plastic branch.  
+
+Because the model is essentially a **single‑degree‑of‑freedom elastic spring**, the solver converges after only ~100 increments (the `INC=100000` you requested is a *maximum*; the solver stops when the step end‑time is reached or the solution is converged).
+
+---
+
+## 2. Things that are **incorrect or sub‑optimal** in the input file
+
+| Line / Section | Issue | What it means for the analysis |
+|----------------|-------|--------------------------------|
+| `*DLOAD 32,P2,-100.` | **Surface not defined** – “32” is an element number, not a surface name. | Abaqus will ignore the load (or treat it as a *point* load on a non‑existent surface). The only thing that actually drives the model is the reaction of the fixed nodes, which is why you see a pure translation. |
+| `*MATERIAL,NAME=EL` → `*PLASTIC 15.,0. 4050.,1.` | **Plastic data format** – you gave only two points (15 MPa at εp = 0, 4050 MPa at εp = 1). | The curve is extremely steep; the material will stay elastic for any realistic load. Also the second point (εp = 1) is *physically impossible* for steel. |
+| `*DENSITY 7.8E-9` | **Units mismatch** – density is 7.8 × 10⁻⁹ tonne/mm³ (≈ 7800 kg/m³) only if you are using **mm‑kg‑s**. | If you are using **mm‑N‑s** (i.e. N for force), the density should be 7.8 × 10⁻⁹ tonne/mm³ = 7.8 × 10⁻⁹ kg/mm³ = 7.8 × 10⁻⁶ kg/m³, which is *wrong*. Make sure the unit system is consistent (e.g. **mm‑kg‑s** or **m‑kg‑s**). |
+| `*STEP,INC=100000,NLGEOM 1.E-8,5.E-6` | **Very short step time** (5 µs) and a tiny initial increment (10 ns). | The deformation you are looking for (plastic flow) is a *load‑controlled* phenomenon, not a *time‑controlled* one. You can set the step time to **1** (or any convenient value) and use *load magnitude* as the primary driver. |
+| `*ELSET,ELSET=EALL,GENERATE 1,32` | **Only 32 elements** – the mesh is extremely coarse for a 1 × 1 × 8 m beam. | With such a coarse mesh you cannot capture stress gradients, buckling, or local yielding. |
+| `*NSET,NSET=N1 100` | **Only one node** in the output set. | You will never see the distribution of strain or stress; you only get the motion of a single point. |
+| No `*OUTPUT, FIELD` or `*OUTPUT, HISTORY` requests. | **No stress / plastic strain output**. | You cannot post‑process the plastic strain field, nor can you see when/where yielding occurs. |
+
+---
+
+## 3. How to **fix the model** so that you can actually see plastic deformation
+
+Below is a **minimal, corrected version** of the input file (comments start with `**`). Feel free to copy‑paste it into a new `.inp` file and run it.
+
+```abaqus
+** --------------------------------------------------------------
+** 3‑D cantilever beam – 1 × 1 × 8 m (or mm, whichever you choose)
+** --------------------------------------------------------------
+*HEADING
+**  Simple cantilever – pressure on the free end, fixed at the left
+** --------------------------------------------------------------
+
+** --------------------------------------------------------------
+**  NODES
+** --------------------------------------------------------------
+*NODE
+1, 0., 0., 0.
+2, 1., 0., 0.
+3, 1., 1., 0.
+4, 0., 1., 0.
+5, 0., 0., 1.
+6, 1., 0., 1.
+7, 1., 1., 1.
+8, 0., 1., 1.
+** (Add the rest of the nodes you need – the original file already has them)
+
+** --------------------------------------------------------------
+**  ELEMENTS (C3D8 – 8‑node brick)
+** --------------------------------------------------------------
+*ELEMENT, TYPE=C3D8, ELSET=EALL
+1, 1,2,3,4,5,6,7,8
+** (Add the rest of the elements – you already have 1‑32 in the file)
+
+** --------------------------------------------------------------
+**  MATERIAL – ELASTIC‑PLASTIC steel (example values)
+** --------------------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3          ** E = 210 GPa, ν = 0.3 (SI units)
+*PLASTIC
+250., 0.               ** Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9               ** 7850 kg/m³ → 7.85 × 10⁻⁹ tonne/mm³ (if you use mm)
+
+** --------------------------------------------------------------
+**  SECTION
+** --------------------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** --------------------------------------------------------------
+**  BOUNDARY CONDITIONS
+** --------------------------------------------------------------
+*BOUNDARY
+1, 1, 3               ** Fix node 1 in all 3 DOFs (U1‑U3)
+2, 1, 3               ** Fix node 2 (you can add more nodes if you want a rigid clamp)
+
+** --------------------------------------------------------------
+**  LOAD – pressure on the free end (face X = 1)
+** --------------------------------------------------------------
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+1, S1                  ** S1 is the face opposite node 1 (the X‑positive face)
+
+*STEP, NLGEOM, INC=1000, TITLE=Pressure‑step
+*STATIC
+0.1, 1., 1e-05, 1.    ** (initial, total, min‑inc, max‑inc)
+*DLOAD
+PRESSFACE, P2, -1.0   ** –1 MPa (negative = compressive, adjust magnitude)
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, HISTORY, VARIABLE=PRESELECT, NSET=N1
+*END STEP
+```
+
+### What changed and why?
+
+| Change | Reason |
+|--------|--------|
+| **Defined a *SURFACE* (PRESSFACE)** and used that name in `*DLOAD` | Abaqus requires a *surface* (or *node set* for point loads). The previous line `32,P2,-100.` was syntactically wrong. |
+| **Added a realistic elastic‑plastic curve** (250 MPa yield, then hardening) | The original curve (15 → 4050 MPa) never yielded under the applied load. |
+| **Set a reasonable density** (`7.85E‑9` tonne/mm³) | Keeps units consistent with mm‑kg‑s. |
+| **Used a *STATIC* step** (instead of a very short *dynamic* step) | For a quasi‑static pressure you don’t need a time‑dependent step. The load magnitude controls the response. |
+| **Requested field and history output** (`*OUTPUT`) | Now you will see stresses (`S`) and plastic strains (`PEEQ`) in the ODB. |
+| **Fixed a larger set of nodes** (`*BOUNDARY` on nodes 1‑2) | Gives a realistic cantilever clamp (all 6 DOFs at the left face). |
+| **Reduced the mesh to a few elements** (you can keep your original 32‑element mesh) | The example shows the minimal geometry; keep your original node/element list if you need the finer mesh. |
+
+---
+
+## 4. How to **verify that plasticity is actually occurring**
+
+1. **Open the ODB in Abaqus/Viewer** → *Report* → *Field Output* → select **PEEQ** (equivalent plastic strain) or **S** (stress).  
+2. **Plot a contour** on the deformed shape. You should see a region where `PEEQ > 0` (usually near the fixed end where the stress concentration is highest).  
+3. **Check the reaction force** at the fixed nodes (`*BOUNDARY` → *Reaction`). The reaction should increase non‑linearly once yielding starts.  
+4. **If you still see only elastic behaviour**, increase the pressure magnitude (e.g. `-10.0` MPa) or lower the yield stress in the material definition.
+
+---
+
+## 5. Common pitfalls when you start to **post‑process with Python**
+
+Below is a **tiny script** you can run from the Abaqus command line (`abaqus python getPlastic.py`) to extract the maximum plastic strain in the model:
+
+```python
+# getPlastic.py -------------------------------------------------
+from odbAccess import *
+from abaqusConstants import *
+
+odb = openOdb('Job-1.odb')               # <-- change to your ODB name
+step = odb.steps['Pressure-step']
+frame = step.frames[-1]                  # last increment (or any you like)
+
+# 1. Plastic strain (PEEQ) field
+plastic = frame.fieldOutputs['PEEQ']
+maxPlas = max(plastic.values, key=lambda v: v.data)
+print('Maximum equivalent plastic strain = %.6e' % maxPlas.data)
+
+# 2. Stress (S) field – locate the element with the highest von‑Mises stress
+stress = frame.fieldOutputs['S']
+vonMises = stress.getScalarField(invariant=MISES)
+maxStress = max(vonMises.values, key=lambda v: v.data)
+print('Maximum von‑Mises stress = %.2f MPa' % maxStress.data)
+
+odb.close()
+```
+
+*What it does*:  
+- Opens the ODB, grabs the **last frame** of the static step, extracts the **equivalent plastic strain** (`PEEQ`) and the **von‑Mises stress** (`MISES`).  
+- Prints the **global maxima**. You can easily adapt it to write a CSV file with the values for every increment if you need a time/history plot.
+
+---
+
+## 5. Quick checklist before you run the next analysis
+
+| ✅ | Item |
+|---|------|
+| **Units** – decide on **mm‑kg‑s** *or* **m‑kg‑s** and keep *all* geometric, material, and load values in that system. |
+| **Surface definition** – create a surface (`*SURFACE`) for any pressure/traction load. |
+| **Material curve** – give at least three points (yield + hardening) that are realistic for the chosen load. |
+| **Boundary conditions** – fix the *entire* left face (6 DOFs per node) if you want a cantilever; otherwise you will only get a rigid body translation. |
+| **Step type** – use a *static* step for quasi‑static pressure; you do not need a 5 µs time interval. |
+| **Output requests** – add `*OUTPUT, FIELD` for `S, PE, PEEQ` and `*OUTPUT, HISTORY` for reaction forces if you need them. |
+| **Mesh density** – at least **2‑3 elements through the thickness** of the beam; otherwise you cannot capture bending or local yielding. |
+| **Convergence** – keep an eye on the *increment* log. If the solver reports “*Maximum number of increments exceeded*”, you need to relax the NLGEOM tolerance or increase the max‑inc. |
+
+---
+
+## 5. TL;DR – What you should do right now
+
+1. **Create a surface** (e.g. `PRESSFACE`) that corresponds to the X‑positive face of the free end and replace the line  
+
+   ```abaqus
+   *DLOAD
+   32,P2,-100.
+   ```
+
+   with  
+
+   ```abaqus
+   *DLOAD
+   PRESSFACE, P2, -1.0   (or whatever pressure you need)
+   ```
+
+2. **Replace the plastic data** with a realistic curve (e.g. 250 MPa yield, then a few hardening points).  
+3. **Make the step static** (or at least give it a “reasonable” total time, e.g. `0.1` s) and let the pressure magnitude drive the response.  
+4. **Add field output** for `S` and `PEEQ` (or `PE` for plastic strain) so you can actually see where yielding occurs.  
+5. **Run the job** – you should now obtain a non‑linear load‑displacement curve and a region of non‑zero `PEEQ`.  
+
+If after these changes you still do not see plastic flow, simply **increase the pressure magnitude** (e.g. –10 MPa) or **lower the yield stress** in the material definition. The model will then cross the yield point and the `PEEQ` field will become non‑zero.
+
+---
+
+### Final note
+
+Your original model is essentially a **single‑node elastic spring** because:
+
+* the load was not attached to a proper surface,
+* the only free node was node 100,
+* the material curve never yielded under the applied pressure.
+
+Once you correct the load definition, give the material a realistic yield stress, and request the appropriate output, you will be able to see the **elastic‑plastic transition** you are after.  
+
+Feel free to post the new ODB or any error messages you encounter after making these changes – I’ll be happy to help you troubleshoot further!
+A: ## TL;DR – What’s wrong and how to fix it
+
+| Problem | Why it matters | One‑line fix |
+|---------|----------------|--------------|
+| **Load is not attached to a surface** (`*DLOAD 32,P2,-100.`) | Abaqus ignores the pressure – the only thing that moves the model is the reaction of the fixed nodes, so you see a pure rigid translation. | Define a *surface* (or node‑set) that represents the free end and reference that name in `*DLOAD`. |
+| **Material curve is unrealistic** (15 MPa → 4050 MPa at εp = 1) | The curve is so steep that the stress never reaches the plastic branch for any reasonable load. | Use a proper elastic‑plastic steel curve (e.g. yield ≈ 250 MPa, a few hardening points). |
+| **Boundary conditions leave only one free node** | The model collapses to a single‑degree‑of‑freedom spring → translation only, no strain distribution. | Fix the whole left face (all 6 DOFs of every node on that face) and leave the rest of the mesh free. |
+| **Step is a very short dynamic step** (`INC=100000, NLGEOM 1.E‑8,5.E‑6`) | Plastic flow is load‑controlled, not time‑controlled; the tiny total time forces the solver to stop before any yielding can develop. | Use a static step (or a quasi‑static step) with a reasonable total time (e.g. 0.1 s) and let the pressure magnitude drive the response. |
+| **No field/history output** | You cannot see stresses, plastic strain, or reaction forces in the ODB. | Add `*OUTPUT, FIELD` for `S, PE, PEEQ` and `*OUTPUT, HISTORY` for reaction forces or nodal displacements. |
+| **Units mismatch for density** | Wrong density can corrupt mass‑related calculations (e.g. inertia, damping). | Keep a consistent unit system (mm‑kg‑s or m‑kg‑s) and use the matching density (`7.85E‑9` tonne/mm³ for mm‑kg‑s). |
+| **Very coarse mesh (only 32 elements for an 8 m beam)** | Stress gradients and local yielding are smeared out. | At minimum 2‑3 elements through the thickness; refine if you need accurate stress fields. |
+
+---
+
+## 1. Minimal, corrected input file
+
+> **Copy‑paste** the block below into a new `cantilever.inp`.  
+> Keep your original node‑ and element‑lists (the file you posted already contains 1‑32 elements and all nodes).  
+> Only the highlighted sections differ from your original file.
+
+```abaqus
+*HEADING
+**  Cantilever beam – elastic‑plastic steel, pressure on free end
+**  Units: mm‑kg‑s (E in MPa, density in tonne/mm³)
+
+** --------------------------------------------------------------
+**  MATERIAL
+** --------------------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ** E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ** Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                    ** 7850 kg/m³ → tonne/mm³
+
+** --------------------------------------------------------------
+**  SECTION
+** --------------------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** --------------------------------------------------------------
+**  BOUNDARY CONDITIONS – clamp the left (X = 0) face
+** --------------------------------------------------------------
+*BOUNDARY
+**  Fix every node on the X‑0 face (U1‑U3 = 0)
+**  (Replace the list with the node numbers that belong to that face)
+1, 1, 3
+2, 1, 3
+5, 1, 3
+8, 1, 3
+** (add the rest of the left‑face nodes if you have more)
+
+** --------------------------------------------------------------
+**  SURFACE FOR THE PRESSURE LOAD
+** --------------------------------------------------------------
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+**  Face S1 is the X‑positive face of the elements at the free end.
+**  (If you generated the mesh with *ELSET,GENERATE 1,32,1* the last
+**   element number is 32 – adjust the range if you have more.)
+32, S1
+
+** --------------------------------------------------------------
+**  STEP – static pressure
+** --------------------------------------------------------------
+*STEP, NLGEOM, INC=1000, TITLE=Pressure‑step
+*STATIC
+0.1, 1., 1e-05, 1.          ** (initial, total, min‑inc, max‑inc)
+
+*DLOAD
+PRESSFACE, P2, -1.0        ** –1 MPa (compressive).  Increase magnitude if you want more load.
+
+** --------------------------------------------------------------
+**  OUTPUT REQUESTS
+** --------------------------------------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+```
+
+### What changed and why?
+
+| Change | Reason |
+|--------|--------|
+| **`*SURFACE … PRESSFACE`** + use of that name in `*DLOAD` | Abaqus requires a surface (or node set) for pressure/traction loads. |
+| **Realistic elastic‑plastic data** (`250 MPa` yield + hardening) | Guarantees that the material will yield when the applied stress exceeds ~250 MPa. |
+| **Static step (`*STATIC`) with a sensible total time** | Plastic flow is load‑controlled; a static step lets the solver converge on the equilibrium state. |
+| **Field output for `S, PE, PEEQ`** | Gives you stress, plastic strain, and equivalent plastic strain fields to inspect. |
+| **Boundary condition on the whole left face** | Prevents the model from behaving as a single‑node rigid body. |
+| **Consistent density** (`7.85E‑9` tonne/mm³) | Matches the mm‑kg‑s unit system. |
+| **`NLGEOM` kept on** | Needed for large deformations / plasticity; the increment limits are now reasonable. |
+
+---
+
+## 2. Verifying that plasticity really occurs
+
+1. **Run the job** (`abaqus job=cantilever input=cantilever.inp interactive`).  
+2. **Open the ODB** in Abaqus/Viewer.  
+3. **Display a contour** of **`PEEQ`** (equivalent plastic strain).  
+   *If the model has yielded you will see a region where `PEEQ > 0` (typically near the fixed end where the bending stress is highest).*
+4. **Plot `S` (von‑Mises stress)** on the same deformed shape – the stress should exceed the yield stress (≈ 250 MPa) in the same region.  
+5. **Check the reaction force** at the clamped nodes (`*OUTPUT, HISTORY, VARIABLE=RF`). The force‑vs‑displacement curve will become non‑linear once yielding starts.  
+
+**If you still see only elastic behaviour:**  
+* Increase the pressure magnitude (e.g. `-5.0` MPa, `-10.0` MPa).  
+* Or lower the yield stress in the material definition (e.g. `200.` MPa) just to confirm the model can plastically deform.
+
+---
+
+## 3. Quick Python script to extract the maximum plastic strain & von‑Mises stress
+
+Save the following as `extractPlastic.py` and run it with  
+
+```bash
+abaqus python extractPlastic.py
+```
+
+```python
+# --------------------------------------------------------------
+# extractPlastic.py – prints max PEEQ and max von‑Mises stress
+# --------------------------------------------------------------
+from odbAccess import openOdb
+from abaqusConstants import *
+
+odb_name = 'cantilever.odb'          # <-- change if your job name differs
+odb = openOdb(odb_name)
+
+step = odb.steps['Pressure-step']   # name must match the *STEP title
+frame = step.frames[-1]             # last increment (final state)
+
+# ---- Equivalent plastic strain (PEEQ) ----
+peeq = frame.fieldOutputs['PEEQ']
+max_peeq = max(peeq.values, key=lambda v: v.data)
+print('Maximum equivalent plastic strain (PEEQ) = {:.6e}'.format(max_peeq.data))
+
+# ---- von‑Mises stress (MISES) ----
+stress = frame.fieldOutputs['S']
+von_mises = stress.getScalarField(invariant=MISES)
+max_vm = max(von_mises.values, key=lambda v: v.data)
+print('Maximum von‑Mises stress = {:.2f} MPa'.format(max_vm.data))
+
+odb.close()
+```
+
+*What it does*:  
+- Opens the ODB, grabs the final frame of the static step, extracts `PEEQ` and the von‑Mises invariant of `S`, and prints the global maxima.  
+- You can easily extend it to write a CSV file with the values for every increment if you need a history plot.
+
+---
+
+## 4. Checklist before you launch the next run
+
+| ✅ | Item |
+|---|------|
+| **Units** – decide on **mm‑kg‑s** (or **m‑kg‑s**) and keep *all* geometric, material, load, and density values in that system. |
+| **Surface definition** – create a surface (`*SURFACE`) for any pressure/traction load. |
+| **Material curve** – at least three points (yield + two hardening points) that are realistic for the chosen steel. |
+| **Boundary conditions** – fix the *entire* clamped face (U1‑U3 = 0 for every node on that face). |
+| **Step type** – use a *static* (or quasi‑static) step; total time can be 0.1 s (or any convenient value). |
+| **Output requests** – request `S`, `PE`, `PEEQ` (field) and reaction forces or nodal displacements (history). |
+| **Mesh density** – ≥ 2 elements through the thickness; refine if you need accurate stress gradients. |
+| **Convergence** – monitor the increment log; if “Maximum number of increments exceeded” appears, increase `MAXINC` or relax NLGEOM tolerances. |
+
+---
+
+## 5. What you should do **right now**
+
+1. **Replace the load line** in your original input with the surface‑based version shown above.  
+2. **Insert a realistic plastic curve** (250 MPa yield, followed by a few hardening points).  
+3. **Change the step** to a static step with a reasonable total time.  
+4. **Add field/history output** for stresses and plastic strain.  
+5. **Run the job** and inspect `PEEQ` and `S` in the ODB.  
+
+If the `PEEQ` field is still zero, simply **increase the pressure magnitude** (e.g. `-5.0` MPa) or **lower the yield stress** to confirm that the model is capable of yielding. Once you see a non‑zero `PEEQ`, you have a working elastic‑plastic cantilever model.
+
+---
+
+### Bottom line
+
+Your original model behaved like a **single‑node elastic spring** because:
+
+* the pressure was not attached to a proper surface,
+* the material never reached its (unrealistic) yield point,
+* only one node was free to move,
+* the step was a tiny dynamic interval, and
+* no output was requested.
+
+The corrected input, together with the verification steps and the tiny Python post‑processor, will give you the **plastic deformation, correct loading, and full‑field results** you asked for.  
+
+Feel free to post the new ODB or any error messages you encounter after making these changes – I’ll be happy to help you troubleshoot further!
+
+=== 2026-04-17 18:33:24 ===
+Q: ## TL;DR – What’s wrong and how to fix it  
+
+| Problem | Why it matters | One‑line fix |
+|---------|----------------|--------------|
+| **Load is not attached to a surface** (`*DLOAD 32,P2,-100.`) | Abaqus ignores the pressure – the only thing that moves the model is the reaction of the fixed nodes, so you see a pure rigid translation. | Define a *surface* (or node‑set) that represents the free end and reference that name in `*DLOAD`. |
+| **Material curve is unrealistic** (15 MPa → 4050 MPa at εp = 1) | The curve is so steep that the stress never reaches the plastic branch for any reasonable load. | Use a proper elastic‑plastic steel curve (e.g. yield ≈ 250 MPa, a few hardening points). |
+| **Boundary conditions leave only one free node** | The model collapses to a single‑degree‑of‑freedom spring → translation only, no strain distribution. | Fix the whole left face (all 6 DOFs of every node on that face) and leave the rest of the mesh free. |
+| **Step is a very short dynamic step** (`INC=100000, NLGEOM 1.E‑8,5.E‑6`) | Plastic flow is load‑controlled, not time‑controlled; the tiny total time forces the solver to stop before any yielding can develop. | Use a static step (or a quasi‑static step) with a reasonable total time (e.g. 0.1 s) and let the pressure magnitude drive the response. |
+| **No field/history output** | You cannot see stresses, plastic strain, or reaction forces in the ODB. | Add `*OUTPUT, FIELD` for `S, PE, PEEQ` and `*OUTPUT, HISTORY` for reaction forces or nodal displacements. |
+| **Units mismatch for density** | Wrong density can corrupt mass‑related calculations (e.g. inertia, damping). | Keep a consistent unit system (mm‑kg‑s or m‑kg‑s) and use the matching density (`7.85E‑9` tonne/mm³ for mm‑kg‑s). |
+| **Very coarse mesh (only 32 elements for an 8 m beam)** | Stress gradients and local yielding are smeared out. | At minimum 2‑3 elements through the thickness; refine if you need accurate stress fields. |
+
+---
+
+## 1. Minimal, corrected input file  
+
+> **Copy‑paste** the block below into a new `cantilever.inp`.  
+> Keep your original node‑ and element‑lists (the file you posted already contains 1‑32 elements and all nodes).  
+> Only the highlighted sections differ from your original file.
+
+```abaqus
+*HEADING
+** Cantilever beam – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+** MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ** E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ** Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                    ** 7850 kg/m³ → tonne/mm³
+
+** -------------------------------------------------
+** SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+** BOUNDARY CONDITIONS – clamp the left (X = 0) face
+** -------------------------------------------------
+*BOUNDARY
+**  Fix every node on the X‑0 face (U1‑U3 = 0)
+**  (Replace the list with the node numbers that belong to that face)
+1, 1, 3
+2, 1, 3
+5, 1, 3
+8, 1, 3
+** (add the rest of the left‑face nodes if you have more)
+
+** -------------------------------------------------
+** SURFACE FOR THE PRESSURE LOAD
+** -------------------------------------------------
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+**  Face S1 is the X‑positive face of the element at the free end.
+**  (If you generated the mesh with *ELSET,GENERATE 1,32,1* the last
+**   element number is 32 – adjust the range if you have more.)
+32, S1
+
+** -------------------------------------------------
+** STEP – static pressure
+** -------------------------------------------------
+*STEP, NLGEOM, INC=1000, TITLE=Pressure-step
+*STATIC
+0.1, 1., 1e-05, 1.          ** (initial, total, min‑inc, max‑inc)
+
+*DLOAD
+PRESSFACE, P2, -1.0        ** –1 MPa (compressive).  Increase magnitude if you want more load.
+
+** -------------------------------------------------
+** OUTPUT REQUESTS
+** -------------------------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+```
+
+### What changed and why?
+
+| Change | Reason |
+|--------|--------|
+| **`*SURFACE … PRESSFACE`** + use of that name in `*DLOAD` | Abaqus requires a surface (or node set) for pressure/traction loads. |
+| **Realistic elastic‑plastic data** (`250 MPa` yield + hardening) | Guarantees that the material will yield when the applied stress exceeds ~250 MPa. |
+| **Static step (`*STATIC`) with a sensible total time** | Plastic flow is load‑controlled; a static step lets the solver converge on the equilibrium state. |
+| **Field output for `S, PE, PEEQ`** | Gives you stress, plastic strain, and equivalent plastic strain fields to inspect. |
+| **Boundary condition on the whole left face** | Prevents the model from behaving as a single‑node rigid body. |
+| **Consistent density** (`7.85E‑9` tonne/mm³) | Matches the mm‑kg‑s unit system. |
+| **`NLGEOM` kept on** | Needed for large deformations / plasticity; the increment limits are now reasonable. |
+
+---
+
+## 2. Verifying that plasticity really occurs  
+
+1. **Run the job** (`abaqus job=cantilever input=cantilever.inp interactive`).  
+2. **Open the ODB** in Abaqus/Viewer.  
+3. **Display a contour of `PEEQ`** (equivalent plastic strain).  
+   *If the model has yielded you will see a region where `PEEQ > 0` (typically near the fixed end where the bending stress is highest).*
+4. **Plot `S` (von‑Mises stress)** on the same deformed shape – the stress should exceed the yield stress (≈ 250 MPa) in that region.  
+5. **Check the reaction force** at the clamped nodes (`*OUTPUT, HISTORY, VARIABLE=RF`). The force‑vs‑displacement curve will become non‑linear once yielding starts.  
+
+**If you still see only elastic behaviour:**  
+
+* Increase the pressure magnitude (e.g. `-5.0` MPa, `-10.0` MPa).  
+* Or lower the yield stress in the material definition (e.g. `200.` MPa) just to confirm the model can plastically deform.
+
+---
+
+## 3. Tiny Python script to extract the maximum plastic strain & von‑Mises stress  
+
+Save the following as `extractPlastic.py` and run it with  
+
+```bash
+abaqus python extractPlastic.py
+```
+
+```python
+# --------------------------------------------------------------
+# extractPlastic.py – prints max PEEQ and max von‑Mises stress
+# --------------------------------------------------------------
+from odbAccess import openOdb
+from abaqusConstants import *
+
+odb_name = 'cantilever.odb'          # change if your job name differs
+odb = openOdb(odb_name)
+
+step = odb.steps['Pressure-step']   # must match the *STEP title
+frame = step.frames[-1]             # final increment
+
+# ---- Equivalent plastic strain (PEEQ) ----
+peeq = frame.fieldOutputs['PEEQ']
+max_peeq = max(peeq.values, key=lambda v: v.data)
+print('Maximum equivalent plastic strain (PEEQ) = {:.6e}'.format(max_peeq.data))
+
+# ---- von‑Mises stress (MISES) ----
+stress = frame.fieldOutputs['S']
+von_mises = stress.getScalarField(invariant=MISES)
+max_vm = max(von_mises.values, key=lambda v: v.data)
+print('Maximum von‑Mises stress = {:.2f} MPa'.format(max_vm.data))
+
+odb.close()
+```
+
+*What it does*: opens the ODB, grabs the final frame of the static step, extracts `PEEQ` and the von‑Mises invariant of `S`, and prints the global maxima. You can easily extend it to write a CSV file with the values for every increment if you need a history plot.
+
+---
+
+## 4. Checklist before you launch the next run  
+
+| ✅ | Item |
+|---|------|
+| **Units** – decide on **mm‑kg‑s** (or **m‑kg‑s**) and keep *all* geometric, material, load, and density values in that system. |
+| **Surface definition** – create a surface (`*SURFACE`) for any pressure/traction load. |
+| **Material curve** – at least three points (yield + two hardening points) that are realistic for the chosen steel. |
+| **Boundary conditions** – fix the *entire* clamped face (U1‑U3 = 0 for every node on that face). |
+| **Step type** – use a *static* (or quasi‑static) step; total time can be 0.1 s (or any convenient value). |
+| **Output requests** – request `S`, `PE`, `PEEQ` (field) and reaction forces or nodal displacements (history). |
+| **Mesh density** – ≥ 2 elements through the thickness; refine if you need accurate stress gradients. |
+| **Convergence** – monitor the increment log; if “Maximum number of increments exceeded” appears, increase `MAXINC` or relax NLGEOM tolerances. |
+
+---
+
+## 5. What you should do **right now**  
+
+1. **Replace the load line** in your original input with the surface‑based version shown above.  
+2. **Insert a realistic plastic curve** (250 MPa yield, followed by a few hardening points).  
+3. **Change the step** to a static step with a reasonable total time.  
+4. **Add field/history output** for stresses and plastic strain.  
+5. **Run the job** and inspect `PEEQ` and `S` in the ODB.  
+
+If the `PEEQ` field is still zero, simply **increase the pressure magnitude** (e.g. `-5.0` MPa) or **lower the yield stress** to confirm that the model is capable of yielding. Once you see a non‑zero `PEEQ`, you have a working elastic‑plastic cantilever model.
+
+---
+
+### Bottom line  
+
+Your original model behaved like a **single‑node elastic spring** because:
+
+* the pressure was not attached to a proper surface,
+* the material never reached its (unrealistic) yield point,
+* only one node was free to move,
+* the step was a tiny dynamic interval, and
+* no output was requested.
+
+The corrected input, together with the verification steps and the tiny Python post‑processor, will give you the **plastic deformation, correct loading, and full‑field results** you asked for.  
+
+Feel free to post the new ODB or any error messages you encounter after making these changes – I’ll be happy to help you troubleshoot further!
+A: ## TL;DR – What’s wrong and how to fix it  
+
+| # | Problem | Why it matters | One‑line fix |
+|---|---------|----------------|--------------|
+| 1 | **Load is not attached to a surface** (`*DLOAD 32,P2,-100.`) | Abaqus ignores a pressure that is not tied to a *surface* (or node‑set). The model only moves as a rigid body. | Create a surface (or node‑set) that represents the free end and reference that name in `*DLOAD`. |
+| 2 | **Material curve is unrealistic** (15 MPa → 4050 MPa at εp = 1) | The curve is so steep that the stress never reaches the plastic branch for any reasonable load, so you never see yielding. | Use a realistic elastic‑plastic steel curve (e.g. yield ≈ 250 MPa, a few hardening points). |
+| 3 | **Boundary conditions leave only one free node** | The model collapses to a single‑degree‑of‑freedom spring → pure translation, no strain distribution. | Fix the whole left face (all 6 DOFs of every node on that face). |
+| 4 | **Step is a very short dynamic step** (`INC=100000, NLGEOM 1.E‑8,5.E‑6`) | Plastic flow is load‑controlled, not time‑controlled; the tiny total time forces the solver to stop before any yielding can develop. | Use a static (or quasi‑static) step with a reasonable total time (e.g. 0.1 s). |
+| 5 | **No field/history output** | You cannot see stresses, plastic strain, or reaction forces in the ODB. | Add `*OUTPUT, FIELD` for `S, PE, PEEQ` and `*OUTPUT, HISTORY` for reaction forces or nodal displacements. |
+| 6 | **Units mismatch for density** | Wrong density corrupts mass‑related calculations (inertia, damping). | Keep a consistent unit system (mm‑kg‑s or m‑kg‑s) and use the matching density (`7.85E‑9` tonne/mm³ for mm‑kg‑s). |
+| 7 | **Very coarse mesh (only 32 elements for an 8 m beam)** | Stress gradients and local yielding are smeared out. | At minimum 2‑3 elements through the thickness; refine if you need accurate stress fields. |
+
+---
+
+## 1. Minimal, corrected input file  
+
+> **Copy‑paste** the block below into a new file called `cantilever.inp`.  
+> Keep the node‑ and element‑lists you already have (the file you posted already contains the 1‑32 elements and all nodes).  
+> Only the highlighted sections differ from your original file.
+
+```abaqus
+*HEADING
+** Cantilever beam – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+** MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ** E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ** Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                    ** 7850 kg/m³ → tonne/mm³
+
+** -------------------------------------------------
+** SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+** BOUNDARY CONDITIONS – clamp the left (X = 0) face
+** -------------------------------------------------
+*BOUNDARY
+**  Fix every node on the X‑0 face (U1‑U3 = 0)
+**  (Replace the list with the node numbers that belong to that face)
+1, 1, 3
+2, 1, 3
+5, 1, 3
+8, 1, 3
+** (add the rest of the left‑face nodes if you have more)
+
+** -------------------------------------------------
+** SURFACE FOR THE PRESSURE LOAD
+** -------------------------------------------------
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+**  Face S1 is the X‑positive face of the element at the free end.
+**  (If you generated the mesh with *ELSET,GENERATE 1,32,1* the last
+**   element number is 32 – adjust the range if you have more.)
+32, S1
+
+** -------------------------------------------------
+** STEP – static pressure
+** -------------------------------------------------
+*STEP, NLGEOM, INC=1000, TITLE=Pressure-step
+*STATIC
+0.1, 1., 1e-05, 1.          ** (initial, total, min‑inc, max‑inc)
+
+*DLOAD
+PRESSFACE, P2, -1.0        ** –1 MPa (compressive).  Increase magnitude if you want more load.
+
+** -------------------------------------------------
+** OUTPUT REQUESTS
+** -------------------------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+```
+
+### What changed and why?
+
+| Change | Reason |
+|--------|--------|
+| **`*SURFACE … PRESSFACE`** + use of that name in `*DLOAD` | Abaqus requires a surface (or node set) for pressure/traction loads. |
+| **Realistic elastic‑plastic data** (`250 MPa` yield + hardening) | Guarantees that the material will yield when the applied stress exceeds ~250 MPa. |
+| **Static step (`*STATIC`) with a sensible total time** | Plastic flow is load‑controlled; a static step lets the solver converge on the equilibrium state. |
+| **Field output for `S, PE, PEEQ`** | Gives you stress, plastic strain, and equivalent plastic strain fields to inspect. |
+| **Boundary condition on the whole left face** | Prevents the model from behaving as a single‑node rigid body. |
+| **Consistent density** (`7.85E‑9` tonne/mm³) | Matches the mm‑kg‑s unit system. |
+| **`NLGEOM` kept on** | Needed for large deformations / plasticity; the increment limits are now reasonable. |
+
+---
+
+## 2. Verifying that plasticity really occurs  
+
+1. **Run the job**  
+
+   ```bash
+   abaqus job=cantilever input=cantilever.inp interactive
+   ```
+
+2. **Open the ODB** in Abaqus/Viewer.  
+
+3. **Display a contour of `PEEQ`** (equivalent plastic strain).  
+   *If the model has yielded you will see a region where `PEEQ > 0` (typically near the fixed end where the bending stress is highest).*
+
+4. **Plot `S` (von‑Mises stress)** on the same deformed shape – the stress should exceed the yield stress (≈ 250 MPa) in that region.
+
+5. **Check the reaction force** at the clamped nodes (`*OUTPUT, HISTORY, VARIABLE=RF`).  
+   The force‑vs‑displacement curve will become non‑linear once yielding starts.
+
+**If you still see only elastic behaviour:**  
+
+* Increase the pressure magnitude (e.g. `-5.0` MPa, `-10.0` MPa).  
+* Or lower the yield stress in the material definition (e.g. `200.` MPa) just to confirm the model can plastically deform.
+
+---
+
+## 3. Tiny Python script to extract the maximum plastic strain & von‑Mises stress  
+
+Save the following as `extractPlastic.py` and run it with  
+
+```bash
+abaqus python extractPlastic.py
+```
+
+```python
+# --------------------------------------------------------------
+# extractPlastic.py – prints max PEEQ and max von‑Mises stress
+# --------------------------------------------------------------
+from odbAccess import openOdb
+from abaqusConstants import *
+
+odb_name = 'cantilever.odb'          # change if your job name differs
+odb = openOdb(odb_name)
+
+step = odb.steps['Pressure-step']   # must match the *STEP title
+frame = step.frames[-1]             # final increment
+
+# ---- Equivalent plastic strain (PEEQ) ----
+peeq = frame.fieldOutputs['PEEQ']
+max_peeq = max(peeq.values, key=lambda v: v.data)
+print('Maximum equivalent plastic strain (PEEQ) = {:.6e}'.format(max_peeq.data))
+
+# ---- von‑Mises stress (MISES) ----
+stress = frame.fieldOutputs['S']
+von_mises = stress.getScalarField(invariant=MISES)
+max_vm = max(von_mises.values, key=lambda v: v.data)
+print('Maximum von‑Mises stress = {:.2f} MPa'.format(max_vm.data))
+
+odb.close()
+```
+
+*What it does*: opens the ODB, grabs the final frame of the static step, extracts `PEEQ` and the von‑Mises invariant of `S`, and prints the global maxima. You can easily extend it to write a CSV file with the values for every increment if you need a history plot.
+
+---
+
+## 4. Checklist before you launch the next run  
+
+| ✅ | Item |
+|---|------|
+| **Units** – decide on **mm‑kg‑s** (or **m‑kg‑s**) and keep *all* geometric, material, load, and density values in that system. |
+| **Surface definition** – create a surface (`*SURFACE`) for any pressure/traction load. |
+| **Material curve** – at least three points (yield + two hardening points) that are realistic for the chosen steel. |
+| **Boundary conditions** – fix the *entire* clamped face (U1‑U3 = 0 for every node on that face). |
+| **Step type** – use a *static* (or quasi‑static) step; total time can be 0.1 s (or any convenient value). |
+| **Output requests** – request `S`, `PE`, `PEEQ` (field) and reaction forces or nodal displacements (history). |
+| **Mesh density** – ≥ 2 elements through the thickness; refine if you need accurate stress gradients. |
+| **Convergence** – monitor the increment log; if “Maximum number of increments exceeded” appears, increase `MAXINC` or relax NLGEOM tolerances. |
+
+---
+
+## 5. What you should do **right now**  
+
+1. **Replace the load line** in your original input with the surface‑based version shown above.  
+2. **Insert a realistic plastic curve** (250 MPa yield, followed by a few hardening points).  
+3. **Change the step** to a static step with a reasonable total time.  
+4. **Add field/history output** for stresses and plastic strain.  
+5. **Run the job** and inspect `PEEQ` and `S` in the ODB.  
+
+If the `PEEQ` field is still zero, simply **increase the pressure magnitude** (e.g. `-5.0` MPa) or **lower the yield stress** to confirm that the model is capable of yielding. Once you see a non‑zero `PEEQ`, you have a working elastic‑plastic cantilever model.
+
+---
+
+### Bottom line  
+
+Your original model behaved like a **single‑node elastic spring** because:
+
+* the pressure was not attached to a proper surface,
+* the material never reached its (unrealistic) yield point,
+* only one node was free to move,
+* the step was a tiny dynamic interval, and
+* no output was requested.
+
+The corrected input, together with the verification steps and the tiny Python post‑processor, will give you the **plastic deformation, correct loading, and full‑field results** you asked for.  
+
+If you run into any error messages after making these changes, paste the log or ODB here and I’ll help you troubleshoot further!
+
+=== 2026-04-17 18:34:16 ===
+Q: I’m glad you’ve already pinpointed the root causes – the list you compiled is spot‑on.  
+Below is a quick “action checklist” that you can copy‑paste into your input file (or use as a reminder when you edit the existing one).  
+
+---
+
+### ✅ Immediate fixes to get plasticity showing up  
+
+| # | What to change | How to do it (one‑liner) |
+|---|----------------|--------------------------|
+| 1 | **Tie the pressure to a surface** | Add a `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` (or a node‑set) and replace `*DLOAD 32,P2,-100.` with `PRESSFACE, P2, -1.0` (or whatever magnitude you need). |
+| 2 | **Use a realistic steel curve** | Replace the current `*PLASTIC` block with something like: <br>`250., 0.`  (yield) <br>`300., 0.02` <br>`350., 0.05` <br>`400., 0.10` |
+| 3 | **Clamp the whole left face** | Instead of a single node, list **all** nodes on the X = 0 face (or generate them with `*ELSET,GENERATE`). Example: <br>`*BOUNDARY` <br>`1, 1, 6` (or use `*BOUNDARY, OP=FIX` with an ELSET). |
+| 4 | **Switch to a static/quasi‑static step** | Replace the current `*DYNAMIC` block with: <br>`*STEP, NLGEOM, TITLE=PressStep` <br>`*STATIC` <br>`0.1, 1., 1e‑5, 1.` |
+| 5 | **Ask for the right output** | Add after the step definition: <br>`*OUTPUT, FIELD` <br>`S, PE, PEEQ` <br>`*OUTPUT, HISTORY` <br>`RF, U` |
+| 6 | **Make density consistent** | Keep the unit system (mm‑kg‑s or m‑kg‑s) and set density to `7.85E‑9` tonne/mm³ (or `7850` kg/m³ if you work in SI). |
+| 7 | **Refine the mesh a little** | At least 2–3 elements through the thickness; you can keep the 32‑element layout for a quick test, but for a production run add a few more layers in the thickness direction. |
+
+---
+
+### Quick sanity‑check after the run  
+
+1. **Open the ODB** → *Result* → *Contour* → select **PEEQ**.  
+   - A non‑zero region means plasticity is active.  
+2. **Overlay von‑Mises stress (S, MISES)** → it should exceed ~250 MPa near the clamp.  
+3. **History plot of reaction force (RF)** → look for a kink (elastic‑plastic transition).  
+
+If the plastic strain is still zero, simply **increase the pressure magnitude** (e.g. `-5 MPa` instead of `-1 MPa`) or **lower the yield stress** a bit to verify that the model can yield.
+
+---
+
+### Minimal, copy‑paste ready input (only the changed parts)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s (E in MPa, density in tonne/mm³)
+
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3
+*PLASTIC
+250., 0.
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9
+
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+*BOUNDARY
+** (list all nodes on the X=0 face)
+1, 1, 3
+2, 1, 3
+5, 1, 3
+8, 1, 3
+...   (add the rest)
+
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+32, S1          ** X‑positive face of the last element
+
+*STEP, NLGEOM, INC=1000, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.
+*DLOAD
+PRESSFACE, P2, -1.0   ** 1 MPa compressive pressure
+
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+```
+
+---
+
+### What to do next  
+
+1. **Swap the old `*DLOAD` line** for the `*SURFACE`/`PRESSFACE` version.  
+2. **Paste the realistic plastic block** (yield = 250 MPa).  
+3. **Run the job** and open the ODB.  
+4. **Check `PEEQ`** – you should now see a non‑zero contour.  
+
+If anything still looks off (error messages, zero plastic strain, convergence warnings), drop the `.log` or a screenshot of the ODB here and I’ll help you fine‑tune the model. Happy modelling!
+A: Below is a **complete, ready‑to‑copy Abaqus / Standard input file** that incorporates every item from the checklist you received.  
+After the file you’ll find a short “what‑changed‑why” table and a step‑by‑step sanity‑check guide so you can be sure the model is really doing elastic‑plastic work.
+
+---
+
+## 1️⃣ Full, copy‑paste‑ready input
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³  → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – geometry (example: 4×4×1 mm block)
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+1,   0., 0., 0.
+2,   4., 0., 0.
+3,   4., 4., 0.
+4,   0., 4., 0.
+5,   0., 0., 1.
+6,   4., 0., 1.
+7,   4., 4., 1.
+8,   0., 4., 1.
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+1, 1,2,3,4,5,6,7,8
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*ELSET, ELSET=CLAMPED_FACE, GENERATE
+1, 1, 1               ! only element 1 touches the X=0 face
+*NODE, NSET=CLAMPED_NODES
+1,5,8,4               ! all nodes whose X‑coordinate = 0
+
+**---  Surface for the pressure (positive X face of last element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+1, S1                 ! element 1, face 1 = +X face
+
+**-------------------------------------------------
+**  SECTION
+**-------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+**-------------------------------------------------
+**  BOUNDARY CONDITIONS
+**-------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X=0
+
+**-------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+**-------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ------------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+**-------------------------------------------------
+**  END OF INPUT
+**-------------------------------------------------
+```
+
+> **Note** – The geometry above is a simple 4 × 4 × 1 mm block (8‑node brick).  
+> If your model already has a different mesh, keep the *NODE, *ELEMENT, and *ELSET sections that you already use; only replace the material, surface, boundary, step, and output blocks with the ones shown.
+
+---
+
+## 2️⃣ What changed and why (one‑liner recap)
+
+| # | Change | Reason |
+|---|--------|--------|
+| 1 | `*SURFACE … PRESSFACE` + `*DLOAD PRESSFACE, P2, -1.0` | Pressure must act on a **surface**, not on a single element ID. |
+| 2 | Realistic `*PLASTIC` curve (250 MPa yield) | Gives the model a proper elastic‑plastic response. |
+| 3 | `*BOUNDARY` on **all** nodes of the X = 0 face (`CLAMPED_NODES`) | Prevents a single‑node “pin” that lets the rest of the face rotate. |
+| 4 | Replace `*DYNAMIC` with `*STATIC` (NLGEOM) | Quasi‑static loading is sufficient for a pressure‑controlled cantilever and avoids inertial effects. |
+| 5 | `*OUTPUT` fields `S, PE, PEEQ` + history `RF, U` | Guarantees you can see plastic strain, von‑Mises stress and reaction forces. |
+| 6 | Density `7.85E‑9` tonne/mm³ (consistent with mm‑kg‑s) | Keeps units coherent; otherwise Abaqus will silently scale the mass. |
+| 7 | Minimum 2–3 elements through thickness (here 1 element, but you can split the block) | Improves strain‑gradient resolution; for a quick test 1 element works, but for production add layers. |
+
+---
+
+## 3️⃣ Running the job
+
+1. **Save** the text above as `cantilever.inp` (or any name you like).  
+2. Open Abaqus/CAE → *Job* → *Create* → select the file → **Submit**.  
+3. Wait for the job to finish (no convergence warnings should appear; if they do, increase the number of increments or reduce the pressure magnitude a little).
+
+---
+
+## 4️⃣ Quick sanity‑check after the run  
+
+| Step | How to do it in Abaqus/CAE |
+|------|----------------------------|
+| **A** | Open the resulting `.odb`. |
+| **B** | *Result* → *Field Output* → choose **PEEQ** → *Contour*. <br>**Non‑zero** values → plastic strain is active. |
+| **C** | Add a second contour for **S, MISES** (von‑Mises). <br>Values > 250 MPa near the clamp confirm yielding. |
+| **D** | *Result* → *History Output* → plot **RF** (reaction force) vs. step time. <br>Look for a change in slope (elastic → plastic). |
+| **E** | If **PEEQ** is still zero, either: <br>• Increase the pressure magnitude (`-2.0`, `-5.0`, …) <br>• Lower the yield stress a little (e.g., 200 MPa) <br>• Verify that the surface definition really matches the +X face (use *Query* → *Pick* → *Elements* → *Face*). |
+
+---
+
+## 5️⃣ What to do if you still see zero plastic strain  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| **No PEEQ** but high von‑Mises stress | Pressure not applied (surface mis‑identified) | In the viewport, *Tools → Query → Pick* the element face; note the element number and face label (S1‑S6). Update `*SURFACE` accordingly. |
+| **Convergence warnings** | Too large pressure step for the current mesh | Reduce the initial increment (`*STATIC` line: `0.1, 0.5, 1e-05, 1.`) or add more elements through thickness. |
+| **Zero reaction force** | Boundary set does not include all nodes on X = 0 | Double‑check the node list (`CLAMPED_NODES`). Use `*ELSET, GENERATE` or `*NSET, NSET=CLAMPED_NODES, GENERATE` with the correct node IDs. |
+| **Plastic strain appears only at a single element** | Mesh too coarse → strain localises | Refine the mesh (e.g., split the block into 2×2×4 elements). |
+
+If you hit any of the above, just paste the relevant part of the `.log` or a screenshot of the ODB view and I’ll help you tweak the model further.
+
+---
+
+### TL;DR
+
+*Tie the pressure to a surface, give the steel a realistic plastic curve, clamp **all** nodes on the X = 0 face, run a static NLGEOM step, request `PEEQ`/`S`/`RF` output, keep units consistent, and use at least a couple of elements through the thickness.*  
+
+Copy the input file above, run it, and verify with the PEEQ contour – you should now see plasticity develop. Happy modelling!
+
+=== 2026-04-17 18:35:18 ===
+Q: Below is a **complete, copy‑and‑paste ready Abaqus / Standard input file** that contains every fix that was highlighted in the checklist you received.  
+Only the sections that are **different** from the file you posted are shown in full – you can keep the *NODE, *ELEMENT and *ELSET blocks that already describe your geometry and mesh.  
+Everything else (material, surface definition, boundary conditions, step, output) can be dropped straight into your existing file.
+
+---
+
+## 1️⃣ Full input (ready to copy)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+# (your node list – keep exactly as you have it)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+# (your element list – keep exactly as you have it)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+# list **all** nodes whose X‑coordinate = 0
+# example for a simple 4×4×1 mm block:
+1,5,8,4
+# ---------------------------------------------------------
+
+**---  Surface for the pressure (positive X face of the last element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+# element number that owns the +X face, followed by the face label
+# For a C3D8R brick the +X face is **S2**.
+# Replace “32” with the element that is at the free end of the cantilever.
+32, S2
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ------------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+> **How to adapt it to your mesh**  
+> 1. Keep the *NODE, *ELEMENT, and *ELSET sections that you already have – they define the geometry and the element connectivity.  
+> 2. Replace the **material block**, **surface definition**, **boundary condition**, **step**, and **output** blocks with the ones shown above.  
+> 3. The only thing you must verify is that the surface `PRESSFACE` really corresponds to the **+X face of the element that sits at the free end of the cantilever** (in the example it is element 32, face S2).  
+
+---
+
+## 2️⃣ What changed and why (one‑liner recap)
+
+| # | Change | Reason |
+|---|--------|--------|
+| 1 | `*SURFACE … PRESSFACE` + `*DLOAD PRESSFACE, P2, -1.0` | Pressure must act on a **surface**, not on a single element ID. |
+| 2 | Realistic `*PLASTIC` curve (250 MPa yield) | Gives the model a proper elastic‑plastic response. |
+| 3 | `*BOUNDARY` on **all** nodes of the X = 0 face (`CLAMPED_NODES`) | Prevents a single‑node “pin” that lets the rest of the face rotate. |
+| 4 | Replace `*DYNAMIC` with `*STATIC` (NLGEOM) | Quasi‑static loading is sufficient for a pressure‑controlled cantilever and avoids inertial effects. |
+| 5 | `*OUTPUT` fields `S, PE, PEEQ` + history `RF, U` | Guarantees you can see plastic strain, von‑Mises stress and reaction forces. |
+| 6 | Density `7.85E‑9` tonne/mm³ (consistent with mm‑kg‑s) | Keeps units coherent; otherwise Abaqus will silently scale the mass. |
+| 7 | Minimum 2–3 elements through thickness (you can keep 1 for a quick test, but add layers for production) | Improves strain‑gradient resolution; a coarse mesh can hide plasticity. |
+
+---
+
+## 3️⃣ Running the job
+
+1. **Save** the text above as `cantilever.inp` (or any name you like).  
+2. In Abaqus/CAE → *Job* → *Create* → select the file → **Submit**.  
+3. The job should finish without “maximum number of increments exceeded” warnings.  
+   - If you see convergence warnings, increase the number of increments (`*STATIC` line: `0.1, 0.5, 1e‑05, 1.`) or refine the mesh a little.
+
+---
+
+## 4️⃣ Step‑by‑step sanity‑check (what to look for)
+
+| Step | Action in Abaqus/CAE |
+|------|----------------------|
+| **A** | Open the resulting `.odb`. |
+| **B** | *Result* → *Field Output* → choose **PEEQ** → *Contour*. <br>**Non‑zero** values → plastic strain is active. |
+| **C** | Add a second contour for **S, MISES** (von‑Mises). <br>Values > 250 MPa near the clamp confirm yielding. |
+| **D** | *Result* → *History Output* → plot **RF** (reaction force) vs. step time. <br>Look for a change in slope (elastic → plastic). |
+| **E** | If **PEEQ** is still zero, either: <br>• Increase the pressure magnitude (`-2.0`, `-5.0`, …) <br>• Lower the yield stress a little (e.g., 200 MPa) <br>• Verify that the surface definition really matches the +X face (use *Tools → Query → Pick* → *Elements* → *Face*). |
+
+---
+
+## 5️⃣ What to do if plastic strain is still zero
+
+| Symptom | Likely cause | Quick fix |
+|---------|--------------|-----------|
+| **No PEEQ** but von‑Mises > 250 MPa | Pressure not applied (surface mis‑identified) | In the viewport, *Tools → Query → Pick* the element face, note the element number and face label (S1‑S6). Update the `*SURFACE` line accordingly. |
+| **Zero reaction force** | Boundary set does not include all X = 0 nodes | Double‑check the node list (`CLAMPED_NODES`). Use `*NSET, NSET=CLAMPED_NODES, GENERATE` with the correct node IDs. |
+| **Convergence warnings** | Pressure step too large for the current mesh | Reduce the initial increment (`*STATIC` line: `0.1, 0.5, 1e‑05, 1.`) or add a few more elements through the thickness. |
+| **Plastic strain appears only in one element** | Mesh too coarse → strain localises | Refine the mesh (e.g., split the block into 2 × 2 × 4 elements). |
+
+If any of the above occurs, paste the relevant part of the `.log` file or a screenshot of the ODB view and I’ll help you fine‑tune the model.
+
+---
+
+### TL;DR (the “cheat‑sheet”)
+
+1. **Define a surface** (`*SURFACE … PRESSFACE`) and apply the pressure with `*DLOAD PRESSFACE, P2, -1.0`.  
+2. **Give steel a realistic plastic curve** (yield ≈ 250 MPa).  
+3. **Clamp every node** on the X = 0 face (`*BOUNDARY` on a node set).  
+4. **Run a static NLGEOM step** (`*STATIC`).  
+5. **Request field output** `S, PE, PEEQ` and history `RF, U`.  
+6. **Keep density consistent** (`7.85E‑9` tonne/mm³ for mm‑kg‑s).  
+7. **Use at least 2–3 elements through the thickness** for a production run.
+
+Copy the input file above, submit the job, and verify with the **PEEQ** contour – you should now see plasticity develop in the cantilever.  
+
+Happy modelling!
+A: Below is a **complete, copy‑and‑paste ready Abaqus / Standard input file** that contains every fix highlighted in the checklist you received.  
+Only the sections that differ from the file you posted are shown in full – you can keep the *NODE, *ELEMENT and *ELSET blocks that already describe your geometry and mesh.  
+Everything else (material, surface definition, boundary conditions, step, output) can be dropped straight into your existing file.
+
+---
+
+## 1️⃣ Full input (ready to copy)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+# (your node list – keep exactly as you have it)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+# (your element list – keep exactly as you have it)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+# list **all** nodes whose X‑coordinate = 0
+# example for a simple 4×4×1 mm block:
+1,5,8,4
+# ---------------------------------------------------------
+
+**---  Surface for the pressure (positive X face of the last element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+# element number that owns the +X face, followed by the face label
+# For a C3D8R brick the +X face is **S2**.
+# Replace “32” with the element that is at the free end of the cantilever.
+32, S2
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+> **How to adapt it to your mesh**  
+> 1. **Keep** the *NODE, *ELEMENT, and *ELSET sections that you already have – they define the geometry and the element connectivity.  
+> 2. **Replace** the **material block**, **surface definition**, **boundary condition**, **step**, and **output** blocks with the ones shown above.  
+> 3. **Verify** that the surface `PRESSFACE` really corresponds to the **+X face of the element that sits at the free end of the cantilever** (in the example it is element 32, face S2). If your model has a different number of elements, change the line accordingly (e.g., `57, S2`).  
+
+---
+
+## 2️⃣ What changed and why (one‑liner recap)
+
+| # | Change | Reason |
+|---|--------|--------|
+| 1 | `*SURFACE … PRESSFACE` + `*DLOAD PRESSFACE, P2, -1.0` | Pressure must act on a **surface**, not on a single element ID. |
+| 2 | Realistic `*PLASTIC` curve (250 MPa yield) | Gives the model a proper elastic‑plastic response. |
+| 3 | `*BOUNDARY` on **all** nodes of the X = 0 face (`CLAMPED_NODES`) | Prevents a single‑node “pin” that lets the rest of the face rotate. |
+| 4 | Replace `*DYNAMIC` with `*STATIC` (NLGEOM) | Quasi‑static loading is sufficient for a pressure‑controlled cantilever and avoids inertial effects. |
+| 5 | `*OUTPUT` fields `S, PE, PEEQ` + history `RF, U` | Guarantees you can see plastic strain, von‑Mises stress and reaction forces. |
+| 6 | Density `7.85E‑9` tonne/mm³ (consistent with mm‑kg‑s) | Keeps units coherent; otherwise Abaqus will silently scale the mass. |
+| 7 | Minimum 2–3 elements through thickness (you can keep 1 for a quick test, but add layers for production) | Improves strain‑gradient resolution; a coarse mesh can hide plasticity. |
+
+---
+
+## 3️⃣ Running the job
+
+1. **Save** the text above as `cantilever.inp` (or any name you like).  
+2. In **Abaqus/CAE** → *Job* → *Create* → select the file → **Submit**.  
+3. The job should finish without “maximum number of increments exceeded” warnings.  
+   - If you see convergence warnings, increase the number of increments (`*STATIC` line: `0.1, 0.5, 1e‑05, 1.`) or refine the mesh a little.
+
+---
+
+## 4️⃣ Step‑by‑step sanity‑check (what to look for)
+
+| Step | Action in Abaqus/CAE |
+|------|----------------------|
+| **A** | Open the resulting `.odb`. |
+| **B** | *Result* → *Field Output* → choose **PEEQ** → *Contour*. <br>**Non‑zero** values → plastic strain is active. |
+| **C** | Add a second contour for **S, MISES** (von‑Mises). <br>Values > 250 MPa near the clamp confirm yielding. |
+| **D** | *Result* → *History Output* → plot **RF** (reaction force) vs. step time. <br>Look for a change in slope (elastic → plastic). |
+| **E** | If **PEEQ** is still zero, either: <br>• Increase the pressure magnitude (`-2.0`, `-5.0`, …) <br>• Lower the yield stress a little (e.g., 200 MPa) <br>• Verify that the surface definition really matches the +X face (use *Tools → Query → Pick* → *Elements* → *Face*). |
+
+---
+
+## 5️⃣ What to do if plastic strain is still zero
+
+| Symptom | Likely cause | Quick fix |
+|---------|--------------|-----------|
+| **No PEEQ** but von‑Mises > 250 MPa | Pressure not applied (surface mis‑identified) | In the viewport, *Tools → Query → Pick* the element face, note the element number and face label (S1‑S6). Update the `*SURFACE` line accordingly. |
+| **Zero reaction force** | Boundary set does not include all X = 0 nodes | Double‑check the node list (`CLAMPED_NODES`). Use `*NSET, NSET=CLAMPED_NODES, GENERATE` with the correct node IDs. |
+| **Convergence warnings** | Pressure step too large for the current mesh | Reduce the initial increment (`*STATIC` line: `0.1, 0.5, 1e‑05, 1.`) or add a few more elements through the thickness. |
+| **Plastic strain appears only in one element** | Mesh too coarse → strain localises | Refine the mesh (e.g., split the block into 2 × 2 × 4 elements). |
+
+If any of the above occurs, paste the relevant part of the `.log` file or a screenshot of the ODB view and I’ll help you fine‑tune the model.
+
+---
+
+### TL;DR (the “cheat‑sheet”)
+
+1. **Define a surface** (`*SURFACE … PRESSFACE`) and apply the pressure with `*DLOAD PRESSFACE, P2, -1.0`.  
+2. **Give steel a realistic plastic curve** (yield ≈ 250 MPa).  
+3. **Clamp every node** on the X = 0 face (`*BOUNDARY` on a node set).  
+4. **Run a static NLGEOM step** (`*STATIC`).  
+5. **Request field output** `S, PE, PEEQ` and history `RF, U`.  
+6. **Keep density consistent** (`7.85E‑9` tonne/mm³ for mm‑kg‑s).  
+7. **Use at least 2–3 elements through the thickness** for a production run.
+
+Copy the input file above, submit the job, and verify with the **PEEQ** contour – you should now see plasticity develop in the cantilever.  
+
+Happy modelling!
+
+=== 2026-04-17 18:36:18 ===
+Q: Below is a **complete, copy‑and‑paste ready Abaqus / Standard input file** that incorporates every fix highlighted in the checklist.  
+You can keep the *NODE, *ELEMENT and *ELSET sections that already describe your geometry and mesh – only the blocks shown in full need to be replaced in your original file.
+
+---
+
+## 1️⃣ Full input (ready to copy)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+# (your node list – keep exactly as you have it)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+# (your element list – keep exactly as you have it)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+# list **all** nodes whose X‑coordinate = 0
+# example for a simple 4×4×1 mm block:
+1,5,8,4
+# ---------------------------------------------------------
+
+**---  Surface for the pressure (positive X face of the last element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+# element that owns the +X face, followed by the face label
+# For a C3D8R brick the +X face is **S2**.
+# Replace “32” with the element that is at the free end of the cantilever.
+32, S2
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ------------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+> **How to adapt it to your mesh**  
+> 1. **Keep** the *NODE, *ELEMENT, and *ELSET sections that you already have – they define the geometry and the element connectivity.  
+> 2. **Replace** the **material block**, **surface definition**, **boundary condition**, **step**, and **output** blocks with the ones shown above.  
+> 3. **Verify** that the surface `PRESSFACE` really corresponds to the **+X face of the element that sits at the free end of the cantilever** (in the example it is element 32, face S2). If your model has a different number of elements, change the line accordingly (e.g., `57, S2`).  
+
+---
+
+## 2️⃣ What changed and why (one‑liner recap)
+
+| # | Change | Reason |
+|---|--------|--------|
+| 1 | `*SURFACE … PRESSFACE` + `*DLOAD PRESSFACE, P2, -1.0` | Pressure must act on a **surface**, not on a single element ID. |
+| 2 | Realistic `*PLASTIC` curve (250 MPa yield) | Gives the model a proper elastic‑plastic response. |
+| 3 | `*BOUNDARY` on **all** nodes of the X = 0 face (`CLAMPED_NODES`) | Prevents a single‑node “pin” that lets the rest of the face rotate. |
+| 4 | Replace `*DYNAMIC` with `*STATIC` (NLGEOM) | Quasi‑static loading is sufficient for a pressure‑controlled cantilever and avoids inertial effects. |
+| 5 | `*OUTPUT` fields `S, PE, PEEQ` + history `RF, U` | Guarantees you can see plastic strain, von‑Mises stress and reaction forces. |
+| 6 | Density `7.85E‑9` tonne/mm³ (consistent with mm‑kg‑s) | Keeps units coherent; otherwise Abaqus will silently scale the mass. |
+| 7 | Minimum 2–3 elements through thickness (you can keep 1 for a quick test, but add layers for production) | Improves strain‑gradient resolution; a coarse mesh can hide plasticity. |
+
+---
+
+## 3️⃣ Running the job
+
+1. **Save** the text above as `cantilever.inp` (or any name you like).  
+2. In **Abaqus/CAE** → *Job* → *Create* → select the file → **Submit**.  
+3. The job should finish without “maximum number of increments exceeded” warnings.  
+   - If you see convergence warnings, increase the number of increments (`*STATIC` line: `0.1, 0.5, 1e‑05, 1.`) or refine the mesh a little.
+
+---
+
+## 4️⃣ Step‑by‑step sanity‑check (what to look for)
+
+| Step | Action in Abaqus/CAE |
+|------|----------------------|
+| **A** | Open the resulting `.odb`. |
+| **B** | *Result* → *Field Output* → choose **PEEQ** → *Contour*. <br>**Non‑zero** values → plastic strain is active. |
+| **C** | Add a second contour for **S, MISES** (von‑Mises). <br>Values > 250 MPa near the clamp confirm yielding. |
+| **D** | *Result* → *History Output* → plot **RF** (reaction force) vs. step time. <br>Look for a change in slope (elastic → plastic). |
+| **E** | If **PEEQ** is still zero, either: <br>• Increase the pressure magnitude (`-2.0`, `-5.0`, …) <br>• Lower the yield stress a little (e.g., 200 MPa) <br>• Verify that the surface definition really matches the +X face (use *Tools → Query → Pick* → *Elements* → *Face*). |
+
+---
+
+## 5️⃣ What to do if plastic strain is still zero
+
+| Symptom | Likely cause | Quick fix |
+|---------|--------------|-----------|
+| **No PEEQ** but von‑Mises > 250 MPa | Pressure not applied (surface mis‑identified) | In the viewport, *Tools → Query → Pick* the element face, note the element number and face label (S1‑S6). Update the `*SURFACE` line accordingly. |
+| **Zero reaction force** | Boundary set does not include all X = 0 nodes | Double‑check the node list (`CLAMPED_NODES`). Use `*NSET, NSET=CLAMPED_NODES, GENERATE` with the correct node IDs. |
+| **Convergence warnings** | Pressure step too large for the current mesh | Reduce the initial increment (`*STATIC` line: `0.1, 0.5, 1e‑05, 1.`) or add a few more elements through the thickness. |
+| **Plastic strain appears only in one element** | Mesh too coarse → strain localises | Refine the mesh (e.g., split the block into 2 × 2 × 4 elements). |
+
+If any of the above occurs, paste the relevant part of the `.log` file or a screenshot of the ODB view and I’ll help you fine‑tune the model.
+
+---
+
+### TL;DR (the “cheat‑sheet”)
+
+1. **Define a surface** (`*SURFACE … PRESSFACE`) and apply the pressure with `*DLOAD PRESSFACE, P2, -1.0`.  
+2. **Give steel a realistic plastic curve** (yield ≈ 250 MPa).  
+3. **Clamp every node** on the X = 0 face (`*BOUNDARY` on a node set).  
+4. **Run a static NLGEOM step** (`*STATIC`).  
+5. **Request field output** `S, PE, PEEQ` and history `RF, U`.  
+6. **Keep density consistent** (`7.85E‑9` tonne/mm³ for mm‑kg‑s).  
+7. **Use at least 2–3 elements through the thickness** for a production run.
+
+Copy the input file above, submit the job, and verify with the **PEEQ** contour – you should now see plasticity develop in the cantilever.  
+
+Happy modelling!
+A: Below is the **complete, copy‑and‑paste ready Abaqus / Standard input file** that incorporates every fix highlighted in the checklist.  
+Keep your own `*NODE`, `*ELEMENT` and any custom `*ELSET` sections – only the blocks shown in full need to be replaced in your original file.
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+# (your node list – keep exactly as you have it)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+# (your element list – keep exactly as you have it)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+# list **all** nodes whose X‑coordinate = 0
+# example for a simple 4×4×1 mm block:
+1,5,8,4
+# ---------------------------------------------------------------
+
+**---  Surface for the pressure (positive X face of the last element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+# element that owns the +X face, followed by the face label
+# For a C3D8R brick the +X face is **S2**.
+# Replace “32” with the element that is at the free end of the cantilever.
+32, S2
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+---
+
+### How to adapt the file to **your** mesh  
+
+1. **Leave untouched** the `*NODE`, `*ELEMENT`, and any custom `*ELSET` sections you already have – they define the geometry and connectivity.  
+2. **Replace** the material block, surface definition, boundary‑condition set, step definition, and output requests with the sections shown above.  
+3. **Verify the surface definition**:  
+   * The line `32, S2` must reference the **element that owns the +X face at the free end** of your cantilever.  
+   * If your model has a different element number, change `32` accordingly (e.g., `57, S2`).  
+   * For a C3D8R brick the +X face is always `S2`.  
+
+4. **Check the clamped node set**:  
+   * `*NODE, NSET=CLAMPED_NODES` must contain **every node whose X‑coordinate equals 0**.  
+   * You can generate the list automatically in Abaqus/CAE with *Tools → Set → Create → Nodes → By Coordinate* or by using the `GENERATE` option if the IDs are sequential.  
+
+5. **Run the job** (Job → Create → Submit). The analysis should finish without “maximum number of increments exceeded” warnings.  
+
+---
+
+### Quick sanity‑check after the run  
+
+| What to look at | Where in the ODB |
+|-----------------|------------------|
+| **Plastic strain** (`PEEQ`) > 0 | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeding 250 MPa near the clamp | *Result → Field Output → S, MISES* |
+| **Reaction force** evolution (elastic → plastic) | *Result → History Output → RF* |
+| **Zero reaction or no plastic strain** → revisit surface definition or clamped node set (see troubleshooting table below). |
+
+---
+
+### If plastic strain is still zero  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| No `PEEQ` but von‑Mises > 250 MPa | Pressure not applied (wrong surface) | Use *Tools → Query → Pick* to identify the correct element‑face pair; update the `*SURFACE` line. |
+| Zero reaction force | Not all X = 0 nodes are in `CLAMPED_NODES` | Re‑generate the node set to include every node on that face. |
+| Convergence warnings | Load step too large for mesh | Reduce the initial increment (`0.1, 0.5, 1e‑05, 1.`) or refine the mesh (add elements through thickness). |
+| Plastic strain only in one element | Mesh too coarse → strain localises | Subdivide the block (e.g., 2 × 2 × 4 elements). |
+
+Paste any relevant `.log` excerpts or screenshots if you need further help.
+
+---
+
+#### TL;DR (cheat‑sheet)
+
+1. **Surface** → `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` → `element, S2`.  
+2. **Pressure** → `*DLOAD PRESSFACE, P2, -1.0`.  
+3. **Material** → realistic plastic curve (yield ≈ 250 MPa).  
+4. **Clamp** → `*BOUNDARY CLAMPED_NODES, 1, 3, 0.0`.  
+5. **Step** → `*STEP, NLGEOM, *STATIC`.  
+6. **Output** → request `S, PE, PEEQ` and history `RF, U`.  
+7. **Density** → `7.85E‑9` tonne/mm³ (consistent with mm‑kg‑s).  
+8. **Mesh** → at least 2–3 elements through thickness for production runs.
+
+Copy the block above, submit the job, and verify plasticity with the `PEEQ` contour. Happy modelling!
+
+=== 2026-04-17 18:37:05 ===
+Q: Below is the **copy‑and‑paste ready Abaqus / Standard input file** that contains every fix that was missing from your original model.  
+You can keep the `*NODE`, `*ELEMENT` and any custom `*ELSET` sections that already describe your geometry – only the blocks shown in full need to be **replaced** in your original file.
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+# (your node list – keep exactly as you have it)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+# (your element list – keep exactly as you have it)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+# list **all** nodes whose X‑coordinate = 0
+# example for a simple 4×4×1 mm block:
+1,5,8,4
+*END ASSEMBLY
+
+**---  Surface for the pressure (positive X face of the last element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+# element that owns the +X face, followed by the face label
+# For a C3D8R brick the +X face is **S2**.
+# Replace “32” with the element that is at the free end of the cantilever.
+32, S2
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+---
+
+## How to adapt the file to **your** model  
+
+| Step | What to do |
+|------|------------|
+| **1. Keep** | Your existing `*NODE`, `*ELEMENT` (and any custom `*ELSET`) sections – they already contain the geometry and connectivity. |
+| **2. Replace** | The material block, surface definition, clamped‑node set, boundary‑condition line, step definition, and output requests with the sections shown above. |
+| **3. Verify surface** | `32, S2` must point to the **element that owns the +X face at the free end** of your cantilever. Change the element number (`32`) to the correct one for your mesh. (`S2` is always the +X face for a C3D8R brick.) |
+| **4. Verify clamped nodes** | `CLAMPED_NODES` must contain **every node whose X‑coordinate = 0**. In Abaqus/CAE you can create this set with *Tools → Set → Create → Nodes → By Coordinate* or with the `GENERATE` option if the IDs are sequential. |
+| **5. Run** | Create a job (Job → Create) and submit. The analysis should finish without “maximum number of increments exceeded” warnings. If you get convergence warnings, reduce the initial increment (`0.1, 0.5, 1e‑05, 1.`) or refine the mesh. |
+
+---
+
+## Quick sanity‑check after the run  
+
+| What to inspect | How to view it in the ODB |
+|-----------------|---------------------------|
+| **Plastic strain** (`PEEQ`) > 0 | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** > 250 MPa near the clamp | *Result → Field Output → S, MISES* |
+| **Reaction force** curve (elastic → plastic) | *Result → History Output → RF* |
+| **Zero reaction or no plastic strain** | Re‑check the surface definition and clamped node set (see troubleshooting table below). |
+
+---
+
+## Troubleshooting – why you might still see zero plastic strain  
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| **No `PEEQ` but von‑Mises > 250 MPa** | Pressure not applied (wrong surface) | Use *Tools → Query → Pick* to identify the correct element‑face pair; update the `*SURFACE` line (`element, S2`). |
+| **Zero reaction force** | Not all X = 0 nodes are in `CLAMPED_NODES` | Regenerate the node set to include every node on that face (use *By Coordinate* or `GENERATE`). |
+| **Convergence warnings** | Load step too large for the current mesh | Reduce the initial increment (`0.1, 0.5, 1e‑05, 1.`) or add more elements, especially through the thickness. |
+| **Plastic strain only in one element** | Mesh too coarse → strain localises | Subdivide the block (e.g., 2 × 2 × 4 elements) or use a finer mesh overall. |
+
+If you still have problems, copy the relevant part of the `.log` file or a screenshot of the ODB and I’ll help you pinpoint the issue.
+
+---
+
+### TL;DR – “cheat‑sheet” for a working cantilever model  
+
+1. **Surface** – `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` → `element, S2`.  
+2. **Pressure** – `*DLOAD PRESSFACE, P2, -1.0`.  
+3. **Material** – realistic plastic curve (yield ≈ 250 MPa).  
+4. **Clamp** – `*BOUNDARY CLAMPED_NODES, 1, 3, 0.0`.  
+5. **Step** – `*STEP, NLGEOM, *STATIC`.  
+6. **Output** – request `S, PE, PEEQ` and history `RF, U`.  
+7. **Density** – `7.85E‑9` tonne/mm³ (consistent with mm‑kg‑s).  
+8. **Mesh** – at least 2–3 elements through the thickness for production runs.
+
+Copy the block above, submit the job, and check the `PEEQ` contour – you should now see plastic deformation developing in the cantilever.  
+
+**Happy modelling!**
+A: Below is the **complete, copy‑and‑paste‑ready Abaqus / Standard input file** that contains every fix that was missing from your original model.  
+Only the sections shown in full need to be **replaced** in your existing *.inp* file – keep your own `*NODE`, `*ELEMENT` (and any custom `*ELSET`) blocks exactly as they are.
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+# (your node list – keep exactly as you have it)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+# (your element list – keep exactly as you have it)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+# list **all** nodes whose X‑coordinate = 0
+# example for a simple 4×4×1 mm block:
+1,5,8,4
+*END ASSEMBLY
+
+**---  Surface for the pressure (positive X face of the last element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+# element that owns the +X face, followed by the face label
+# For a C3D8R brick the +X face is **S2**.
+# Replace “32” with the element that is at the free end of the cantilever.
+32, S2
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+---
+
+### What you must edit before running
+
+| Placeholder | What to replace |
+|-------------|-----------------|
+| **Node list** (`*NODE, NSET=CLAMPED_NODES`) | Insert **every node ID** whose **X‑coordinate = 0**. You can generate this set in Abaqus/CAE with *Tools → Set → Create → Nodes → By Coordinate* (X = 0). |
+| **Element number** (`32, S2`) | Replace **`32`** with the **element ID that owns the +X face at the free end** of the cantilever. (`S2` is always the +X face for a C3D8R brick.) |
+| **Your geometry** (`*NODE` and `*ELEMENT` under *PART*) | Keep exactly as you already have it – no changes needed. |
+| **Optional – mesh refinement** | If you still see no plastic strain, add a few more elements through the thickness (e.g., 2‑3 elements) to allow strain localisation. |
+
+---
+
+### Quick post‑run sanity check
+
+| Check | How to view in the ODB |
+|-------|------------------------|
+| **Plastic strain** (`PEEQ`) appears where you expect bending | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeds 250 MPa near the clamp | *Result → Field Output → S, MISES* |
+| **Reaction force** curve shows elastic → plastic transition | *Result → History Output → RF* |
+| **Zero reaction or no plastic strain** | Re‑check the clamped‑node set and the pressure surface definition (see troubleshooting below). |
+
+---
+
+### Common troubleshooting (if you still get zero plastic strain)
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| No `PEEQ` but von‑Mises > 250 MPa | Pressure not applied (wrong surface) | Verify the element‑face pair in the `*SURFACE` line; use *Tools → Query → Pick* to confirm the correct element and face label (`S2`). |
+| Zero reaction force | Not all X = 0 nodes are in `CLAMPED_NODES` | Regenerate the node set to include **every** node on that face (use *By Coordinate* or `GENERATE`). |
+| Convergence warnings | Load step too large for the mesh | Reduce the initial increment (e.g., `0.1, 0.5, 1e‑05, 1.`) or refine the mesh, especially near the clamp. |
+| Plastic strain only in a single element | Mesh too coarse → strain localises | Subdivide the block (e.g., 2 × 2 × 4 elements) or use a finer overall mesh. |
+
+---
+
+### TL;DR – “cheat‑sheet” for a working cantilever model
+
+1. **Surface** – `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` → `element, S2`.  
+2. **Pressure** – `*DLOAD PRESSFACE, P2, -1.0`.  
+3. **Material** – realistic plastic curve (yield ≈ 250 MPa).  
+4. **Clamp** – `*BOUNDARY CLAMPED_NODES, 1, 3, 0.0`.  
+5. **Step** – `*STEP, NLGEOM, *STATIC`.  
+6. **Output** – request `S, PE, PEEQ` and history `RF, U`.  
+7. **Density** – `7.85E‑9` tonne/mm³ (consistent with mm‑kg‑s).  
+8. **Mesh** – at least 2–3 elements through the thickness for plasticity to develop.
+
+Copy the block above into a new *.inp* file (or replace the corresponding sections in your existing file), submit the job, and inspect the `PEEQ` contour – you should now see plastic deformation developing in the cantilever.
+
+**Happy modelling!**
+
+=== 2026-04-17 18:37:53 ===
+Q: Below is the **complete, copy‑and‑paste‑ready Abaqus / Standard input file** that contains every fix that was missing from your original model.  
+Only the sections shown in full need to be **replaced** in your existing *.inp* file – keep your own `*NODE`, `*ELEMENT` (and any custom `*ELSET`) blocks exactly as they are.
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+# (your node list – keep exactly as you have it)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+# (your element list – keep exactly as you have it)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+# list **all** nodes whose X‑coordinate = 0
+# example for a simple 4×4×1 mm block:
+1,5,8,4
+*END ASSEMBLY
+
+**---  Surface for the pressure (positive X face of the last element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+# element that owns the +X face, followed by the face label
+# For a C3D8R brick the +X face is **S2**.
+# Replace “32” with the element that is at the free end of the cantilever.
+32, S2
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+---
+
+## What you must edit before running
+
+| Placeholder | What to replace |
+|-------------|-----------------|
+| **Node list** (`*NODE, NSET=CLAMPED_NODES`) | Insert **every node ID** whose **X = 0**. In Abaqus/CAE you can create this set with *Tools → Set → Create → Nodes → By Coordinate* (X = 0). |
+| **Element number** (`32, S2`) | Replace **`32`** with the **element ID that owns the +X face at the free end** of the cantilever. (`S2` is always the +X face for a C3D8R brick.) |
+| **Your geometry** (`*NODE` and `*ELEMENT` under *PART*) | Keep exactly as you already have it – no changes needed. |
+| **Optional – mesh refinement** | If you still see no plastic strain, add a few more elements through the thickness (2‑3 elements) so that strain localisation can develop. |
+
+---
+
+## Quick post‑run sanity check
+
+| What to inspect | How to view it in the ODB |
+|-----------------|---------------------------|
+| **Plastic strain** (`PEEQ`) appears where you expect bending | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeds 250 MPa near the clamp | *Result → Field Output → S, MISES* |
+| **Reaction force** curve shows elastic → plastic transition | *Result → History Output → RF* |
+| **Zero reaction or no plastic strain** | Re‑check the clamped‑node set and the pressure surface definition (see troubleshooting below). |
+
+---
+
+## Common troubleshooting (if you still get zero plastic strain)
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| No `PEEQ` but von‑Mises > 250 MPa | Pressure not applied (wrong surface) | Verify the element‑face pair in the `*SURFACE` line; use *Tools → Query → Pick* to confirm the correct element and face label (`S2`). |
+| Zero reaction force | Not all X = 0 nodes are in `CLAMPED_NODES` | Regenerate the node set to include **every** node on that face (use *By Coordinate* or `GENERATE`). |
+| Convergence warnings | Load step too large for the mesh | Reduce the initial increment (e.g., `0.1, 0.5, 1e‑05, 1.`) or refine the mesh, especially near the clamp. |
+| Plastic strain only in a single element | Mesh too coarse → strain localises | Subdivide the block (e.g., 2 × 2 × 4 elements) or use a finer overall mesh. |
+
+If you still have problems, copy the relevant part of the `.log` file or a screenshot of the ODB and I’ll help you pinpoint the issue.
+
+---
+
+## TL;DR – “cheat‑sheet” for a working cantilever model
+
+1. **Surface** – `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` → `element, S2`.  
+2. **Pressure** – `*DLOAD PRESSFACE, P2, -1.0`.  
+3. **Material** – realistic plastic curve (yield ≈ 250 MPa).  
+4. **Clamp** – `*BOUNDARY CLAMPED_NODES, 1, 3, 0.0`.  
+5. **Step** – `*STEP, NLGEOM, *STATIC`.  
+6. **Output** – request `S, PE, PEEQ` and history `RF, U`.  
+7. **Density** – `7.85E‑9` tonne/mm³ (consistent with mm‑kg‑s).  
+8. **Mesh** – at least 2–3 elements through the thickness for plasticity to develop.
+
+Copy the block above into a new *.inp* file (or replace the corresponding sections in your existing file), submit the job, and inspect the `PEEQ` contour – you should now see plastic deformation developing in the cantilever.
+
+**Happy modelling!**
+A: Below is a **ready‑to‑paste** Abaqus / Standard input file that contains **all of the missing pieces** (material definition, solid section, clamped node set, pressure surface, boundary condition, step definition and output requests).  
+Only the three highlighted placeholders have to be filled in with data that belong to **your own geometry** – everything else (your `*NODE`, `*ELEMENT` and any custom `*ELSET` blocks) stays exactly as it is in your original *.inp* file.
+
+---
+
+## 1️⃣ What you must edit before running
+
+| Placeholder in the file | What you have to replace | How to obtain it |
+|--------------------------|--------------------------|------------------|
+| **`# (your node list – keep exactly as you have it)`** under `*NODE, NSET=CLAMPED_NODES` | **All node IDs whose X‑coordinate = 0** (the whole clamped face). | In Abaqus/CAE: <br>**Tools → Set → Create → Nodes → By Coordinate → X = 0** <br>or in a text editor, copy‑paste the list that you obtain from the model’s node table. |
+| **`32`** in the line `32, S2` (the element‑face definition) | **The element ID that owns the +X face at the free end** of the cantilever. (`S2` is always the +X face for a C3D8R brick.) | In the viewport pick the element that is at the tip of the cantilever (the element whose centroid has the largest X‑value). Its ID appears in the status bar; write that number in place of `32`. |
+| **Your geometry** (`*NODE` and `*ELEMENT` blocks under `*PART, NAME=BLOCK`) | **Leave untouched** – keep the exact node‑ and element‑lists you already have. | No action required. |
+
+> **Tip:** If you later discover that the plastic strain is still zero, add a few more elements through the thickness (e.g., 2‑3 elements) so that strain localisation can develop.
+
+---
+
+## 2️⃣ Complete input file (copy‑and‑paste)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+# (your node list – keep exactly as you have it)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+# (your element list – keep exactly as you have it)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+# -------------------------------------------------
+# Replace the line(s) below with **all node IDs whose X‑coordinate = 0**
+# Example (for a 4×4×1 mm block): 1,5,8,4
+# -------------------------------------------------
+<LIST_OF_NODES_ON_X=0>
+*END NODE
+
+**---  Surface for the pressure (positive X face of the last element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+# -------------------------------------------------
+# Replace “32” with the element that owns the +X face at the free end.
+# The face label for the +X side of a C3D8R brick is S2.
+# -------------------------------------------------
+<FREE_END_ELEMENT_ID>, S2
+*END SURFACE
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+*Replace the two lines marked `<LIST_OF_NODES_ON_X=0>` and `<FREE_END_ELEMENT_ID>` with the data you obtained in step 1.*  
+
+After you have edited those two lines, save the file (e.g., `cantilever.inp`) and submit the job as usual.
+
+---
+
+## 3️⃣ Quick post‑run sanity check
+
+| What to look for | How to view it in the ODB |
+|------------------|---------------------------|
+| **Plastic strain** (`PEEQ`) appears where the cantilever bends | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeds 250 MPa near the clamp | *Result → Field Output → S, MISES* |
+| **Reaction force** curve shows elastic → plastic transition | *Result → History Output → RF* |
+| **Zero reaction or no plastic strain** | Re‑check the clamped‑node set and the pressure surface definition (see troubleshooting below). |
+
+---
+
+## 4️⃣ Common troubleshooting (if you still get zero plastic strain)
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| No `PEEQ` but von‑Mises > 250 MPa | Pressure not applied (wrong surface) | Verify the element‑face pair in the `*SURFACE` line; use **Tools → Query → Pick** to confirm the correct element and that the face label is `S2`. |
+| Zero reaction force | Not all X = 0 nodes are in `CLAMPED_NODES` | Regenerate the node set to include **every** node on that face (use *By Coordinate* or `GENERATE`). |
+| Convergence warnings | Load step too large for the mesh | Reduce the initial increment (e.g., `0.1, 0.5, 1e‑05, 1.`) or refine the mesh, especially near the clamp. |
+| Plastic strain only in a single element | Mesh too coarse → strain localises | Subdivide the block (e.g., 2 × 2 × 4 elements) or use a finer overall mesh. |
+| No plastic strain at all | Material plastic curve not read (wrong syntax) | Ensure the `*PLASTIC` block is exactly as shown (comma‑separated stress, plastic strain). |
+
+If you still encounter difficulties, copy the relevant part of the `.log` file (or a screenshot of the ODB) and I can help you pinpoint the issue.
+
+---
+
+## 5️⃣ TL;DR – “cheat‑sheet” for a working cantilever model
+
+1. **Surface** – `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` → `<FREE_END_ELEMENT_ID>, S2`.  
+2. **Pressure** – `*DLOAD PRESSFACE, P2, -1.0`.  
+3. **Material** – realistic plastic curve (yield ≈ 250 MPa).  
+4. **Clamp** – `*BOUNDARY CLAMPED_NODES, 1, 3, 0.0`.  
+5. **Step** – `*STEP, NLGEOM, *STATIC`.  
+6. **Output** – request `S, PE, PEEQ` and history `RF, U`.  
+7. **Density** – `7.85E‑9` tonne/mm³ (consistent with mm‑kg‑s).  
+8. **Mesh** – at least 2–3 elements through the thickness for plasticity to develop.
+
+Copy the block above into a new *.inp* file (or replace the corresponding sections in your existing file), submit the job, and inspect the `PEEQ` contour – you should now see plastic deformation developing in the cantilever.
+
+**Happy modelling!**
+
+=== 2026-04-17 18:38:47 ===
+Q: Below is a **ready‑to‑paste** Abaqus / Standard input file that already contains every missing piece (material definition, solid section, clamped‑node set, pressure surface, boundary condition, step definition and output requests).  
+
+Only the two highlighted placeholders have to be filled in with data that belong to **your own geometry** – everything else (your `*NODE`, `*ELEMENT` and any custom `*ELSET` blocks) stays exactly as it is in your original *.inp* file.
+
+---
+
+## 1️⃣ What you must edit before running  
+
+| Placeholder in the file | What you have to replace | How to obtain it |
+|--------------------------|--------------------------|------------------|
+| **`<LIST_OF_NODES_ON_X=0>`** (under `*NODE, NSET=CLAMPED_NODES`) | **All node IDs whose X‑coordinate = 0** – the whole clamped face. | In Abaqus/CAE: **Tools → Set → Create → Nodes → By Coordinate → X = 0**. <br>In the model tree you can also export the node table and copy‑paste the IDs. |
+| **`<FREE_END_ELEMENT_ID>`** (in the line `…, S2`) | **The element ID that owns the +X face at the free end** of the cantilever. (`S2` is always the +X face for a C3D8R brick.) | In the viewport pick the element whose centroid has the largest X‑value (the tip of the cantilever). Its ID appears in the status bar – write that number in place of `<FREE_END_ELEMENT_ID>`. |
+
+> **Tip:** If after the first run the plastic strain is still zero, add a few more elements through the thickness (e.g., 2‑3 elements) so that strain localisation can develop.
+
+---
+
+## 2️⃣ Complete input file (copy‑and‑paste)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+# (your node list – keep exactly as you have it)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+# (your element list – keep exactly as you have it)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+# -------------------------------------------------
+# Replace the line(s) below with **all node IDs whose X‑coordinate = 0**
+# Example (for a 4×4×1 mm block): 1,5,8,4
+# -------------------------------------------------
+<LIST_OF_NODES_ON_X=0>
+*END NODE
+
+**---  Surface for the pressure (positive X face of the tip element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+# -------------------------------------------------
+# Replace “32” with the element that owns the +X face at the free end.
+# The face label for the +X side of a C3D8R brick is S2.
+# -------------------------------------------------
+<FREE_END_ELEMENT_ID>, S2
+*END SURFACE
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+*Replace the two lines marked `<LIST_OF_NODES_ON_X=0>` and `<FREE_END_ELEMENT_ID>` with the data you obtained in step 1.*  
+
+Save the file (e.g., `cantilever.inp`) and submit the job as usual.
+
+---
+
+## 3️⃣ Quick post‑run sanity check  
+
+| What to look for | How to view it in the ODB |
+|------------------|--------------------------|
+| **Plastic strain** (`PEEQ`) appears where the cantilever bends | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeds 250 MPa near the clamp | *Result → Field Output → S, MISES* |
+| **Reaction force** curve shows elastic → plastic transition | *Result → History Output → RF* |
+| **Zero reaction or no plastic strain** | Re‑check the clamped‑node set and the pressure surface definition (see troubleshooting below). |
+
+---
+
+## 4️⃣ Common troubleshooting (if you still get zero plastic strain)
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| No `PEEQ` but von‑Mises > 250 MPa | Pressure not applied (wrong surface) | Verify the element‑face pair in the `*SURFACE` line; use **Tools → Query → Pick** to confirm the correct element and that the face label is `S2`. |
+| Zero reaction force | Not all X = 0 nodes are in `CLAMPED_NODES` | Regenerate the node set to include **every** node on that face (use *By Coordinate* or `GENERATE`). |
+| Convergence warnings | Load step too large for the mesh | Reduce the initial increment (e.g., `0.1, 0.5, 1e‑05, 1.`) or refine the mesh, especially near the clamp. |
+| Plastic strain only in a single element | Mesh too coarse → strain localises | Subdivide the block (e.g., 2 × 2 × 4 elements) or use a finer overall mesh. |
+| No plastic strain at all | Material plastic block not read (syntax error) | Ensure the `*PLASTIC` block is exactly as shown (comma‑separated stress, plastic strain). |
+
+If you still encounter difficulties, copy the relevant part of the `.log` file (or a screenshot of the ODB) and I can help you pinpoint the issue.
+
+---
+
+## 5️⃣ TL;DR – “cheat‑sheet” for a working cantilever model  
+
+1. **Surface** – `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` → `<FREE_END_ELEMENT_ID>, S2`.  
+2. **Pressure** – `*DLOAD PRESSFACE, P2, -1.0`.  
+3. **Material** – realistic plastic curve (yield ≈ 250 MPa).  
+4. **Clamp** – `*BOUNDARY CLAMPED_NODES, 1, 3, 0.0`.  
+5. **Step** – `*STEP, NLGEOM, *STATIC`.  
+6. **Output** – request `S, PE, PEEQ` and history `RF, U`.  
+7. **Density** – `7.85E‑9` tonne/mm³ (consistent with mm‑kg‑s).  
+8. **Mesh** – at least 2–3 elements through the thickness for plasticity to develop.
+
+Copy the block above into a new *.inp* file (or replace the corresponding sections in your existing file), submit the job, and inspect the `PEEQ` contour – you should now see plastic deformation developing in the cantilever.
+
+**Happy modelling!**
+A: Below is a **complete, ready‑to‑paste** Abaqus / Standard input file in which the two placeholders have already been replaced with real data for a **simple 20 mm × 10 mm × 5 mm cantilever** that you might have created in CAE.  
+
+> **If your geometry is different, just replace the two lines that are highlighted in **bold** with the values you obtain from your own model (see the short “How to get the numbers” table after the file).**  
+
+---
+
+## 1️⃣ How to obtain the two numbers for **your** model  
+
+| What you need | Where to get it in Abaqus/CAE |
+|---------------|------------------------------|
+| **All node IDs whose X‑coordinate = 0** (the clamped face) | **Tools → Set → Create → Nodes → By Coordinate → X = 0**. After the set is created, open the **Set** in the model tree, right‑click → **Export → Node** and copy the list of IDs. |
+| **Element ID that owns the +X face at the free end** (the tip element) | In the viewport, **pick** the element whose centroid has the largest X‑value (the tip of the cantilever). Its ID appears in the status bar (or in the **Query → Pick** dialog). Write that number down. |
+
+*Tip:* If you have many nodes on the X = 0 face you can use the Abaqus **GENERATE** syntax to keep the list short, e.g. `1, 200, 1` (start, end, increment).
+
+---
+
+## 2️⃣ Fully‑filled input file (example geometry)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+** (example node list – keep exactly as you have it)
+1,   0.,   0.,   0.
+2,  20.,   0.,   0.
+3,   0.,  10.,   0.
+4,  20.,  10.,   0.
+5,   0.,   0.,   5.
+6,  20.,   0.,   5.
+7,   0.,  10.,   5.
+8,  20.,  10.,   5.
+** (add the rest of your nodes here)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+** (example element list – keep exactly as you have it)
+1, 1,2,4,3,5,6,8,7
+** (add the rest of your elements here)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+** -------------------------------------------------
+** Replace the line(s) below with **all node IDs whose X‑coordinate = 0**
+** Example for the 20 × 10 × 5 mm block (nodes 1,3,5,7 …) :
+1,3,5,7
+** -------------------------------------------------
+*END NODE
+
+**---  Surface for the pressure (positive X face of the tip element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+** -------------------------------------------------
+** Replace “1” with the element that owns the +X face at the free end.
+** For the example block the tip element is **1** (the only element)
+** whose +X face is S2.
+** -------------------------------------------------
+1, S2
+*END SURFACE
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+### What you have just replaced  
+
+| Placeholder | What you wrote in the example | What you must change for your own model |
+|-------------|------------------------------|----------------------------------------|
+| `<LIST_OF_NODES_ON_X=0>` | `1,3,5,7` (all nodes whose X‑coordinate = 0) | **All** node IDs on the X = 0 face of *your* geometry. Use a comma‑separated list or the `GENERATE` syntax (`start, end, inc`). |
+| `<FREE_END_ELEMENT_ID>` | `1` (the element that owns the +X face at the tip) | The **element ID** that contains the free‑end (+X) face of *your* cantilever. The face label for the +X side of a C3D8R brick is always `S2`. |
+
+---
+
+## 3️⃣ Quick sanity‑check after the run  
+
+| What to look for | How to verify in the ODB |
+|------------------|--------------------------|
+| **Plastic strain (`PEEQ`)** appears near the clamp and grows towards the tip | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeds 250 MPa in the same region | *Result → Field Output → S, MISES* |
+| **Reaction force** curve shows a clear elastic‑to‑plastic transition | *Result → History Output → RF* |
+| **Zero reaction or no plastic strain** | Re‑check the two lines you just filled (node set & surface) and the `*BOUNDARY`/`*DLOAD` definitions. |
+
+If the plastic strain is still zero, try one of the following:
+
+* Refine the mesh (especially through the thickness – 2 – 3 elements is a good start).  
+* Reduce the initial increment in the `*STATIC` line (e.g., `0.1, 0.5, 1e‑05, 1.`).  
+* Verify that the `*PLASTIC` block is exactly as shown (stress, plastic strain pairs, commas).  
+
+---
+
+## 4️⃣ TL;DR – “cheat‑sheet” for a working cantilever  
+
+1. **Node set** – list **all** nodes on X = 0 (`*NODE, NSET=CLAMPED_NODES`).  
+2. **Pressure surface** – `<tip‑element‑ID>, S2` (`*SURFACE, TYPE=ELEMENT`).  
+3. **Material** – elastic‑plastic steel (E = 210 GPa, ν = 0.3, yield ≈ 250 MPa).  
+4. **Boundary** – `CLAMPED_NODES, 1, 3, 0.0`.  
+5. **Load** – `PRESSFACE, P2, -1.0` (1 MPa compressive).  
+6. **Step** – `*STEP, NLGEOM, *STATIC`.  
+7. **Outputs** – request `S, PE, PEEQ` and history `RF, U`.  
+
+Copy the block above into a new `cantilever.inp` (or replace the two highlighted lines in your existing file), submit the job, and you should see plastic deformation develop in the cantilever.
+
+**Happy modelling!**
+
+=== 2026-04-17 18:39:45 ===
+Q: Below is a **complete, ready‑to‑paste** Abaqus / Standard input file that already contains the two numbers you need for a **20 mm × 10 mm × 5 mm cantilever** (the same geometry you would obtain if you built a simple block in CAE).  
+
+> **If your geometry is different, you only have to change the two **bold** lines that are marked in the file** (the node‑set line and the surface line).  
+> The short “How to get the numbers” table after the file tells you exactly where to find the correct values for **your** model.
+
+---
+
+## 1️⃣ How to obtain the two numbers for **your** model  
+
+| What you need | Where to get it in Abaqus/CAE |
+|---------------|------------------------------|
+| **All node IDs whose X‑coordinate = 0** (the clamped face) | **Tools → Set → Create → Nodes → By Coordinate → X = 0**. After the set is created, open the set in the model tree, right‑click → **Export → Node** and copy the list of IDs. (If you have many nodes you can use the `GENERATE` syntax, e.g. `1, 200, 1`). |
+| **Element ID that owns the +X face at the free end** (the tip element) | In the viewport **pick** the element whose centroid has the largest X‑value (the tip of the cantilever). Its ID appears in the status bar (or in **Query → Pick**). Write that number down. The +X face of a C3D8R brick is always `S2`. |
+
+---
+
+## 2️⃣ Fully‑filled input file (example geometry)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+** (example node list – keep exactly as you have it)
+1,   0.,   0.,   0.
+2,  20.,   0.,   0.
+3,   0.,  10.,   0.
+4,  20.,  10.,   0.
+5,   0.,   0.,   5.
+6,  20.,   0.,   5.
+7,   0.,  10.,   5.
+8,  20.,  10.,   5.
+** (add the rest of your nodes here)
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+** (example element list – keep exactly as you have it)
+1, 1,2,4,3,5,6,8,7
+** (add the rest of your elements here)
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+** -------------------------------------------------
+** Replace the line(s) below with **all node IDs whose X‑coordinate = 0**
+** Example for the 20 × 10 × 5 mm block (nodes 1,3,5,7 …) :
+1,3,5,7
+** -------------------------------------------------
+*END NODE
+
+**---  Surface for the pressure (positive X face of the tip element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+** -------------------------------------------------
+** Replace “1” with the element that owns the +X face at the free end.
+** For the example block the tip element is **1** (the only element
+** whose +X face is S2).
+** -------------------------------------------------
+1, S2
+*END SURFACE
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+---
+
+## 3️⃣ What you have to change for **your** model  
+
+| Line in the file | What you wrote in the example | What you must replace for your own geometry |
+|------------------|------------------------------|--------------------------------------------|
+| `*NODE, NSET=CLAMPED_NODES` → `1,3,5,7` | All nodes whose X = 0 (for the 20 × 10 × 5 mm block). | **All** node IDs on the X = 0 face of *your* cantilever. Use a comma‑separated list or `GENERATE` (`start, end, inc`). |
+| `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` → `1, S2` | Element **1** is the tip element of the example block. | The **element ID** that contains the free‑end (+X) face of *your* cantilever. The face label for the +X side of a C3D8R brick is always `S2`. |
+
+> **If your geometry is exactly the same as the example, you can run the file as‑is.**  
+> **If it is different, just edit the two highlighted lines (the node list and the element‑ID line).**
+
+---
+
+## 4️⃣ Quick sanity‑check after the run  
+
+| What to look for | How to verify in the ODB |
+|------------------|--------------------------|
+| **Plastic strain (`PEEQ`)** appears near the clamp and grows towards the tip | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeds 250 MPa in the same region | *Result → Field Output → S, MISES* |
+| **Reaction force** curve shows a clear elastic‑to‑plastic transition | *Result → History Output → RF* |
+| **Zero reaction or no plastic strain** | Re‑check the two lines you just edited (node set & surface) and the `*BOUNDARY`/`*DLOAD` definitions. |
+
+If the plastic strain is still zero, try one of the following:
+
+* **Refine the mesh** (especially through the thickness – 2 – 3 elements is a good start).  
+* **Reduce the initial increment** in the `*STATIC` line, e.g. `0.1, 0.5, 1e‑05, 1.`.  
+* Verify that the `*PLASTIC` block is exactly as shown (stress, plastic‑strain pairs, commas).  
+
+---
+
+## 5️⃣ TL;DR – “cheat‑sheet” for a working cantilever  
+
+1. **Node set** – list **all** nodes on X = 0 (`*NODE, NSET=CLAMPED_NODES`).  
+2. **Pressure surface** – `<tip‑element‑ID>, S2` (`*SURFACE, TYPE=ELEMENT`).  
+3. **Material** – elastic‑plastic steel (E = 210 GPa, ν = 0.3, yield ≈ 250 MPa).  
+4. **Boundary** – `CLAMPED_NODES, 1, 3, 0.0`.  
+5. **Load** – `PRESSFACE, P2, -1.0` (1 MPa compressive).  
+6. **Step** – `*STEP, NLGEOM, *STATIC`.  
+7. **Outputs** – request `S, PE, PEEQ` and history `RF, U`.  
+
+Copy the block above into a new `cantilever.inp` (or replace the two highlighted lines in your existing file), submit the job, and you should see plastic deformation develop in the cantilever.
+
+**Happy modelling!**
+A: Below is a **step‑by‑step cheat‑sheet** that tells you exactly what you have to edit in the input file you already have, how to obtain the two numbers for **any** cantilever geometry, and a ready‑to‑paste version of the file with **place‑holder tags** that you only need to replace once.
+
+---
+
+## 1️⃣ What you have to change – only two lines  
+
+| Line in the file | What it does | What you must replace (your values) |
+|------------------|--------------|--------------------------------------|
+| `*NODE, NSET=CLAMPED_NODES`  <br> `1,3,5,7` | Creates a node‑set that contains **every node on the clamped face (X = 0)**. | **All node IDs whose X‑coordinate = 0** for your model.  Use a comma‑separated list (e.g. `12,15,18,…`) **or** the `GENERATE` syntax (`start, end, inc`). |
+| `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` <br> `1, S2` | Defines the surface on which the pressure is applied – the **+X face of the tip element**. | **The element ID that owns the free‑end (+X) face** of your cantilever.  The face label for the +X side of a C3D8R brick is always `S2`. |
+
+> **Everything else in the file can stay exactly as it is.**  
+> If your geometry *is* the 20 × 10 × 5 mm block shown in the example, you can run the file **without any edits**.
+
+---
+
+## 2️⃣ How to obtain the two numbers for **your** model  
+
+| What you need | How to get it in Abaqus/CAE (or the script) |
+|---------------|---------------------------------------------|
+| **All node IDs on the X = 0 face** | 1. Open the part in the **Part** module.<br>2. **Tools → Set → Create → Nodes → By Coordinate → X = 0**.<br>3. Give the set a name (e.g. `CLAMPED`).<br>4. In the model tree, right‑click the set → **Export → Node**.<br>5. Copy the list that appears. <br>   *If the list is long, you can replace it with a `GENERATE` range, e.g. `1, 200, 1`.* |
+| **Element ID that owns the +X face at the free end** | 1. Switch to the **Assembly** or **Part** viewport.<br>2. Use **Query → Pick** (or simply hover over the element) and note the **element number** whose centroid has the **largest X‑coordinate** (the tip of the cantilever).<br>3. That number is the one you write in the surface definition. <br>   *For a C3D8R brick the +X face is always `S2` – you do **not** have to change the face label.* |
+
+---
+
+## 3️⃣ Ready‑to‑paste input file (with placeholders)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+** (your node list – keep exactly as you have it)
+** -------------------------------------------------
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+** (your element list – keep exactly as you have it)
+** -------------------------------------------------
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+** <<< REPLACE THE LINE BELOW WITH ALL NODE IDs whose X = 0 >>>
+** Example for the 20 × 10 × 5 mm block: 1,3,5,7
+<YOUR_NODE_ID_LIST>
+*END NODE
+
+**---  Surface for the pressure (positive X face of the tip element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+** <<< REPLACE “<ELEMENT_ID>” WITH THE ID OF THE TIP ELEMENT >>>
+** The face label for the +X side of a C3D8R brick is always S2.
+<ELEMENT_ID>, S2
+*END SURFACE
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+### What you have to do now  
+
+1. **Open the file in a text editor.**  
+2. **Replace `<YOUR_NODE_ID_LIST>`** with the comma‑separated list (or `GENERATE` range) of all nodes whose X‑coordinate is 0.  
+3. **Replace `<ELEMENT_ID>`** with the element number that contains the free‑end (+X) face.  
+4. Save the file as `cantilever.inp` (or any name you like).  
+5. Submit the job in Abaqus/Standard (`abaqus job=cantilever input=cantilever.inp`).  
+
+---
+
+## 4️⃣ Quick post‑run sanity check  
+
+| What to look for | How to verify |
+|------------------|---------------|
+| **Plastic strain (`PEEQ`)** appears near the clamp and grows towards the tip | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeds 250 MPa in the same region | *Result → Field Output → S, MISES* |
+| **Reaction force** curve shows an elastic‑to‑plastic transition | *Result → History Output → RF* |
+| **Zero plastic strain** (something went wrong) | Re‑check the two edited lines, the `*BOUNDARY` and `*DLOAD` definitions, and make sure the mesh is not too coarse. |
+
+If you see no plasticity, try one (or more) of the following:
+
+* **Refine the mesh** (especially through the thickness – 2 – 3 elements is a good start).  
+* **Reduce the initial increment** in the `*STATIC` line, e.g. `0.1, 0.5, 1e‑05, 1.`.  
+* Verify that the `*PLASTIC` block is exactly as shown (stress, plastic‑strain pairs, commas).  
+
+---
+
+## 5️⃣ TL;DR – “one‑line” summary  
+
+```text
+*NODE, NSET=CLAMPED_NODES
+<list‑of‑all‑nodes‑with‑X=0>
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+<ELEMENT‑ID‑of‑tip>, S2
+```
+
+Everything else stays unchanged. Paste the file, replace the two placeholders, run the job, and you’ll obtain the elastic‑plastic response of your cantilever.
+
+**Happy modelling!**
+
+=== 2026-04-17 18:40:43 ===
+Q: Below is a **step‑by‑step cheat‑sheet** that tells you exactly what you have to edit in the input file you already have, how to obtain the two numbers for **any** cantilever geometry, and a ready‑to‑paste version of the file with **place‑holder tags** that you only need to replace once.
+
+---
+
+## 1️⃣ What you have to change – only two lines  
+
+| Line in the file | What it does | What you must replace (your values) |
+|------|--------------|--------------------------------------|
+| `*NODE, NSET=CLAMPED_NODES`  <br> `1,3,5,7` | Creates a node‑set that contains **every node on the clamped face (X = 0)**. | **All node IDs whose X‑coordinate = 0** for your model.  Use a comma‑separated list (e.g. `12,15,18,…`) **or** the `GENERATE` syntax (`start, end, inc`). |
+| `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE` <br> `1, S2` | Defines the surface on which the pressure is applied – the **+X face of the tip element**. | **The element ID that owns the free‑end (+X) face** of your cantilever.  The face label for the +X side of a C3D8R brick is always `S2`. |
+
+> **Everything else in the file can stay exactly as it is.**  
+> If your geometry *is* the 20 × 10 × 5 mm block shown in the example, you can run the file **without any edits**.
+
+---
+
+## 2️⃣ How to obtain the two numbers for **your** model  
+
+| What you need | How to get it in Abaqus/CAE (or the script) |
+|---------------|---------------------------------------------|
+| **All node IDs on the X = 0 face** | 1. Open the part in the **Part** module.<br>2. **Tools → Set → Create → Nodes → By Coordinate → X = 0**.<br>3. Give the set a name (e.g. `CLAMPED`).<br>4. In the model tree, right‑click the set → **Export → Node**.<br>5. Copy the list that appears. <br>   *If the list is long, you can replace it with a `GENERATE` range, e.g. `1, 200, 1`.* |
+| **Element ID that owns the +X face at the free end** | 1. Switch to the **Assembly** or **Part** viewport.<br>2. Use **Query → Pick** (or simply hover over the element) and note the **element number** whose centroid has the **largest X‑coordinate** (the tip of the cantilever).<br>3. That number is the one you write in the surface definition. <br>   *For a C3D8R brick the +X face is always `S2` – you do **not** have to change the face label.* |
+
+---
+
+## 3️⃣ Ready‑to‑paste input file (with placeholders)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+** (your node list – keep exactly as you have it)
+** -------------------------------------------------
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+** (your element list – keep exactly as you have it)
+** -------------------------------------------------
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+** <<< REPLACE THE LINE BELOW WITH ALL NODE IDs whose X = 0 >>>
+** Example for the 20 × 10 × 5 mm block: 1,3,5,7
+<YOUR_NODE_ID_LIST>
+*END NODE
+
+**---  Surface for the pressure (positive X face of the tip element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+** <<< REPLACE “<ELEMENT_ID>” WITH THE ID OF THE TIP ELEMENT >>>
+** The face label for the +X side of a C3D8R brick is always S2.
+<ELEMENT_ID>, S2
+*END SURFACE
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ---------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+### What you have to do now  
+
+1. Open the file in a text editor.  
+2. Replace `<YOUR_NODE_ID_LIST>` with the comma‑separated list (or `GENERATE` range) of all nodes whose X‑coordinate is 0.  
+3. Replace `<ELEMENT_ID>` with the element number that contains the free‑end (+X) face.  
+4. Save the file (e.g., `cantilever.inp`).  
+5. Submit the job in Abaqus/Standard (`abaqus job=cantilever input=cantilever.inp`).  
+
+---
+
+## 4️⃣ Quick post‑run sanity check  
+
+| What to look for | How to verify |
+|------|---------------|
+| **Plastic strain (`PEEQ`)** appears near the clamp and grows towards the tip | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeds 250 MPa in the same region | *Result → Field Output → S, MISES* |
+| **Reaction force** curve shows an elastic‑to‑plastic transition | *Result → History Output → RF* |
+| **Zero plastic strain** (something went wrong) | Re‑check the two edited lines, the `*BOUNDARY` and `*DLOAD` definitions, and make sure the mesh is not too coarse. |
+
+If you see no plasticity, try one (or more) of the following:
+
+* **Refine the mesh** (especially through the thickness – 2 – 3 elements is a good start).  
+* **Reduce the initial increment** in the `*STATIC` line, e.g. `0.1, 0.5, 1e‑05, 1.`.  
+* Verify that the `*PLASTIC` block is exactly as shown (stress, plastic‑strain pairs, commas).  
+
+---
+
+## 5️⃣ TL;DR – “one‑line” summary  
+
+```text
+*NODE, NSET=CLAMPED_NODES
+<list‑of‑all‑nodes‑with‑X=0>
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+<ELEMENT‑ID‑of‑tip>, S2
+```  
+
+Everything else stays unchanged. Paste the file, replace the two placeholders, run the job, and you’ll obtain the elastic‑plastic response of your cantilever.
+
+**Happy modelling!**
+A: Below is the **complete, ready‑to‑use answer** you asked for.  
+It tells you exactly what two lines you must edit, how to obtain the required numbers for **any** cantilever geometry, gives you a copy‑and‑paste Abaqus *.inp* file with clear placeholders, and even adds a short “run‑and‑check” checklist.
+
+---
+
+## 1️⃣ What you have to change – **only two lines**  
+
+| Line in the input file | What it does | What you must replace (your values) |
+|------------------------|--------------|--------------------------------------|
+| `*NODE, NSET=CLAMPED_NODES`  <br> `** <YOUR_NODE_ID_LIST>` | Creates a node‑set that contains **every node on the clamped face (X = 0)**. | **All node IDs whose X‑coordinate = 0** for your model.  Use a comma‑separated list (e.g. `12,15,18,…`) **or** the `GENERATE` syntax (`start, end, inc`). |
+| `*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE`  <br> `** <ELEMENT_ID>, S2` | Defines the surface on which the pressure is applied – the **+X face of the tip element**. | **The element ID that owns the free‑end (+X) face** of your cantilever.  The face label for the +X side of a C3D8R brick is always `S2`. |
+
+> **Everything else in the file can stay exactly as it is.**  
+> If your geometry *is* the 20 × 10 × 5 mm block shown in the example, you can run the file **without any edits**.
+
+---
+
+## 2️⃣ How to obtain the two numbers for **your** model  
+
+### 2.1 Node IDs on the X = 0 face  
+
+1. **Open the part** in the **Part** module of Abaqus/CAE.  
+2. Choose **Tools → Set → Create → Nodes → By Coordinate → X = 0**.  
+3. Give the set a name (e.g. `CLAMPED`).  
+4. In the model tree, right‑click the set → **Export → Node**.  
+5. Copy the list that appears.  
+
+*If the list is long you can replace it with a `GENERATE` range, e.g.*  
+
+```
+1, 200, 1          ! nodes 1‑200, step 1
+```
+
+### 2.2 Element ID that owns the +X face at the free end  
+
+1. Switch to the **Assembly** (or **Part**) viewport.  
+2. Use **Query → Pick** (or simply hover) and note the **element number** whose **centroid has the largest X‑coordinate** – this is the tip element.  
+3. That number is the one you write in the surface definition.  
+
+*For a C3D8R brick the +X face is always `S2`; you never have to change the face label.*
+
+---
+
+## 3️⃣ Ready‑to‑paste Abaqus input file (with placeholders)
+
+```abaqus
+*HEADING
+** Cantilever – elastic‑plastic steel, pressure on free end
+** Units: mm‑kg‑s  (E in MPa, density in tonne/mm³)
+
+** -------------------------------------------------
+**  MATERIAL
+** -------------------------------------------------
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3                ! E = 210 GPa, ν = 0.3
+*PLASTIC
+250., 0.                    ! Yield stress = 250 MPa
+300., 0.02
+350., 0.05
+400., 0.10
+*DENSITY
+7.85E-9                     ! 7850 kg/m³ → 7.85·10⁻⁹ tonne/mm³
+
+** -------------------------------------------------
+**  PART – keep your own *NODE/*ELEMENT section
+** -------------------------------------------------
+*PART, NAME=BLOCK
+*NODE
+** (your node list – keep exactly as you have it)
+** -------------------------------------------------
+*ELEMENT, TYPE=C3D8R, ELSET=EALL
+** (your element list – keep exactly as you have it)
+** -------------------------------------------------
+*END PART
+
+** -------------------------------------------------
+**  ASSEMBLY – generate sets & surfaces
+** -------------------------------------------------
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=BLOCK-1, PART=BLOCK
+*END INSTANCE
+
+**---  Node‑set for the clamped face (X = 0) -----------------
+*NODE, NSET=CLAMPED_NODES
+** <<< REPLACE THE LINE BELOW WITH ALL NODE IDs whose X = 0 >>>
+<YOUR_NODE_ID_LIST>
+*END NODE
+
+**---  Surface for the pressure (positive X face of the tip element) ---
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+** <<< REPLACE <ELEMENT_ID> WITH THE ID OF THE TIP ELEMENT >>>
+<ELEMENT_ID>, S2
+*END SURFACE
+*END ASSEMBLY
+
+** -------------------------------------------------
+**  SECTION
+** -------------------------------------------------
+*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL
+
+** -------------------------------------------------
+**  BOUNDARY CONDITIONS
+** -------------------------------------------------
+*BOUNDARY
+CLAMPED_NODES, 1, 3, 0.0   ! fix U1, U2, U3 for every node on X = 0
+
+** -------------------------------------------------
+**  STEP – static/quasi‑static with NLGEOM
+** -------------------------------------------------
+*STEP, NLGEOM, TITLE=PressStep
+*STATIC
+0.1, 1., 1e-05, 1.          ! (total time, initial inc, min inc, max inc)
+
+**---  Pressure load (compressive, 1 MPa) -----------------
+*DLOAD
+PRESSFACE, P2, -1.0        ! P2 = pressure normal to the surface
+
+**---  Output requests ------------------------------------
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*OUTPUT, FIELD, VARIABLE=S, PE, PEEQ
+*OUTPUT, HISTORY, VARIABLE=RF, U
+*END STEP
+
+** -------------------------------------------------
+**  END OF INPUT
+** -------------------------------------------------
+```
+
+### What you have to do now  
+
+1. **Open the file** in any text editor.  
+2. **Replace** `<YOUR_NODE_ID_LIST>` with the comma‑separated list (or `GENERATE` range) of all nodes whose X = 0.  
+3. **Replace** `<ELEMENT_ID>` with the element number that contains the free‑end (+X) face.  
+4. **Save** the file, e.g. `cantilever.inp`.  
+5. **Run** the job in Abaqus/Standard  
+
+```bash
+abaqus job=cantilever input=cantilever.inp
+```
+
+---
+
+## 4️⃣ Quick post‑run sanity check  
+
+| What to look for | How to verify in Abaqus/Viewer |
+|------------------|--------------------------------|
+| **Plastic strain (`PEEQ`)** appears near the clamp and grows towards the tip | *Result → Field Output → PEEQ → Contour* |
+| **Von‑Mises stress** exceeds 250 MPa in the same region | *Result → Field Output → S, MISES* |
+| **Reaction force** curve shows an elastic‑to‑plastic transition | *Result → History Output → RF* |
+| **Zero plastic strain** (something went wrong) | Re‑check the two edited lines, the `*BOUNDARY` and `*DLOAD` definitions, and make sure the mesh is not too coarse. |
+
+If you see no plasticity, try one (or more) of the following:
+
+* **Refine the mesh** (especially through the thickness – 2 – 3 elements is a good start).  
+* **Reduce the initial increment** in the `*STATIC` line, e.g. `0.1, 0.5, 1e‑05, 1.`.  
+* Verify that the `*PLASTIC` block is exactly as shown (stress, plastic‑strain pairs, commas).  
+
+---
+
+## 5️⃣ TL;DR – “one‑line” summary  
+
+```text
+*NODE, NSET=CLAMPED_NODES
+<list‑of‑all‑nodes‑with‑X=0>
+*SURFACE, TYPE=ELEMENT, NAME=PRESSFACE
+<ELEMENT‑ID‑of‑tip>, S2
+```  
+
+Everything else stays unchanged. Paste the file, replace the two placeholders, run the job, and you’ll obtain the elastic‑plastic response of your cantilever.
+
+**Happy modelling!**
+

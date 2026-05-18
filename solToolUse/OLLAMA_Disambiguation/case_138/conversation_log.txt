@@ -1,0 +1,2757 @@
+=== 2026-04-18 06:26:47 ===
+Q: **What the error means**
+
+`*COUPLING` creates a constraint equation that couples the motion of a *reference node* with the motion of a *surface*.  
+For a **kinematic** coupling the surface **must be a node‑based surface** (i.e. a set of nodes that all lie on the same geometric side of the model).  
+
+In the input you defined the surface
+
+```abaqus
+*SURFACE, NAME=S1
+2,S4
+4,S4
+30,S4
+32,S4
+...
+```
+
+which is an **element‑face surface** (type = ELEMENT).  
+When Abaqus tries to generate the kinematic constraint it finds that the surface definition is not compatible with the coupling type and aborts with
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+---
+
+## Two ways to fix the problem
+
+### 1. Keep a kinematic coupling – define the surface with nodes
+
+1. **Create a node set that contains all nodes on the desired face**  
+   (you can generate it automatically with a *NSET, GENERATE* or list the nodes manually).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+   11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+   ...   (all nodes that belong to the face)
+   ```
+
+2. **Define a node‑based surface**  
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside the step** (the *COUPLING* keyword is a step‑level command).
+
+   ```abaqus
+   *STEP, NLGEOM
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT NAME=CN1
+   *KINEMATIC
+   1, 3
+   *END STEP
+   ```
+
+That is all – the kinematic coupling will now be built from the average translation of the nodes in `SurfNodes` and the translation of node 262.
+
+---
+
+### 2. Use an MPC coupling – keep the element‑face surface
+
+If you really want to keep the surface defined by element faces, you must change the coupling type to **MPC** (multi‑point constraint) because MPC coupling can work with element‑face surfaces.
+
+```abaqus
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT NAME=CN1
+*MPC
+1, 3
+```
+
+(Everything else stays the same, except that the *COUPLING* block must still be inside the step.)
+
+---
+
+## Why the original input fails
+
+| Keyword | What you used | What Abaqus expects for a kinematic coupling |
+|---------|---------------|---------------------------------------------|
+| `*SURFACE` | `TYPE=ELEMENT` (default) – list of element faces (`2,S4`, …) | `TYPE=NODE` – list of nodes that belong to the surface |
+| `*COUPLING` | placed **before** the step | must be **inside** a step (it is a step‑level command) |
+
+Because the surface was element‑based, Abaqus could not generate the kinematic constraint equation, and it stopped with the compatibility error.
+
+---
+
+## Minimal corrected snippet (kinematic coupling)
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes
+
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT NAME=CN1
+*KINEMATIC
+1, 3
+
+*STEP, NLGEOM
+*END STEP
+```
+
+Replace `SurfNodes` with the actual node numbers that lie on the face you want to couple.  
+If you prefer to keep the element‑face definition, change `*KINEMATIC` to `*MPC` as shown in option 2.
+
+With either of the two corrections the analysis will run without the “constraint equation is not compatible” error.
+A: **Answer – why the error occurs and how to correct it**
+
+`*COUPLING` creates a kinematic (or MPC) constraint that ties the motion of a **reference node** to the motion of a **surface**.  
+For a **kinematic** coupling the surface **must be a node‑based surface** (a list of nodes that all lie on the same geometric side of the model).  
+
+In your model the surface was defined as an **element‑face surface** (the default `TYPE=ELEMENT`):
+
+```abaqus
+*SURFACE, NAME=S1
+2,S4
+4,S4
+30,S4
+32,S4
+...
+```
+
+When Abaqus tries to build the kinematic constraint it finds that the surface definition is incompatible and aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+---
+
+## Two ways to fix the problem
+
+### 1️⃣ Keep a **kinematic** coupling – change the surface to a **node‑based** definition  
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can generate it automatically with `*NSET, GENERATE` or list the nodes manually).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   (all nodes that belong to the face)
+   ```
+
+2. **Define the surface using that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside a step** (the `*COUPLING` keyword is a step‑level command).
+
+   ```abaqus
+   *STEP, NLGEOM
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; 1 = translation in X, 3 = translation in Z (example)
+   *END STEP
+   ```
+
+That is all – the kinematic coupling will now be built from the average translation of the nodes in `SurfNodes` and the translation of node 262.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling instead of kinematic  
+
+If you really need the surface to stay defined by element faces, change the coupling type to **MPC** (multi‑point constraint). MPC coupling can work with element‑face surfaces.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                ; 1 = translation in X, 3 = translation in Z (example)
+*END STEP
+```
+
+Everything else (the element‑face surface definition) can remain unchanged; only the coupling type (`*MPC` instead of `*KINEMATIC`) is different.
+
+---
+
+## Why the original input fails
+
+| Keyword / placement | What you used | What Abaqus requires for a kinematic coupling |
+|---------------------|---------------|-----------------------------------------------|
+| `*SURFACE`          | default `TYPE=ELEMENT` (list of element faces) | `TYPE=NODE` – a list of nodes that belong to the surface |
+| `*COUPLING`         | placed **outside** any step | Must be **inside** a step (it is a step‑level command) |
+
+Because the surface was element‑based, Abaqus could not generate the kinematic constraint equation, and it stopped with the compatibility error.
+
+---
+
+## Minimal corrected snippet (kinematic coupling)
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; <-- node set that contains the face nodes
+
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; (choose the DOFs you want to couple)
+*END STEP
+```
+
+Replace `SurfNodes` with the actual node numbers that lie on the face you want to couple.
+
+---
+
+## Minimal corrected snippet (MPC coupling – keep element‑face surface)
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face surface as you already have
+2,S4
+4,S4
+30,S4
+32,S4
+...
+
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; (choose the DOFs you want to couple)
+*END STEP
+```
+
+---
+
+### Bottom line
+* **Kinematic coupling → surface must be node‑based (`TYPE=NODE`).**  
+* **If you keep an element‑face surface, switch the coupling to MPC.**  
+
+Apply one of the two corrections above and the analysis will run without the “constraint equation is not compatible with the specified surface definition” error.
+
+=== 2026-04-18 06:27:20 ===
+Q: **Why the error occurs**
+
+`*COUPLING` creates a constraint that ties the motion of a **reference node** to the motion of a **surface**.  
+For a **kinematic** coupling the surface **must be a node‑based surface** (a set of nodes that all lie on the same geometric side of the model).  
+
+In the input you defined the surface as an **element‑face surface** (the default `TYPE=ELEMENT`):
+
+```abaqus
+*SURFACE, NAME=S1
+2,S4
+4,S4
+30,S4
+32,S4
+...
+```
+
+When Abaqus tries to generate the kinematic constraint it finds that the surface definition is not compatible with the requested kinematic coupling and aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+In addition, the `*COUPLING` keyword was placed **outside** any step; it must be a **step‑level** command (i.e. inside a `*STEP` block).
+
+---
+
+## Two ways to fix the problem
+
+### 1️⃣ Keep a **kinematic** coupling – change the surface to a **node‑based** definition  
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can generate it automatically with `*NSET, GENERATE` or list the nodes manually).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   (all nodes that belong to the face)
+   ```
+
+2. **Define the surface using that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside a step** (the `*COUPLING` keyword is a step‑level command).
+
+   ```abaqus
+   *STEP, NLGEOM
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; 1 = translation in X, 3 = translation in Z (example)
+   *END STEP
+   ```
+
+That is all – the kinematic coupling will now be built from the average translation of the nodes in `SurfNodes` and the translation of node 262.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling instead of kinematic  
+
+If you need the surface to stay defined by element faces, change the coupling type to **MPC** (multi‑point constraint). MPC coupling can work with element‑face surfaces.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                ; 1 = translation in X, 3 = translation in Z (example)
+*END STEP
+```
+
+All other parts of the model (the element‑face surface definition) can remain unchanged; only the coupling type (`*MPC` instead of `*KINEMATIC`) is different.
+
+---
+
+## Summary of why the original input fails
+
+| Keyword / placement | What you used | What Abaqus requires for a kinematic coupling |
+|---------------------|---------------|-----------------------------------------------|
+| `*SURFACE`          | default `TYPE=ELEMENT` (list of element faces) | `TYPE=NODE` – a list of nodes that belong to the surface |
+| `*COUPLING`         | placed **outside** any step | Must be **inside** a step (it is a step‑level command) |
+
+Because the surface was element‑based, Abaqus could not generate the kinematic constraint equation, leading to the compatibility error.
+
+---
+
+## Minimal corrected snippets
+
+### (a) Kinematic coupling – node‑based surface
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; <-- node set that contains the face nodes
+
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; (choose the DOFs you want to couple)
+*END STEP
+```
+
+Replace `SurfNodes` with the actual node numbers that lie on the face you want to couple.
+
+---
+
+### (b) MPC coupling – keep element‑face surface
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face surface as you already have
+2,S4
+4,S4
+30,S4
+32,S4
+...
+
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; (choose the DOFs you want to couple)
+*END STEP
+```
+
+---
+
+**Bottom line:**  
+* **Kinematic coupling → surface must be node‑based (`TYPE=NODE`).**  
+* **If you keep an element‑face surface, switch the coupling to MPC.**  
+
+Apply one of the two corrections above and the analysis will run without the “constraint equation is not compatible with the specified surface definition” error.
+A: **Why the error is raised**
+
+`*COUPLING` creates a kinematic constraint that ties the motion of a **reference node** to the **average motion of a surface**.  
+For a **kinematic** coupling Abaqus requires the surface to be **node‑based** (`TYPE=NODE`).  
+In your model the surface is defined as an **element‑face surface** (the default `TYPE=ELEMENT`):
+
+```abaqus
+*SURFACE, NAME=S1
+2,S4
+4,S4
+30,S4
+32,S4
+...
+```
+
+When Abaqus tries to build the kinematic constraint it cannot compute the average translation of a set of element faces, so it aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second, more subtle problem is that the `*COUPLING` keyword is placed **outside any *STEP* block**. `*COUPLING` is a **step‑level** command and must appear inside a step definition.
+
+---
+
+## Two ways to correct the model
+
+### 1️⃣ Keep a **kinematic** coupling – change the surface to a **node‑based** definition  
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can generate it automatically with `*NSET, GENERATE` or list the nodes manually).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   (all nodes that belong to the face)
+   ```
+
+2. **Define the surface using that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Put the coupling inside a step** (the `*COUPLING` line must be inside a `*STEP` block).
+
+   ```abaqus
+   *STEP, NLGEOM
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; example – couple X‑translation (1) and Z‑translation (3)
+   *END STEP
+   ```
+
+   *Result*: Abaqus now builds a kinematic constraint that ties the average translation of the nodes in `SurfNodes` to node 262.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling instead of kinematic  
+
+If you need the surface to stay defined by element faces, change the coupling type to **MPC** (multi‑point constraint). MPC coupling can work with element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; keep your existing element‑face definition
+2,S4
+4,S4
+30,S4
+32,S4
+...
+
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; example – couple X‑translation (1) and Z‑translation (3)
+*END STEP
+```
+
+Now the constraint is an MPC rather than a kinematic coupling, and Abaqus accepts an element‑face surface.
+
+---
+
+## Summary of the root causes
+
+| Item | What you used | What Abaqus expects for a kinematic coupling |
+|------|---------------|----------------------------------------------|
+| `*SURFACE` | `TYPE=ELEMENT` (list of element faces) | `TYPE=NODE` – a node set that lies on the face |
+| `*COUPLING` | Placed outside any step | Must be **inside** a `*STEP` block (step‑level command) |
+
+Because the surface was element‑based and the coupling was outside a step, Abaqus could not generate the required constraint equation, leading to the compatibility error.
+
+---
+
+## Minimal corrected snippets
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set that contains the face nodes
+
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; choose the DOFs you want to couple
+*END STEP
+```
+
+Replace `SurfNodes` with the actual node numbers on the face you wish to couple.
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face surface as you already have
+2,S4
+4,S4
+30,S4
+32,S4
+...
+
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; choose the DOFs you want to couple
+*END STEP
+```
+
+---
+
+**Bottom line**
+
+* **Kinematic coupling → surface must be node‑based (`TYPE=NODE`) and the `*COUPLING` line must be inside a step.**  
+* **If you want to keep an element‑face surface, switch the coupling to MPC.**  
+
+Apply one of the two corrections above and the analysis will run without the “constraint equation is not compatible with the specified surface definition” error.
+
+=== 2026-04-18 06:27:54 ===
+Q: **Why the error is raised**
+
+`*COUPLING` creates a constraint that ties the motion of a **reference node** to the **average motion of a surface**.  
+For a **kinematic** coupling Abaqus requires the surface to be **node‑based** (`TYPE=NODE`).  
+
+In the model the surface is defined as an **element‑face surface** (the default `TYPE=ELEMENT`):
+
+```abaqus
+*SURFACE, NAME=S1
+2,S4
+4,S4
+30,S4
+32,S4
+...
+```
+
+When Abaqus tries to build the kinematic constraint it cannot compute the average translation of a set of element faces, so it aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second problem is that the `*COUPLING` keyword is placed **outside any *STEP* block**. `*COUPLING` is a **step‑level** command and must appear inside a step definition.
+
+---
+
+## Two ways to correct the model
+
+### 1️⃣ Keep a **kinematic** coupling – change the surface to a **node‑based** definition  
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can generate it automatically with `*NSET, GENERATE` or list the nodes manually).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   (all nodes that belong to the face)
+   ```
+
+2. **Define the surface using that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside a step** (the `*COUPLING` line must be inside a `*STEP` block).
+
+   ```abaqus
+   *STEP, NLGEOM
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; example – couple X‑translation (1) and Z‑translation (3)
+   *END STEP
+   ```
+
+Result: Abaqus now builds a kinematic constraint that ties the average translation of the nodes in `SurfNodes` to node 262.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling instead of kinematic  
+
+If you need the surface to stay defined by element faces, change the coupling type to **MPC** (multi‑point constraint). MPC coupling can work with element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; keep your existing element‑face definition
+2,S4
+4,S4
+30,S4
+32,S4
+...
+
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; example – couple X‑translation (1) and Z‑translation (3)
+*END STEP
+```
+
+Now the constraint is an MPC rather than a kinematic coupling, and Abaqus accepts an element‑face surface.
+
+---
+
+## Summary of the root causes
+
+| Item | What you used | What Abaqus requires for a kinematic coupling |
+|------|---------------|-----------------------------------------------|
+| `*SURFACE` | `TYPE=ELEMENT` (list of element faces) | `TYPE=NODE` – a node set that lies on the face |
+| `*COUPLING` | Placed outside any step | Must be **inside** a `*STEP` block (step‑level command) |
+
+Because the surface was element‑based and the coupling was outside a step, Abaqus could not generate the required constraint equation, leading to the compatibility error.
+
+---
+
+## Minimal corrected snippets
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set that contains the face nodes
+
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; choose the DOFs you want to couple
+*END STEP
+```
+
+Replace `SurfNodes` with the actual node numbers on the face you wish to couple.
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face surface as you already have
+2,S4
+4,S4
+30,S4
+32,S4
+...
+
+*STEP, NLGEOM
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; choose the DOFs you want to couple
+*END STEP
+```
+
+---
+
+**Bottom line**
+
+* **Kinematic coupling → surface must be node‑based (`TYPE=NODE`) and the `*COUPLING` line must be inside a step.**  
+* **If you want to keep an element‑face surface, switch the coupling to MPC.**  
+
+Apply one of the two corrections above and the analysis will run without the “constraint equation is not compatible with the specified surface definition” error.
+A: **Why the error is raised**
+
+`*COUPLING` creates a *kinematic* constraint that ties the motion of a **reference node** to the **average motion of a surface**.  
+For a kinematic coupling Abaqus requires the surface to be **node‑based** (`TYPE=NODE`).  
+
+In the posted model the surface is defined as an **element‑face surface** (the default `TYPE=ELEMENT`):
+
+```abaqus
+*SURFACE, NAME=S1
+2,S4
+4,S4
+30,S4
+32,S4
+...
+```
+
+When Abaqus tries to build the constraint it cannot compute the average translation of a set of element faces, so it aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any *STEP* block**. `*COUPLING` is a **step‑level** command and must appear inside a step definition.
+
+---
+
+## How to correct the model (complete, ready‑to‑copy input)
+
+Below are two self‑contained ways to fix the error. Choose the one that best fits your modelling intent.
+
+---
+
+### 1️⃣ Keep a **kinematic** coupling – change the surface to a **node‑based** definition  
+
+1. **Create a node set that contains every node on the face you want to couple**.  
+   You can generate it automatically with `*NSET, GENERATE` (if the nodes are numbered consecutively) or list them manually.
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   (all nodes that belong to the face)
+   ```
+
+2. **Define the surface using that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside a step** (the `*COUPLING` line must be inside a `*STEP` block).
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; example – couple X‑translation (1) and Z‑translation (3)
+   *END STEP
+   ```
+
+**Result** – Abaqus now builds a kinematic constraint that ties the *average translation of the nodes in `SurfNodes`* to node 262. The analysis will run without the compatibility error.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling instead of kinematic  
+
+If you need the surface to stay defined by element faces, change the coupling type to **MPC** (multi‑point constraint). MPC coupling can work with element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; keep your existing element‑face definition
+2,S4
+4,S4
+30,S4
+32,S4
+...                        ; all element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; example – couple X‑translation (1) and Z‑translation (3)
+*END STEP
+```
+
+**Result** – The constraint is now an MPC rather than a kinematic coupling, and Abaqus accepts an element‑face surface.
+
+---
+
+## Summary of the root causes
+
+| What you used | What Abaqus requires for a **kinematic** coupling |
+|---------------|---------------------------------------------------|
+| `*SURFACE` with `TYPE=ELEMENT` (list of element faces) | `TYPE=NODE` – a node set that lies on the face |
+| `*COUPLING` placed **outside** any `*STEP` block | Must be **inside** a `*STEP` block (step‑level command) |
+
+Because the surface was element‑based **and** the coupling was outside a step, Abaqus could not generate the required constraint equation, leading to the error.
+
+---
+
+## Minimal corrected snippets you can paste into your input file
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set that contains the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (change as needed)
+*END STEP
+```
+
+*Replace `SurfNodes` with the actual node numbers on the face you wish to couple.*
+
+---
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face surface as you already have
+2,S4
+4,S4
+30,S4
+32,S4
+...                      ; rest of the element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (change as needed)
+*END STEP
+```
+
+---
+
+**Bottom line**
+
+* **Kinematic coupling** → surface must be **node‑based** (`TYPE=NODE`) **and** the `*COUPLING` line must be **inside a step**.  
+* **If you want to keep an element‑face surface**, switch the coupling to **MPC** (which works with element‑face surfaces).
+
+Apply one of the two corrections above and the analysis will run without the “constraint equation is not compatible with the specified surface definition” error.
+
+=== 2026-04-18 06:28:32 ===
+Q: **Why the error is raised**
+
+`*COUPLING` creates a *kinematic* constraint that ties the motion of a **reference node** to the **average motion of a surface**.  
+For a kinematic coupling Abaqus requires the surface to be **node‑based** (`TYPE=NODE`).  
+
+In the posted model the surface is defined as an **element‑face surface** (the default `TYPE=ELEMENT`):
+
+```abaqus
+*SURFACE, NAME=S1
+2,S4
+4,S4
+30,S4
+32,S4
+...
+```
+
+When Abaqus tries to build the constraint it cannot compute the average translation of a set of element faces, so it aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any *STEP* block**. `*COUPLING` is a **step‑level** command and must appear inside a step definition.
+
+---
+
+## Two ways to fix the model (ready‑to‑copy input)
+
+Choose the option that best matches what you want to achieve.
+
+---
+
+### 1️⃣ Keep a **kinematic** coupling – use a **node‑based** surface  
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can generate it automatically with `*NSET, GENERATE` if the nodes are numbered consecutively, or list them manually).
+
+```abaqus
+*NSET, NSET=SurfNodes
+101,102,103,104,105,106,107,108,109,110,
+111,112,113,114,115,116,117,118,119,120,
+...   (all nodes that belong to the face)
+```
+
+2. **Define the surface using that node set** (`TYPE=NODE`).
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes
+```
+
+3. **Place the coupling inside a step** (the `*COUPLING` line must be inside a `*STEP` block).
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                ; example – couple X‑translation (1) and Z‑translation (3)
+*END STEP
+```
+
+Result: Abaqus now builds a kinematic constraint that ties the *average translation of the nodes in `SurfNodes`* to node 262. The analysis will run without the compatibility error.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling instead of kinematic  
+
+If you need the surface to stay defined by element faces, change the coupling type to **MPC** (multi‑point constraint). MPC constraints can be applied to element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; keep your existing element‑face definition
+2,S4
+4,S4
+30,S4
+32,S4
+...                        ; all other element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; example – couple X‑translation (1) and Z‑translation (3)
+*END STEP
+```
+
+Now the constraint is an MPC rather than a kinematic coupling, and Abaqus accepts an element‑face surface.
+
+---
+
+## Summary of the root causes
+
+| Item | What you used | What Abaqus requires for a **kinematic** coupling |
+|------|---------------|---------------------------------------------------|
+| `*SURFACE` | `TYPE=ELEMENT` (list of element faces) | `TYPE=NODE` – a node set that lies on the face |
+| `*COUPLING` | Placed **outside** any step | Must be **inside** a `*STEP` block (step‑level command) |
+
+Because the surface was element‑based **and** the coupling was outside a step, Abaqus could not generate the required constraint equation, leading to the error.
+
+---
+
+## Minimal corrected snippets you can paste directly into your input file
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set that contains the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (change as needed)
+*END STEP
+```
+
+*Replace `SurfNodes` with the actual node numbers on the face you wish to couple.*
+
+---
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face surface as you already have
+2,S4
+4,S4
+30,S4
+32,S4
+...                      ; rest of the element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (change as needed)
+*END STEP
+```
+
+---
+
+**Bottom line**
+
+* **Kinematic coupling** → surface must be **node‑based** (`TYPE=NODE`) **and** the `*COUPLING` line must be **inside a step**.  
+* **If you want to keep an element‑face surface**, switch the coupling to **MPC**, which works with element‑face surfaces.
+
+Apply one of the two corrections above and the analysis will run without the “constraint equation is not compatible with the specified surface definition” error.
+A: **Why the error is raised**
+
+`*COUPLING` creates a **kinematic** constraint.  
+For a kinematic coupling Abaqus can only compute the *average translation* of a **node‑based** surface (`TYPE=NODE`).  
+In the posted model the surface is defined as an **element‑face** surface (`TYPE=ELEMENT`, the default).  
+When Abaqus tries to build the constraint it cannot evaluate the average motion of element faces, so it aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any *STEP* block**.  
+`*COUPLING` is a **step‑level** command and must appear inside a step definition.  
+
+---
+
+## Two complete, ready‑to‑copy solutions
+
+Choose the one that matches what you really want to do.
+
+---
+
+### 1️⃣ Keep a **kinematic** coupling – use a **node‑based** surface  
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can generate it automatically with `*NSET, GENERATE` if the nodes are numbered consecutively, or list them manually).
+
+```abaqus
+* NSET, NSET=SurfNodes
+101,102,103,104,105,106,107,108,109,110,
+111,112,113,114,115,116,117,118,119,120,
+...   (all nodes that belong to the face)
+```
+
+2. **Define the surface using that node set** (`TYPE=NODE`).
+
+```abaqus
+* SURFACE, NAME=S1, TYPE=NODE
+SurfNodes
+```
+
+3. **Put the coupling inside a step** (the `*COUPLING` line must be inside a `*STEP` block).
+
+```abaqus
+* STEP, NLGEOM, NAME=Step-1
+* COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+* KINEMATIC
+1, 3                ; example – couple X‑translation (1) and Z‑translation (3)
+* END STEP
+```
+
+**Result** – Abaqus now builds a kinematic constraint that ties the *average translation of the nodes in `SurfNodes`* to node 262. The analysis runs without the compatibility error.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling instead of a kinematic one  
+
+If you need the surface to stay defined by element faces, change the coupling type to **MPC** (multi‑point constraint). MPC constraints can be applied to element‑face surfaces.
+
+```abaqus
+* SURFACE, NAME=S1          ; keep your existing element‑face definition
+2, S4
+4, S4
+30, S4
+32, S4
+...                         ; all other element‑face entries
+```
+
+```abaqus
+* STEP, NLGEOM, NAME=Step-1
+* COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+* MPC
+1, 3                        ; example – couple X‑translation (1) and Z‑translation (3)
+* END STEP
+```
+
+**Result** – The constraint is now an MPC rather than a kinematic coupling, and Abaqus accepts an element‑face surface.
+
+---
+
+## Summary of the root causes
+
+| What you used | What Abaqus requires for a **kinematic** coupling |
+|---------------|---------------------------------------------------|
+| `*SURFACE` defined as `TYPE=ELEMENT` (list of element faces) | `TYPE=NODE` – a node set that lies on the face |
+| `*COUPLING` placed **outside** any step | Must be **inside** a `*STEP` block (step‑level command) |
+
+Because the surface was element‑based **and** the coupling was outside a step, Abaqus could not generate the required constraint equation, leading to the error.
+
+---
+
+## Minimal corrected snippets you can paste directly into your input file
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+* SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set that contains the face nodes
+
+* STEP, NLGEOM, NAME=Step-1
+* COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+* KINEMATIC
+1, 3                     ; DOFs to couple (change as needed)
+* END STEP
+```
+
+*Replace `SurfNodes` with the actual node numbers on the face you wish to couple.*
+
+---
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+* SURFACE, NAME=S1        ; element‑face surface as you already have
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; rest of the element‑face entries
+
+* STEP, NLGEOM, NAME=Step-1
+* COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+* MPC
+1, 3                     ; DOFs to couple (change as needed)
+* END STEP
+```
+
+---
+
+**Bottom line**
+
+* **Kinematic coupling** → surface must be **node‑based** (`TYPE=NODE`) **and** the `*COUPLING` line must be **inside a step**.  
+* **If you want to keep an element‑face surface**, switch the coupling to **MPC**, which works with element‑face surfaces.
+
+Apply one of the two corrections above and the analysis will run without the “constraint equation is not compatible with the specified surface definition” error.
+
+=== 2026-04-18 06:29:09 ===
+Q: **Why the error occurs**
+
+`*COUPLING` creates a **kinematic** constraint that ties the motion of a **reference node** to the **average translation of a surface**.  
+For a kinematic coupling Abaqus can only evaluate the average translation of a **node‑based** surface (`TYPE=NODE`).  
+
+In the posted model the surface is defined as an **element‑face** surface (the default `TYPE=ELEMENT`):
+
+```abaqus
+*SURFACE, NAME=S1
+2,S4
+4,S4
+30,S4
+32,S4
+...
+```
+
+When Abaqus tries to build the constraint it cannot compute the average motion of element faces, so it aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any *STEP* block**.  
+`*COUPLING` is a **step‑level** command and must appear inside a step definition.
+
+---
+
+## Two complete, ready‑to‑copy solutions
+
+Choose the option that matches what you really want to achieve.
+
+---
+
+### 1️⃣ Keep a **kinematic** coupling – use a **node‑based** surface  
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can generate it automatically with `*NSET, GENERATE` if the nodes are numbered consecutively, or list them manually).
+
+```abaqus
+*NSET, NSET=SurfNodes
+101,102,103,104,105,106,107,108,109,110,
+111,112,113,114,115,116,117,118,119,120,
+...   (all nodes that belong to the face)
+```
+
+2. **Define the surface using that node set** (`TYPE=NODE`).
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes
+```
+
+3. **Place the coupling inside a step** (the `*COUPLING` line must be inside a `*STEP` block).
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                ; example – couple X‑translation (1) and Z‑translation (3)
+*END STEP
+```
+
+**Result** – Abaqus now builds a kinematic constraint that ties the *average translation of the nodes in `SurfNodes`* to node 262. The analysis will run without the compatibility error.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling instead of a kinematic one  
+
+If you need the surface to stay defined by element faces, change the coupling type to **MPC** (multi‑point constraint). MPC constraints can be applied to element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; keep your existing element‑face definition
+2, S4
+4, S4
+30, S4
+32, S4
+...                        ; all other element‑face entries
+```
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; example – couple X‑translation (1) and Z‑translation (3)
+*END STEP
+```
+
+Now the constraint is an **MPC** rather than a kinematic coupling, and Abaqus accepts an element‑face surface.
+
+---
+
+## Summary of the root causes
+
+| What was used | What Abaqus requires for a **kinematic** coupling |
+|---------------|---------------------------------------------------|
+| `*SURFACE` defined as `TYPE=ELEMENT` (list of element faces) | `TYPE=NODE` – a node set that lies on the face |
+| `*COUPLING` placed **outside** any step | Must be **inside** a `*STEP` block (step‑level command) |
+
+Because the surface was element‑based **and** the coupling was outside a step, Abaqus could not generate the required constraint equation, leading to the error.
+
+---
+
+## Minimal corrected snippets you can paste directly into your input file
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set that contains the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (change as needed)
+*END STEP
+```
+
+*Replace `SurfNodes` with the actual node numbers on the face you wish to couple.*
+
+---
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face surface as you already have
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; rest of the element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (change as needed)
+*END STEP
+```
+
+---
+
+**Bottom line**
+
+* **Kinematic coupling** → surface must be **node‑based** (`TYPE=NODE`) **and** the `*COUPLING` line must be **inside a step**.  
+* **If you want to keep an element‑face surface**, switch the coupling to **MPC**, which works with element‑face surfaces.
+
+Apply one of the two corrections above and the analysis will run without the “constraint equation is not compatible with the specified surface definition” error.
+A: **Why the error is raised**
+
+| What you wrote | What Abaqus expects |
+|----------------|---------------------|
+| `*SURFACE …` without a `TYPE` → defaults to **TYPE=ELEMENT** (a list of element faces) | A **kinematic** coupling (`*COUPLING … *KINEMATIC`) can only use a **node‑based** surface (`TYPE=NODE`). |
+| `*COUPLING` placed **outside** any `*STEP` block | `*COUPLING` is a **step‑level** command; it must be inside a step definition. |
+
+Because the surface is element‑based **and** the coupling is outside a step, Abaqus cannot form the “average translation of the surface” that a kinematic coupling requires, so it aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+---
+
+## Two ways to fix the model  
+
+You can choose the one that matches the physics you really need.
+
+---
+
+### 1️⃣ Keep a **kinematic** coupling – change the surface to **node‑based**
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can generate it automatically with `*NSET, GENERATE` if the nodes are consecutive, or list them manually).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   ; all nodes that belong to the face
+   ```
+
+2. **Define the surface from that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Put the coupling inside a step** and use the *KINEMATIC* option.
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; example – couple X‑translation (1) and Z‑translation (3)
+   *END STEP
+   ```
+
+**Result** – Abaqus now ties the *average translation of the nodes in `SurfNodes`* to node 262. The analysis runs without the compatibility error.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling instead of a kinematic one  
+
+If you need the surface to stay defined by element faces, change the coupling type to **MPC** (multi‑point constraint). MPC constraints can be applied to element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; keep your existing element‑face definition
+2, S4
+4, S4
+30, S4
+32, S4
+...                        ; all other element‑face entries
+```
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; example – couple X‑translation (1) and Z‑translation (3)
+*END STEP
+```
+
+**Result** – The constraint is now an **MPC**, which Abaqus can evaluate on an element‑face surface, so the input file is accepted.
+
+---
+
+## Quick‑copy‑and‑paste snippets
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set that contains the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (modify as required)
+*END STEP
+```
+
+*Replace `SurfNodes` with the actual node numbers on the face you wish to couple.*
+
+---
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face surface (your original list)
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; rest of the element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (modify as required)
+*END STEP
+```
+
+---
+
+## Bottom line
+
+| Desired coupling | Surface type required | Where to place `*COUPLING` |
+|------------------|-----------------------|----------------------------|
+| **Kinematic** (`*KINEMATIC`) | **Node‑based** (`TYPE=NODE`) | Inside a `*STEP` block |
+| **MPC** (`*MPC`) | **Element‑face** (`TYPE=ELEMENT`) is allowed | Inside a `*STEP` block |
+
+Apply the appropriate fix, re‑run the job, and the “constraint equation is not compatible with the specified surface definition” error will disappear.
+
+=== 2026-04-18 06:29:43 ===
+Q: `*COUPLING` creates a **kinematic** constraint.  
+For a kinematic coupling Abaqus can only evaluate the *average translation of a node‑based surface* (`TYPE=NODE`).  
+In the posted file the surface is defined without a `TYPE` keyword, therefore it defaults to **TYPE=ELEMENT** (a list of element faces)
+
+```
+*SURFACE, NAME=S1          ← defaults to TYPE=ELEMENT
+2,S4
+4,S4
+30,S4
+32,S4
+...
+```
+
+When Abaqus tries to form the constraint it cannot compute the average motion of element faces, so it aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second problem is that the `*COUPLING` line is placed **outside any `*STEP` block**.  
+`*COUPLING` is a **step‑level** command and must be inside a step definition.
+
+---
+
+## How to fix it
+
+You have two options, depending on the physics you need.
+
+### 1. Keep a **kinematic** coupling – use a **node‑based** surface
+
+1. **Create a node set that contains all nodes on the face you want to couple**  
+   (list them manually or generate with `*NSET,GENERATE`).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   ; all nodes belonging to the face
+   ```
+
+2. **Define the surface from that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside a step and use the *KINEMATIC* option**.
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; e.g. couple X‑ and Z‑translations
+   *END STEP
+   ```
+
+Result: Abaqus now ties the *average translation of the nodes in `SurfNodes`* to node 262 and the job runs without error.
+
+---
+
+### 2. Keep the **element‑face** surface – use an **MPC** coupling
+
+If you must keep the surface defined by element faces, change the coupling type to **MPC** (multi‑point constraint). MPC constraints can be applied to element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; keep your original element‑face list
+2, S4
+4, S4
+30, S4
+32, S4
+...                        ; other element‑face entries
+```
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; e.g. couple X‑ and Z‑translations
+*END STEP
+```
+
+Result: The constraint is now an **MPC**, which Abaqus can evaluate on an element‑face surface, so the input file is accepted.
+
+---
+
+## Quick‑copy snippets
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set containing the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+*(Replace `SurfNodes` with the actual node numbers on the face.)*
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; your original element‑face list
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; rest of the element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+---
+
+**Bottom line**
+
+- **Kinematic coupling** (`*KINEMATIC`) → surface must be **node‑based** (`TYPE=NODE`) and `*COUPLING` must be inside a `*STEP`.  
+- **If you need to keep an element‑face surface**, switch the coupling to **MPC**, which works with `TYPE=ELEMENT`.
+
+Apply the appropriate fix and the “constraint equation is not compatible with the specified surface definition” error will disappear.
+A: **What is happening?**  
+
+`*COUPLING` creates a **kinematic** constraint only when the surface is **node‑based** (`TYPE=NODE`).  
+In your input the surface is defined without a `TYPE` keyword, so Abaqus assumes the default **`TYPE=ELEMENT`** (a list of element faces).  
+When the solver tries to evaluate the average translation of that surface it cannot, and it aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any `*STEP` block**.  
+`*COUPLING` is a **step‑level** command – it must be inside a step definition.
+
+---
+
+## Two ways to solve the problem  
+
+### 1️⃣ Keep a **kinematic** coupling – use a **node‑based** surface  
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can list them manually, generate them with `*NSET,GENERATE`, or extract them from the mesh).  
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   ; all nodes belonging to the face
+   ```
+
+2. **Define the surface from that node set** (`TYPE=NODE`).  
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Put the coupling inside a step and request a kinematic constraint**.  
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; couple X‑ and Z‑translations (change as required)
+   *END STEP
+   ```
+
+**Result** – Abaqus now ties the *average translation of the nodes in `SurfNodes`* to node 262, and the job runs without the “constraint equation … not compatible” error.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling  
+
+If you must keep the surface defined by element faces (your original list), change the coupling type from **kinematic** to **MPC** (multi‑point constraint). MPC constraints can be evaluated on element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; your original element‑face list (TYPE=ELEMENT is implicit)
+2, S4
+4, S4
+30, S4
+32, S4
+...                        ; other element‑face entries
+```
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; couple X‑ and Z‑translations (modify as needed)
+*END STEP
+```
+
+**Result** – The constraint is now an **MPC**, which Abaqus can evaluate on an element‑face surface, so the input file is accepted.
+
+---
+
+## Quick‑copy ready snippets  
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set containing the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (change as required)
+*END STEP
+```
+
+*(Replace `SurfNodes` with the actual node numbers on the face.)*
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face definition (your original list)
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; rest of the element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (change as required)
+*END STEP
+```
+
+---
+
+### Bottom line  
+
+| Desired coupling | Surface type required | Where to place `*COUPLING` |
+|------------------|----------------------|----------------------------|
+| **Kinematic** (`*KINEMATIC`) | **Node‑based** (`TYPE=NODE`) | Inside a `*STEP` block |
+| **MPC** (`*MPC`)               | **Element‑face** (`TYPE=ELEMENT`) | Inside a `*STEP` block |
+
+Choose the option that matches the physics you need, edit the input file accordingly, and the “constraint equation is not compatible with the specified surface definition” error will disappear.
+
+=== 2026-04-18 06:30:18 ===
+Q: `*COUPLING` creates a **kinematic** constraint.  
+For a kinematic coupling Abaqus can only evaluate the *average translation of a node‑based
+surface* (`TYPE=NODE`).  
+
+In the posted input the surface is defined without a `TYPE` keyword, therefore it
+defaults to **TYPE=ELEMENT** (a list of element faces)
+
+```abaqus
+*SURFACE, NAME=S1          ← defaults to TYPE=ELEMENT
+2, S4
+4, S4
+30, S4
+32, S4
+...
+```
+
+When the solver tries to form the constraint it cannot compute the average
+translation of that element‑face surface, so it aborts with
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any
+`*STEP` block**.  `*COUPLING` is a **step‑level** command and must be inside a step
+definition.
+
+---
+
+## How to fix it
+
+You have two possibilities, depending on the physics you really need.
+
+### 1. Keep a **kinematic** coupling – use a **node‑based** surface
+
+1. **Create a node set that contains all nodes on the face you want to couple**  
+   (list them manually, generate with `*NSET,GENERATE`, or extract from the mesh).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   ; all nodes belonging to the face
+   ```
+
+2. **Define the surface from that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside a step and request a kinematic constraint**.
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; e.g. couple X‑ and Z‑translations (modify as required)
+   *END STEP
+   ```
+
+Result – Abaqus now ties the *average translation of the nodes in `SurfNodes`* to node 262,
+and the job runs without the “constraint equation … not compatible” error.
+
+---
+
+### 2. Keep the **element‑face** surface – use an **MPC** coupling
+
+If you must keep the surface defined by element faces (your original list), change the
+coupling type from kinematic to **MPC** (multi‑point constraint).  MPC constraints can be
+evaluated on element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; your original element‑face list (TYPE=ELEMENT is implicit)
+2, S4
+4, S4
+30, S4
+32, S4
+...                        ; other element‑face entries
+```
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; couple X‑ and Z‑translations (modify as needed)
+*END STEP
+```
+
+Result – The constraint is now an **MPC**, which Abaqus can evaluate on an element‑face
+surface, so the input file is accepted.
+
+---
+
+## Quick‑copy ready snippets
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set containing the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (change as required)
+*END STEP
+```
+
+*(Replace `SurfNodes` with the actual node numbers on the face.)*
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face definition (your original list)
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; rest of the element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+---
+
+## Bottom line
+
+| Desired coupling | Surface type required | `*COUPLING` location |
+|------------------|----------------------|----------------------|
+| **Kinematic** (`*KINEMATIC`) | **Node‑based** (`TYPE=NODE`) | Inside a `*STEP` block |
+| **MPC** (`*MPC`)               | **Element‑face** (`TYPE=ELEMENT`) | Inside a `*STEP` block |
+
+Choose the option that matches the physics you need, edit the input file as shown,
+and the “constraint equation is not compatible with the specified surface definition”
+error will disappear.
+A: **What is going wrong?**  
+
+1. **Surface type** – `*COUPLING` with a **kinematic** constraint (`*KINEMATIC`) can only be applied to a **node‑based** surface (`TYPE=NODE`).  
+   In the posted input the surface is defined without a `TYPE` keyword, so Abaqus assumes `TYPE=ELEMENT` (a list of element faces). When the solver tries to compute the *average translation* of that element‑face surface it fails and aborts with  
+
+   ```
+   The constraint equation is not compatible with the specified surface definition
+   ```
+
+2. **Location of the command** – `*COUPLING` is a **step‑level** keyword. It must appear **inside a `*STEP` block**. In the current file it is placed outside any step, which is also illegal.
+
+---
+
+## Two ways to fix the model
+
+| Desired physics | Surface definition | Coupling type | Where to put `*COUPLING` |
+|-----------------|--------------------|---------------|--------------------------|
+| **Kinematic coupling** (average translation of a surface) | **Node‑based** (`TYPE=NODE`) | `*KINEMATIC` | Inside a `*STEP` |
+| **MPC coupling** (multi‑point constraint) | **Element‑face** (`TYPE=ELEMENT`, the way you already have it) | `*MPC` | Inside a `*STEP` |
+
+Choose the option that matches what you really need.
+
+---
+
+### 1️⃣ Keep a **kinematic** coupling – convert the surface to a node set
+
+1. **Create a node set that contains every node on the face you want to couple**.  
+   You can list them manually, generate them with `*NSET,GENERATE`, or extract them from the mesh with a pre‑processor.
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   ; all nodes belonging to the face
+   ```
+
+2. **Define the surface from that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside a step and request a kinematic constraint**.
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; couple X‑ and Z‑translations (change as required)
+   *END STEP
+   ```
+
+**Result** – Abaqus now ties the *average translation of the nodes in `SurfNodes`* to node 262, and the job runs without the “constraint equation … not compatible” error.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling
+
+If you must keep the surface defined by element faces (your original list), change the coupling type from kinematic to an MPC. MPC constraints can be evaluated on element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; element‑face definition (TYPE=ELEMENT is implicit)
+2, S4
+4, S4
+30, S4
+32, S4
+...                        ; other element‑face entries
+```
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; couple X‑ and Z‑translations (modify as needed)
+*END STEP
+```
+
+**Result** – The constraint is now an **MPC**, which Abaqus can evaluate on an element‑face surface, so the input file is accepted.
+
+---
+
+## Quick‑copy ready snippets
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set containing the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (change as required)
+*END STEP
+```
+
+*(Replace `SurfNodes` with the actual node numbers on the face.)*
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face definition (your original list)
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; rest of the element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+---
+
+## Bottom line
+
+| Desired coupling | Surface type required | `*COUPLING` location |
+|------------------|-----------------------|----------------------|
+| **Kinematic** (`*KINEMATIC`) | **Node‑based** (`TYPE=NODE`) | Inside a `*STEP` block |
+| **MPC** (`*MPC`)               | **Element‑face** (`TYPE=ELEMENT`) | Inside a `*STEP` block |
+
+Edit the input file according to the table that matches the physics you need, and the “constraint equation is not compatible with the specified surface definition” error will disappear.
+
+=== 2026-04-18 06:30:55 ===
+Q: **What is happening?**  
+
+`*COUPLING` together with the option `*KINEMATIC` creates a **kinematic constraint** that can only be applied to a **node‑based surface** (`TYPE=NODE`).  
+In the posted input the surface is defined without a `TYPE` keyword, therefore Abaqus assumes the default  
+
+```
+*SURFACE, NAME=S1          ← defaults to TYPE=ELEMENT
+2, S4
+4, S4
+30, S4
+32, S4
+...
+```
+
+When the solver tries to evaluate the *average translation* of that element‑face surface it cannot, and it aborts with
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any `*STEP` block**.  
+`*COUPLING` is a **step‑level** keyword and must appear inside a step definition.
+
+---
+
+## How to fix it
+
+You have two alternatives, depending on the physics you really need.
+
+| Desired physics | Surface definition | Coupling type | Where to put `*COUPLING` |
+|-----------------|--------------------|---------------|--------------------------|
+| **Kinematic coupling** (average translation of a surface) | **Node‑based** (`TYPE=NODE`) | `*KINEMATIC` | Inside a `*STEP` |
+| **MPC coupling** (multi‑point constraint) | **Element‑face** (`TYPE=ELEMENT`, the way you already have it) | `*MPC` | Inside a `*STEP` |
+
+Choose the option that matches what you intend to model.
+
+---
+
+### 1️⃣ Keep a **kinematic** coupling – convert the surface to a node set
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (list them manually, generate with `*NSET,GENERATE`, or extract from the mesh).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   ; all nodes belonging to the face
+   ```
+
+2. **Define the surface from that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside a step and request a kinematic constraint**.
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; e.g. couple X‑ and Z‑translations (modify as required)
+   *END STEP
+   ```
+
+**Result** – Abaqus now ties the *average translation of the nodes in `SurfNodes`* to node 262, and the job runs without the “constraint equation … not compatible” error.
+
+---
+
+### 2️⃣ Keep the **element‑face** surface – use an **MPC** coupling
+
+If you must keep the surface defined by element faces (your original list), change the coupling type from kinematic to an **MPC** (multi‑point constraint).  MPC constraints can be evaluated on element‑face surfaces.
+
+```abaqus
+*SURFACE, NAME=S1          ; element‑face definition (TYPE=ELEMENT is implicit)
+2, S4
+4, S4
+30, S4
+32, S4
+...                        ; other element‑face entries
+```
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                       ; couple X‑ and Z‑translations (modify as needed)
+*END STEP
+```
+
+**Result** – The constraint is now an **MPC**, which Abaqus can evaluate on an element‑face surface, so the input file is accepted.
+
+---
+
+## Ready‑to‑copy snippets
+
+### (a) Kinematic coupling – node‑based surface  
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set containing the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (change as required)
+*END STEP
+```
+
+*(Replace `SurfNodes` with the actual node numbers on the face.)*
+
+### (b) MPC coupling – keep element‑face surface  
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face definition (your original list)
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; rest of the element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+---
+
+## Bottom line
+
+| Desired coupling | Surface type required | `*COUPLING` location |
+|------------------|-----------------------|----------------------|
+| **Kinematic** (`*KINEMATIC`) | **Node‑based** (`TYPE=NODE`) | Inside a `*STEP` block |
+| **MPC** (`*MPC`)               | **Element‑face** (`TYPE=ELEMENT`) | Inside a `*STEP` block |
+
+Edit the input file according to the table that matches the physics you need, and the “constraint equation is not compatible with the specified surface definition” error will disappear.
+A: **Answer – why the job aborts and how to correct it**
+
+`*COUPLING` together with `*KINEMATIC` creates a **kinematic constraint** that can only be applied to a **node‑based surface** (`TYPE=NODE`).  
+In the posted input the surface is defined as
+
+```abaqus
+*SURFACE, NAME=S1          ; no TYPE keyword → defaults to TYPE=ELEMENT
+2,  S4
+4,  S4
+30, S4
+32, S4
+...
+```
+
+so Abaqus treats *S1* as an **element‑face surface**.  
+When the solver later tries to evaluate the *average translation* of that surface it cannot, and it stops with
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any `*STEP` block**.  
+`*COUPLING` is a **step‑level** keyword; it must appear inside a step definition.
+
+---
+
+## What you have to decide
+
+| Physics you need | Surface type that must be used | Coupling keyword | Where the keyword belongs |
+|------------------|--------------------------------|------------------|---------------------------|
+| **Kinematic coupling** (average translation of a surface) | **Node‑based** (`TYPE=NODE`) | `*KINEMATIC` (or `*COUPLING … *KINEMATIC`) | Inside a `*STEP` |
+| **MPC coupling** (multi‑point constraint) | **Element‑face** (`TYPE=ELEMENT`, the way you wrote it) | `*MPC` (or `*COUPLING … *MPC`) | Inside a `*STEP` |
+
+Pick the row that matches the physics you really want to model and edit the input file accordingly.
+
+---
+
+## 1️⃣ Option A – Keep a **kinematic** coupling (most common when you want to tie the *average translation* of a face to a reference node)
+
+### Step‑by‑step
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can list them manually, generate them with `*NSET,GENERATE`, or extract them from the mesh).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   ; all nodes belonging to the face
+   ```
+
+2. **Define the surface from that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside a step and request a kinematic constraint**.
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; couple X‑ and Z‑translations (change as required)
+   *END STEP
+   ```
+
+   *Explanation* – `*KINEMATIC` tells Abaqus to enforce that the **average translation of the nodes in `SurfNodes`** follows the motion of node 262. Because the surface is now node‑based, the constraint is compatible and the job runs.
+
+### Ready‑to‑copy snippet (Option A)
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set containing the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+*(Replace `SurfNodes` with the actual node numbers on the face.)*
+
+
+---
+
+## 2️⃣ Option B – Keep the **element‑face** surface but use an **MPC** coupling
+
+If you must keep the surface defined by element faces (your original list), change the coupling type from kinematic to an **MPC** (multi‑point constraint).  MPC constraints can be evaluated on element‑face surfaces.
+
+### Step‑by‑step
+
+1. **Leave the surface definition exactly as you have it** (it is an element‑face surface, `TYPE=ELEMENT` is implicit).
+
+   ```abaqus
+   *SURFACE, NAME=S1
+   2,  S4
+   4,  S4
+   30, S4
+   32, S4
+   ...                ; rest of the element‑face entries
+   ```
+
+2. **Inside a step, use `*MPC` instead of `*KINEMATIC`.**
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *MPC
+   1, 3                ; couple X‑ and Z‑translations (change as required)
+   *END STEP
+   ```
+
+   *Explanation* – The MPC constraint ties the **displacements of the element‑face surface** to the reference node. Because MPCs are allowed on element‑face surfaces, the input is now compatible.
+
+### Ready‑to‑copy snippet (Option B)
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face definition (your original list)
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; other element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+---
+
+## Bottom line – checklist before re‑running
+
+| ✔ | Item |
+|---|------|
+| 1 | **Surface type matches coupling type** – `TYPE=NODE` for `*KINEMATIC`, `TYPE=ELEMENT` (or default) for `*MPC`. |
+| 2 | **`*COUPLING` is placed inside a `*STEP` block** (any step where the constraint should be active). |
+| 3 | **Reference node (262) exists and is not deleted** in the step where the coupling is defined. |
+| 4 | **Degrees of freedom listed after `*KINEMATIC` or `*MPC` correspond to the DOFs you really want to constrain** (e.g., `1,3` for X‑ and Z‑translation). |
+| 5 | **No other conflicting constraints** (e.g., a separate `*MPC` on the same nodes) that could over‑constrain the model. |
+
+Fixing the surface definition **and** moving the `*COUPLING` line into a step will eliminate the error:
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+and the analysis will proceed as intended.
+
+=== 2026-04-18 06:31:38 ===
+Q: **Why the job aborts**
+
+`*COUPLING` together with the option `*KINEMATIC` creates a **kinematic constraint**.  
+A kinematic constraint can be applied **only to a node‑based surface** (`TYPE=NODE`).  
+
+In the input file the surface is defined as  
+
+```abaqus
+*SURFACE, NAME=S1          ; no TYPE keyword → defaults to TYPE=ELEMENT
+2,  S4
+4,  S4
+30, S4
+32, S4
+...
+```  
+
+so Abaqus treats *S1* as an **element‑face surface**.  
+When the solver later tries to evaluate the *average translation* of that surface it cannot, and it stops with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second problem is that the `*COUPLING` line is placed **outside any `*STEP` block**.  
+`*COUPLING` is a **step‑level** keyword and must appear inside a step definition.
+
+---
+
+## What you have to decide
+
+| Physics you need | Surface type that must be used | Coupling keyword | Where the keyword belongs |
+|------------------|--------------------------------|------------------|---------------------------|
+| **Kinematic coupling** (average translation of a surface) | **Node‑based** (`TYPE=NODE`) | `*KINEMATIC` (or `*COUPLING … *KINEMATIC`) | Inside a `*STEP` |
+| **MPC coupling** (multi‑point constraint) | **Element‑face** (`TYPE=ELEMENT`, the way you wrote it) | `*MPC` (or `*COUPLING … *MPC`) | Inside a `*STEP` |
+
+Pick the row that matches the physics you really want to model and edit the input file accordingly.
+
+---
+
+## 1️⃣ Option A – Keep a **kinematic** coupling (most common)
+
+### Steps
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (list them manually, generate with `*NSET,GENERATE`, or extract from the mesh).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   ; all nodes belonging to the face
+   ```
+
+2. **Define the surface from that node set** (`TYPE=NODE`).
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside a step and request a kinematic constraint**.
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; couple X‑ and Z‑translations (change as required)
+   *END STEP
+   ```
+
+**Result** – The average translation of the nodes in `SurfNodes` follows the motion of node 262, the surface is node‑based, and the job runs without the abort error.
+
+### Ready‑to‑copy snippet (Option A)
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set containing the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+*(Replace `SurfNodes` with the actual node numbers on the face.)*
+
+
+---
+
+## 2️⃣ Option B – Keep the **element‑face** surface but use an **MPC** coupling
+
+If you must keep the surface defined by element faces (your original list), change the coupling type from kinematic to an **MPC**.  MPC constraints are allowed on element‑face surfaces.
+
+### Steps
+
+1. **Leave the surface definition exactly as it is** (it is an element‑face surface; `TYPE=ELEMENT` is implicit).
+
+   ```abaqus
+   *SURFACE, NAME=S1
+   2,  S4
+   4,  S4
+   30, S4
+   32, S4
+   ...                ; rest of the element‑face entries
+   ```
+
+2. **Inside a step, use `*MPC` instead of `*KINEMATIC`.**
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *MPC
+   1, 3                ; couple X‑ and Z‑translations (change as required)
+   *END STEP
+   ```
+
+**Result** – The MPC constraint ties the displacements of the element‑face surface to node 262, which is compatible with an element‑face surface, so the job proceeds.
+
+### Ready‑to‑copy snippet (Option B)
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face definition (your original list)
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; other element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+---
+
+## Checklist before re‑running
+
+| ✔ | Item |
+|---|------|
+| 1 | **Surface type matches coupling type** – `TYPE=NODE` for `*KINEMATIC`, `TYPE=ELEMENT` (or default) for `*MPC`. |
+| 2 | **`*COUPLING` is placed inside a `*STEP` block** (the step where the constraint should be active). |
+| 3 | **Reference node (262) exists** in that step. |
+| 4 | **Degrees of freedom listed after `*KINEMATIC` or `*MPC` are the ones you really want to constrain** (e.g., `1,3` for X‑ and Z‑translation). |
+| 5 | **No other conflicting constraints** that would over‑constrain the model. |
+
+Fixing the surface definition **and** moving the `*COUPLING` line into a step eliminates the error
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+and the analysis will proceed as intended.
+A: **Why the job aborts**
+
+`*COUPLING … *KINEMATIC` creates a **kinematic constraint**.  
+A kinematic constraint can be applied **only to a node‑based surface** (`TYPE=NODE`).  
+
+In your input the surface is defined as  
+
+```abaqus
+*SURFACE, NAME=S1          ; no TYPE keyword → defaults to TYPE=ELEMENT
+2,  S4
+4,  S4
+30, S4
+32, S4
+...
+```  
+
+so Abaqus treats **S1** as an **element‑face surface**.  
+When the solver later tries to evaluate the *average translation* of that surface it cannot, and it stops with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any `*STEP` block**.  
+`*COUPLING` is a **step‑level** keyword and must appear inside a step definition.
+
+---
+
+## What you have to decide
+
+| Physics you need | Surface type that must be used | Coupling keyword | Where the keyword belongs |
+|------------------|--------------------------------|------------------|---------------------------|
+| **Kinematic coupling** (average translation of a surface) | **Node‑based** (`TYPE=NODE`) | `*KINEMATIC` (or `*COUPLING … *KINEMATIC`) | Inside a `*STEP` |
+| **MPC coupling** (multi‑point constraint) | **Element‑face** (`TYPE=ELEMENT`, the way you wrote it) | `*MPC` (or `*COUPLING … *MPC`) | Inside a `*STEP` |
+
+Pick the row that matches the physics you really want to model and edit the input file accordingly.
+
+---
+
+## 1️⃣ Option A – Keep a **kinematic** coupling (most common)
+
+### 1. Create a node set that contains every node on the face you want to couple  
+
+You can list the nodes manually, generate them with `*NSET,GENERATE`, or extract them from the mesh. Example:
+
+```abaqus
+*NSET, NSET=SurfNodes
+101,102,103,104,105,106,107,108,109,110,
+111,112,113,114,115,116,117,118,119,120,
+...   ; all nodes belonging to the face
+```
+
+### 2. Define the surface from that node set (`TYPE=NODE`)
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes
+```
+
+### 3. Place the coupling inside a step and request a kinematic constraint
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                ; couple X‑ and Z‑translations (change as required)
+*END STEP
+```
+
+**Result** – The average translation of the nodes in `SurfNodes` follows the motion of node 262, the surface is node‑based, and the job runs without the abort error.
+
+#### Ready‑to‑copy snippet (Option A)
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set containing the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+*(Replace `SurfNodes` with the actual node numbers on the face.)*
+
+
+---
+
+## 2️⃣ Option B – Keep the **element‑face** surface but use an **MPC** coupling
+
+If you must keep the surface defined by element faces (your original list), change the coupling type from kinematic to an **MPC**.  MPC constraints are allowed on element‑face surfaces.
+
+### 1. Leave the surface definition exactly as it is (it is an element‑face surface; `TYPE=ELEMENT` is implicit)
+
+```abaqus
+*SURFACE, NAME=S1
+2,  S4
+4,  S4
+30, S4
+32, S4
+...                ; rest of the element‑face entries
+```
+
+### 2. Inside a step, use `*MPC` instead of `*KINEMATIC`
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                ; couple X‑ and Z‑translations (change as required)
+*END STEP
+```
+
+**Result** – The MPC constraint ties the displacements of the element‑face surface to node 262, which is compatible with an element‑face surface, so the job proceeds.
+
+#### Ready‑to‑copy snippet (Option B)
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face definition (your original list)
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; other element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+---
+
+## Checklist before re‑running
+
+| ✔ | Item |
+|---|------|
+| 1 | **Surface type matches coupling type** – `TYPE=NODE` for `*KINEMATIC`, `TYPE=ELEMENT` (or default) for `*MPC`. |
+| 2 | **`*COUPLING` is placed inside a `*STEP` block** (the step where the constraint should be active). |
+| 3 | **Reference node (262) exists** in that step. |
+| 4 | **Degrees of freedom listed after `*KINEMATIC` or `*MPC` are the ones you really want to constrain** (e.g., `1,3` for X‑ and Z‑translation). |
+| 5 | **No other conflicting constraints** that would over‑constrain the model. |
+
+Fixing the surface definition **and** moving the `*COUPLING` line into a step eliminates the error
+
+```
+The constraint equation is not compatible with the specified surface definition
+```
+
+and the analysis will proceed as intended.
+
+=== 2026-04-18 06:32:19 ===
+Q: **Why the job aborts**
+
+`*COUPLING … *KINEMATIC` creates a **kinematic constraint**.  
+A kinematic constraint can be applied **only to a node‑based surface** (`TYPE=NODE`).  
+
+In the input file the surface is defined as  
+
+```abaqus
+*SURFACE, NAME=S1          ; no TYPE → defaults to TYPE=ELEMENT
+2,  S4
+4,  S4
+30, S4
+32, S4
+...
+```  
+
+so **S1** is an **element‑face surface**. When the solver later tries to evaluate the *average translation* of that surface it finds the definition incompatible and aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```  
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any `*STEP` block**. `*COUPLING` is a **step‑level** keyword and must be inside a step.
+
+---
+
+## What you have to decide
+
+| Physics you need | Surface type required | Coupling keyword | Where it belongs |
+|------------------|-----------------------|------------------|------------------|
+| **Kinematic coupling** (average translation of a face) | **Node‑based** (`TYPE=NODE`) | `*KINEMATIC` (or `*COUPLING … *KINEMATIC`) | Inside a `*STEP` |
+| **MPC coupling** (multi‑point constraint) | **Element‑face** (`TYPE=ELEMENT`, the way you wrote it) | `*MPC` (or `*COUPLING … *MPC`) | Inside a `*STEP` |
+
+Pick the row that matches the physics you really want to model and edit the input file accordingly.
+
+---
+
+## 1️⃣ Option A – Keep a **kinematic** coupling (most common)
+
+### 1. Create a node set that contains every node on the face you want to couple  
+
+You can list the nodes manually, generate them with `*NSET,GENERATE`, or extract them from the mesh. Example:
+
+```abaqus
+*NSET, NSET=SurfNodes
+101,102,103,104,105,106,107,108,109,110,
+111,112,113,114,115,116,117,118,119,120,
+...   ; all nodes belonging to the face
+```
+
+### 2. Define the surface from that node set (`TYPE=NODE`)
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes
+```
+
+### 3. Place the coupling inside a step and request a kinematic constraint
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                ; couple X‑ and Z‑translations (change as required)
+*END STEP
+```
+
+**Result** – The average translation of the nodes in `SurfNodes` follows the motion of node 262, the surface is node‑based, and the job runs without the abort error.
+
+#### Ready‑to‑copy snippet (Option A)
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set containing the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+*(Replace `SurfNodes` with the actual node numbers on the face.)*
+
+
+---
+
+## 2️⃣ Option B – Keep the **element‑face** surface but use an **MPC** coupling
+
+If you must keep the surface defined by element faces (your original list), change the coupling type from kinematic to an **MPC**.  MPC constraints are allowed on element‑face surfaces.
+
+### 1. Leave the surface definition exactly as it is (it is an element‑face surface; `TYPE=ELEMENT` is implicit)
+
+```abaqus
+*SURFACE, NAME=S1
+2,  S4
+4,  S4
+30, S4
+32, S4
+...                ; rest of the element‑face entries
+```
+
+### 2. Inside a step, use `*MPC` instead of `*KINEMATIC`
+
+```abaqus
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                ; couple X‑ and Z‑translations (change as required)
+*END STEP
+```
+
+**Result** – The MPC constraint ties the displacements of the element‑face surface to node 262, which is compatible with an element‑face surface, so the analysis proceeds.
+
+#### Ready‑to‑copy snippet (Option B)
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face definition (your original list)
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; other element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+---
+
+## Checklist before re‑running
+
+| ✔ | Item |
+|---|------|
+| 1 | **Surface type matches coupling type** – `TYPE=NODE` for `*KINEMATIC`, `TYPE=ELEMENT` (or default) for `*MPC`. |
+| 2 | **`*COUPLING` is placed inside a `*STEP` block** (the step where the constraint should be active). |
+| 3 | **Reference node (262) exists** in that step. |
+| 4 | **Degrees of freedom listed after `*KINEMATIC` or `*MPC` are the ones you really want to constrain** (e.g., `1,3` for X‑ and Z‑translation). |
+| 5 | **No other conflicting constraints** that would over‑constrain the model. |
+
+Fixing the surface definition **and** moving the `*COUPLING` line into a step eliminates the error
+
+```
+The constraint equation is not compatible with the specified surface definition
+```  
+
+and the analysis will proceed as intended.
+A: **Why the job aborts**
+
+`*COUPLING … *KINEMATIC` creates a **kinematic constraint**.  
+A kinematic constraint can be applied **only to a node‑based surface** (`TYPE=NODE`).  
+
+In your input the surface is defined as  
+
+```abaqus
+*SURFACE, NAME=S1          ; no TYPE → defaults to TYPE=ELEMENT
+2,  S4
+4,  S4
+30, S4
+32, S4
+...
+```  
+
+so **S1 is an element‑face surface**. When the solver tries to evaluate the *average translation* of that surface it finds the definition incompatible and aborts with  
+
+```
+The constraint equation is not compatible with the specified surface definition
+```  
+
+A second, independent problem is that the `*COUPLING` line is placed **outside any `*STEP` block**. `*COUPLING` is a **step‑level** keyword and must be inside a step.
+
+---
+
+## What you have to decide
+
+| Physics you need | Surface type required | Coupling keyword | Where it belongs |
+|------------------|-----------------------|------------------|------------------|
+| **Kinematic coupling** (average translation of a face) | **Node‑based** (`TYPE=NODE`) | `*KINEMATIC` (or `*COUPLING … *KINEMATIC`) | Inside a `*STEP` |
+| **MPC coupling** (multi‑point constraint) | **Element‑face** (`TYPE=ELEMENT`, the way you wrote it) | `*MPC` (or `*COUPLING … *MPC`) | Inside a `*STEP` |
+
+Pick the row that matches the physics you really want to model and edit the input file accordingly.
+
+---
+
+## ✅ Option A – Keep a **kinematic** coupling (most common)
+
+1. **Create a node set that contains every node on the face you want to couple**  
+   (you can list them manually, generate them with `*NSET,GENERATE`, or extract them from the mesh).
+
+   ```abaqus
+   *NSET, NSET=SurfNodes
+   101,102,103,104,105,106,107,108,109,110,
+   111,112,113,114,115,116,117,118,119,120,
+   ...   ; all nodes belonging to the face
+   ```
+
+2. **Define the surface from that node set (`TYPE=NODE`).**
+
+   ```abaqus
+   *SURFACE, NAME=S1, TYPE=NODE
+   SurfNodes
+   ```
+
+3. **Place the coupling inside the step where it should be active** and request a kinematic constraint.
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *KINEMATIC
+   1, 3                ; couple X‑ and Z‑translations (change as required)
+   *END STEP
+   ```
+
+### Ready‑to‑copy snippet (Option A)
+
+```abaqus
+*SURFACE, NAME=S1, TYPE=NODE
+SurfNodes                ; node set containing the face nodes
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*KINEMATIC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+*Replace `SurfNodes` with the actual node numbers on the face.*  
+Now the average translation of the nodes in `SurfNodes` follows the motion of node 262, the surface is node‑based, and the job runs without the abort error.
+
+---
+
+## ✅ Option B – Keep the **element‑face** surface but use an **MPC** coupling
+
+If you must keep the surface defined by element faces (your original list), change the coupling type from kinematic to an **MPC**.  MPC constraints are allowed on element‑face surfaces.
+
+1. **Leave the surface definition exactly as it is** (it is an element‑face surface; `TYPE=ELEMENT` is implicit).
+
+   ```abaqus
+   *SURFACE, NAME=S1
+   2,  S4
+   4,  S4
+   30, S4
+   32, S4
+   ...                ; rest of the element‑face entries
+   ```
+
+2. **Inside a step, use `*MPC` instead of `*KINEMATIC`.**
+
+   ```abaqus
+   *STEP, NLGEOM, NAME=Step-1
+   *COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+   *MPC
+   1, 3                ; couple X‑ and Z‑translations (change as required)
+   *END STEP
+   ```
+
+### Ready‑to‑copy snippet (Option B)
+
+```abaqus
+*SURFACE, NAME=S1        ; element‑face definition (your original list)
+2, S4
+4, S4
+30, S4
+32, S4
+...                      ; other element‑face entries
+
+*STEP, NLGEOM, NAME=Step-1
+*COUPLING, REF NODE=262, SURFACE=S1, CONSTRAINT=CN1
+*MPC
+1, 3                     ; DOFs to couple (modify as needed)
+*END STEP
+```
+
+Now the MPC constraint ties the displacements of the element‑face surface to node 262, which is compatible with an element‑face surface, so the analysis proceeds.
+
+---
+
+## 📋 Checklist before re‑running
+
+| ✔ | Item |
+|---|------|
+| 1 | **Surface type matches coupling type** – `TYPE=NODE` for `*KINEMATIC`, `TYPE=ELEMENT` (or default) for `*MPC`. |
+| 2 | **`*COUPLING` is placed inside a `*STEP` block** (the step where the constraint should be active). |
+| 3 | **Reference node (262) exists** in that step. |
+| 4 | **Degrees of freedom listed after `*KINEMATIC` or `*MPC` are the ones you really want to constrain** (e.g., `1,3` for X‑ and Z‑translation). |
+| 5 | **No other conflicting constraints** that would over‑constrain the model. |
+
+Fixing the surface definition **and** moving the `*COUPLING` line into a step eliminates the error
+
+```
+The constraint equation is not compatible with the specified surface definition
+```  
+
+and the analysis will run as intended.
+

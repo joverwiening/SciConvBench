@@ -1,0 +1,162 @@
+=== 2026-02-15 18:29:17 ===
+Q: What boundary condition should be applied on the six faces of the cube for velocity and pressure (e.g., no-slip walls everywhere, or open top with atmospheric pressure)?
+A: Use an **open atmosphere patch on the top face (z = 1)** and **walls on the other five faces**.
+
+- **Top (z=1), atmosphere/open patch:**
+  - `p_rgh`: `totalPressure` with `p0 uniform 0`
+  - `U`: `pressureInletOutletVelocity`
+  - `alpha.water`: `inletOutlet` (inletValue `uniform 0`, value `uniform 0`)
+
+- **Remaining five faces (x=0, x=1, y=0, y=1, z=0), walls:**
+  - `U`: `fixedValue uniform (0 0 0)` (no-slip)
+  - `p_rgh`: `fixedFluxPressure`
+  - `alpha.water`: `zeroGradient`
+
+=== 2026-02-15 18:29:21 ===
+Q: Which two-phase solver and turbulence/laminar model should be used for this case (e.g., interFoam with laminar)?
+A: Use the **VOF two-phase solver `interFoam`** and run it as **transient laminar** (i.e., set `simulationType laminar` in `constant/turbulenceProperties`, with no turbulence model).
+
+=== 2026-02-15 18:29:24 ===
+Q: What fluid properties should be used for the two phases (rho and nu for water and air, plus surface tension sigma)?
+A: Use these two-phase properties:
+
+- **Water:** `rho = 1000 kg/m^3`, `nu = 1.0e-6 m^2/s`
+- **Air:** `rho = 1 kg/m^3`, `nu = 1.48e-5 m^2/s`
+- **Surface tension:** `sigma = 0.07 N/m`
+
+=== 2026-02-15 18:29:27 ===
+Q: What numerical schemes should be used in system/fvSchemes for time discretization, gradients, divergence (including div(phi,alpha) and div(phirb,alpha)), laplacians, and interpolation?
+A: Make a reasonable assumption based on best practices.
+
+Use standard stable `interFoam` schemes like below in `system/fvSchemes`:
+
+```foam
+ddtSchemes
+{
+    default         Euler;
+}
+
+gradSchemes
+{
+    default         Gauss linear;
+    grad(p_rgh)     Gauss linear;
+}
+
+divSchemes
+{
+    default                 none;
+
+    div(phi,U)              Gauss linearUpwind grad(U);
+    div(phi,alpha)          Gauss vanLeer;
+    div(phirb,alpha)        Gauss interfaceCompression;
+
+    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         corrected;
+}
+```
+
+=== 2026-02-15 18:29:32 ===
+Q: What linear solvers and tolerances should be used in system/fvSolution for p_rgh, U, and alpha.water (including PIMPLE/PISO settings)?
+A: Make a reasonable assumption based on best practices.
+
+Use standard, stable `interFoam` settings like:
+
+```foam
+solvers
+{
+    alpha.water
+    {
+        nAlphaCorr      1;
+        nAlphaSubCycles 2;
+        cAlpha          1;
+        MULESCorr       yes;
+        nLimiterIter    3;
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-8;
+        relTol          0;
+    }
+
+    p_rgh
+    {
+        solver          PCG;
+        preconditioner  DIC;
+        tolerance       1e-7;
+        relTol          0.01;
+    }
+
+    p_rghFinal
+    {
+        $p_rgh;
+        relTol          0;
+    }
+
+    U
+    {
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-8;
+        relTol          0.01;
+    }
+
+    UFinal
+    {
+        $U;
+        relTol          0;
+    }
+}
+
+PIMPLE
+{
+    nOuterCorrectors         1;
+    nCorrectors             2;
+    nNonOrthogonalCorrectors 0;
+}
+
+relaxationFactors
+{
+    fields
+    {
+        p_rgh   0.3;
+    }
+    equations
+    {
+        U       0.7;
+    }
+}
+```
+
+=== 2026-02-15 18:29:38 ===
+Q: What OpenFOAM version should the case be compatible with (e.g., v7, v9, v10, v11, or ESI-OpenFOAM)?
+A: Make a reasonable assumption based on best practices. Use **OpenFOAM Foundation v10** compatibility.
+
+=== 2026-02-15 18:29:41 ===
+Q: Do you want the obstacle to be modeled as an internal solid region using snappyHexMesh (with a triangulated surface), or as a cellZone set to solid via topoSet/createBaffles (i.e., a blocked-out region within the hexahedral mesh)?
+A: Model the obstacle as a **blocked-out region within the hexahedral mesh** (i.e., a **cellZone/porosity-free solid region created via `topoSet`/`setFields`-style selection**, not `snappyHexMesh` with a triangulated surface).
+
+=== 2026-02-15 18:29:45 ===
+Q: When you say “blocked-out solid region,” should the obstacle be implemented as an internal impermeable wall using createBaffles (i.e., convert the obstacle boundary faces into wall patches), or as a porous/solid cellZone with velocity forced to zero inside the cells?
+A: Implement it as a **blocked-out solid cell region** (a selected set of cells) with **velocity forced to zero inside those cells** (i.e., a solid/impermeable cellZone approach), **not** as internal walls via `createBaffles`.
+
+=== 2026-02-15 18:29:48 ===
+Q: What method should be used to force velocity to zero in the obstacle cell region in OpenFOAM v10 (e.g., fvOptions “explicitPorositySource” Darcy-Forchheimer with very large resistance, or a “fixedValue” constraint via coded fvOption)?
+A: Use an **`fvOptions` momentum sink** on the obstacle **cellZone**, i.e. **`explicitPorositySource` (Darcy–Forchheimer)** with **very large resistance** so the velocity in that region is effectively driven to **U ≈ 0**. If exact zero is needed, **make a reasonable assumption based on best practices**.
+
+=== 2026-02-15 18:29:52 ===
+Q: What initial value should be set for alpha.water inside the obstacle cellZone at t=0 (e.g., force it to 0 for “solid/air”, or leave it as defined by the water column if it overlaps)?
+A: Set **`alpha.water = 0` inside the obstacle cellZone at t = 0** (treat the obstacle as solid/non-fluid, i.e., no water volume fraction in those cells), even if it geometrically overlaps the initial water column.
+

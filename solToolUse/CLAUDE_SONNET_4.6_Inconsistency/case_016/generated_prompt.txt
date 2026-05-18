@@ -1,0 +1,35 @@
+Use FEniCS legacy (dolfin) for all implementation.
+Solve the incompressible finite-strain neo-Hookean problem using a mixed displacement-pressure (u, p) formulation with Newton's method.
+The domain is a rectangle Omega = (0, 1.0) x (0, 0.20) metres with a circular hole of radius a = 0.04 m centred at (0.50, 0.10).
+Generate the mesh using mshr: create the rectangle domain minus the circular hole, with mesh resolution 64.
+Use plane strain assumption throughout.
+Material parameters: Young's modulus E = 5 MPa, Poisson's ratio nu = 0.5 (incompressible).
+Compute the shear modulus as mu = E / (2 * (1 + nu)) = 5.0 / 3.0 MPa divided accordingly: mu = E / (2*(1+nu)).
+The neo-Hookean strain energy density is W = (mu/2) * (tr(C) - 3) where C = F^T F, F = I + grad(u), subject to the incompressibility constraint J = det(F) = 1 enforced via the Lagrange multiplier pressure p.
+The total potential energy functional for the mixed formulation is: Pi = integral_Omega [ (mu/2)*(tr(F^T F) - 3) - p*(det(F) - 1) ] dx minus the external work term.
+Use Taylor-Hood elements: continuous piecewise quadratic (P2) for displacement u and continuous piecewise linear (P1) for pressure p, defined on a MixedFunctionSpace.
+Define the weak form by taking the Gateaux derivative (first variation) of Pi with respect to (u, p) in directions (v, q).
+Apply boundary conditions as follows.
+Left edge (x = 0): Dirichlet condition u_x = 0, u_y = 0 (fully fixed).
+Right edge, top edge, and bottom edge: traction-free (natural boundary condition, no explicit term needed).
+Hole boundary: apply a dead pressure load using the reference (undeformed) outward normal N of the hole boundary.
+Compute the reference outward normal on the hole boundary as N = -(x - center) / |x - center| where center = (0.50, 0.10), pointing inward into the solid (i.e., outward from the hole means pointing away from center, so the traction on the solid boundary is -P_hole * N_outward where N_outward points away from the hole center).
+The dead pressure traction contribution to the weak form is: - integral_{hole boundary} P_hole * dot(N_ref, v) ds(hole_tag) where N_ref is the outward unit normal from the solid domain on the hole boundary (pointing toward the hole center, i.e., inward toward hole = outward from solid is toward hole center).
+Mark the hole boundary using a SubDomain that identifies facets where |x - (0.5, 0.1)| < a + tolerance, with tolerance = 1e-3, and assign it a facet tag (e.g., tag = 1) using MeshFunction and ds = Measure('ds', subdomain_data=facet_markers).
+Compute the reference outward normal on the hole boundary explicitly as a FEniCS Expression: N_ref = (center - x) / |center - x| (pointing from boundary toward hole center, which is the outward normal from the solid into the hole).
+The follower/dead pressure load magnitude is P_hole = 0.10 MPa = 0.10e6 Pa.
+Assemble the full residual F_form and Jacobian J_form = derivative(F_form, w, dw) where w = (u, p) is the solution Function and dw is the TestFunction direction.
+Solve using a manual Newton loop or dolfin's built-in Newton solver (NonlinearVariationalProblem / NonlinearVariationalSolver with newton_solver settings).
+Set Newton solver parameters: relative tolerance 1e-8, absolute tolerance 1e-10, maximum iterations 25, linear solver "mumps" or "lu".
+After convergence, extract the displacement field u_sol and pressure field p_sol from the mixed solution.
+Compute the deformation gradient F = Identity(2) + grad(u_sol).
+Compute the Cauchy stress tensor: sigma_cauchy = (1/det(F)) * (mu * F * F.T) - p_sol * Identity(2).
+Compute the von Mises stress as: vm = sqrt(0.5 * ((s11-s22)^2 + (s22-s33)^2 + (s33-s11)^2 + 6*s12^2)) where s = dev(sigma_cauchy) in plane strain (s33 = 0 contribution from out-of-plane, treat as 2D: von_mises = sqrt(sigma11^2 - sigma11*sigma22 + sigma22^2 + 3*sigma12^2) for plane stress equivalent, but use the correct plane strain formula).
+For plane strain von Mises, compute sigma_33 = nu*(sigma_11 + sigma_22) for the out-of-plane stress, then compute von Mises = sqrt(0.5*((s11-s22)^2 + (s22-s33)^2 + (s33-s11)^2 + 6*s12^2)) where sij are Cauchy stress components including sigma_33.
+Project the von Mises field onto a scalar DG0 or CG1 FunctionSpace for visualization.
+Save the deformed mesh plot with displacement magnification factor of 5 as q13_def.png using matplotlib: plot the mesh displaced by 5*u_sol, using dolfin's plot function or manual matplotlib triangulation.
+Save the von Mises stress plot as q13_vm.png using matplotlib with a colorbar.
+Save the displacement field u_sol to an XDMF file named q13_displacement.xdmf using XDMFFile with write_checkpoint or just file.write(u_sol, 0.0).
+All physical units are in SI: metres for length, Pascals for stress and pressure.
+Use dolfin.parameters["form_compiler"]["cpp_optimize"] = True and quadrature degree at least 4 for accuracy.
+Import all necessary modules from dolfin and mshr at the top of the script.

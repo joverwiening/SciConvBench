@@ -1,0 +1,3023 @@
+=== 2026-04-20 16:49:37 ===
+Q: **In short – use a *BOUNDARY (or *DISPLACEMENT) command, not an *EQUATION, for a simple prescribed displacement.**  
+
+`*EQUATION` is the keyword for a **multi‑point constraint (MPC)** – i.e. a relation that ties the DOFs of two or more nodes together.  
+If you only want to prescribe a displacement (or a set of displacements) on a node or a node set, the proper Abaqus syntax is the *BOUNDARY option (or the *DISPLACEMENT sub‑option inside a *STEP).
+
+---
+
+## 1. What the *EQUATION you wrote actually does  
+
+```
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```
+
+* The first line (`2`) tells Abaqus that the equation has **two terms**.  
+* The second line gives the two terms:  
+
+  - Node 105, DOF 3, coefficient +1.0  
+  - Node 129, DOF 3, coefficient ‑1.0  
+
+The resulting constraint is  
+
+\[
+1\;U_{3}(105) \;-\; 1\;U_{3}(129) \;=\;0
+\]
+
+i.e. **U₃(105) = U₃(129)**.  
+That is a *tie* (or “equal‑displacement”) condition between the two nodes, **not** a prescribed displacement.
+
+If you really need that tie, the syntax is correct (the two terms may be written on separate lines, but a single line works as well).  
+
+---
+
+## 2. How to prescribe a displacement
+
+### a) Using *BOUNDARY (the most common way)
+
+```abaqus
+*BOUNDARY, NSET=FIX
+1, 1, 3, 0.0          ; fix node 1 in DOFs 1‑3 (U1=U2=U3=0)
+...
+105, 3, 3, 0.005      ; prescribe U3 = 0.005 at node 105
+```
+
+* **NSET** – the set of nodes on which the condition is applied.  
+* **DOF‑start, DOF‑end** – the degree(s) of freedom (1 = X‑translation, 2 = Y‑translation, 3 = Z‑translation, 4‑6 = rotations for 3‑D).  
+* **Value** – the magnitude of the prescribed displacement (positive or negative).  
+
+You can also apply the same value to a whole node set in one line:
+
+```abaqus
+*BOUNDARY, NSET=N1, DOF=3, VALUE=0.0
+```
+
+### b) Using *DISPLACEMENT inside a *STEP (alternative syntax)
+
+```abaqus
+*STEP
+*BOUNDARY
+N1, 3, 3, 0.0          ; same as above, but placed inside the step
+*END STEP
+```
+
+Both *BOUNDARY and *DISPLACEMENT are interpreted by Abaqus as **prescribed displacement** boundary conditions.
+
+---
+
+## 3. When to use *EQUATION (MPC) instead
+
+Use *EQUATION only when you need a **relationship** between two (or more) DOFs, e.g.:
+
+* Tying two nodes together (U₁ = U₂).  
+* Enforcing a linear combination of DOFs (e.g., U₁ + 2 U₂ = 5).  
+* Implementing a rigid body constraint that is not a simple “fixed” condition.
+
+If you only want to **set** a displacement value, *BOUNDARY is the correct and simpler choice.
+
+---
+
+## 4. Quick checklist – “Did I prescribe the BC correctly?”
+
+| What you want to do | Keyword to use | Typical line format |
+|---------------------|----------------|---------------------|
+| Fix a node (all 6 DOFs) | `*BOUNDARY` | `node, 1, 6, 0.0` |
+| Prescribe a single DOF (e.g., U₃ = 0.005) | `*BOUNDARY` | `node, 3, 3, 0.005` |
+| Tie two nodes together (U₃(105)=U₃(129)) | `*EQUATION` | `2`<br>`105,3,1.,129,3,-1.` |
+| Apply a rotation or a combination of DOFs | `*EQUATION` | as above, with the appropriate coefficients |
+| Apply a distributed load (pressure, body force) | `*DLOAD`, `*CLOAD`, `*CFLUX` | … |
+| Apply a point load (force) | `*CLOAD` | `node, DOF, magnitude` |
+
+---
+
+## 5. Example – fixing the left face and prescribing a vertical displacement at node 105
+
+```abaqus
+*NSET, NSET=FIX, GENERATE
+1, 97, 1          ; all nodes on the left face (example)
+
+*BOUNDARY, NSET=FIX
+1, 1, 6, 0.0      ; fix all 6 DOFs on the left face
+
+*BOUNDARY, NSET=N1
+105, 3, 3, 0.005  ; prescribe U3 = +5 mm at node 105
+```
+
+If you also need node 129 to move the same amount (i.e., the two nodes must stay together), you would add an *EQUATION:
+
+```abaqus
+*EQUATION
+2
+105, 3, 1.0,
+129, 3, -1.0
+```
+
+but **do not** combine this with a *BOUNDARY on the same DOF – that would over‑constrain the model.
+
+---
+
+### Bottom line
+
+- **Prescribed displacement → `*BOUNDARY` (or `*DISPLACEMENT` inside a step).**  
+- **Tie / linear relation between DOFs → `*EQUATION` (MPC).**  
+
+Use the keyword that matches the physical intent of the boundary condition.
+A: **Short answer**
+
+- **Prescribed displacement → `*BOUNDARY` (or the `*DISPLACEMENT` sub‑option inside a step).**  
+- **Tie / linear relation between two or more DOFs → `*EQUATION` (MPC).**  
+
+Your line  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+creates the constraint  
+
+\[
+U_{3}(105)-U_{3}(129)=0\qquad\Longrightarrow\qquad U_{3}(105)=U_{3}(129)
+\]
+
+which is a *tie* between node 105 and node 129, **not** a prescribed value for either node.  
+If you only want to set a displacement (for example U₃ = 0.005 mm at node 105) you must use `*BOUNDARY` (or `*DISPLACEMENT`).  
+
+Below is a complete, ready‑to‑copy example that shows the two typical ways of doing this, plus a short checklist to avoid over‑constraining the model.
+
+---
+
+## 1. Prescribing a displacement with `*BOUNDARY`
+
+```abaqus
+*NSET, NSET=FIX_FACE
+1, 97, 1               ; example – all nodes on the left face
+
+*BOUNDARY, NSET=FIX_FACE
+1, 1, 6, 0.0           ; fix every DOF (U1‑U3, R1‑R3) on the left face
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005       ; prescribe U3 = +5 mm at node 105
+```
+
+* **NSET** – name of the node set on which the condition is applied.  
+* **DOF‑start, DOF‑end** – the degree(s) of freedom (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ).  
+* **Value** – magnitude of the prescribed displacement (positive or negative).  
+
+You can also prescribe the same value to a whole set in a single line:
+
+```abaqus
+*BOUNDARY, NSET=TOP_NODES, DOF=3, VALUE=0.005
+```
+
+---
+
+## 2. Prescribing a displacement with `*DISPLACEMENT` inside a step  
+
+The same condition can be written inside a step block; the syntax is identical to `*BOUNDARY`:
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*BOUNDARY
+N105, 3, 3, 0.005      ; same as above, but placed in the step
+*END STEP
+```
+
+Both forms are interpreted by Abaqus as a **prescribed displacement** boundary condition.
+
+---
+
+## 3. When you *do* need `*EQUATION` (MPC)
+
+Use `*EQUATION` only when you want a **relationship** between two or more DOFs, e.g.:
+
+* Tie two nodes together (U₃(105)=U₃(129)).  
+* Enforce a linear combination (U₁ + 2 U₂ = 5).  
+* Impose a rigid‑body constraint that cannot be expressed as a simple fixed condition.
+
+Example of a tie (your original line, written on two lines for readability):
+
+```abaqus
+*EQUATION
+2
+105, 3, 1.0,
+129, 3, -1.0
+```
+
+**Never** combine an `*EQUATION` that involves a given DOF with a `*BOUNDARY` on the same DOF – that would over‑constrain the model and cause the analysis to abort.
+
+---
+
+## 4. Quick checklist – “Did I prescribe the BC correctly?”
+
+| What you want to do                              | Keyword to use | Typical line format (inside a step or global) |
+|--------------------------------------------------|----------------|-----------------------------------------------|
+| Fix a node (all 6 DOFs)                          | `*BOUNDARY`    | `node, 1, 6, 0.0`                              |
+| Prescribe a single translational DOF (e.g. U₃)   | `*BOUNDARY`    | `node, 3, 3, value`                           |
+| Prescribe a single rotational DOF (e.g. R₁)      | `*BOUNDARY`    | `node, 4, 4, value`                           |
+| Apply the same value to an entire node set       | `*BOUNDARY`    | `*BOUNDARY, NSET=SETNAME, DOF=3, VALUE=val`   |
+| Tie two nodes together (U₁ = U₂)                 | `*EQUATION`    | `2`<br>`nodeA, dofA, 1.0, nodeB, dofB, -1.0` |
+| Linear combination of several DOFs (a·U₁+b·U₂=c) | `*EQUATION`    | `nTerms`<br>`node1, dof1, a, node2, dof2, b, …` |
+| Point force (CLOAD)                              | `*CLOAD`       | `node, DOF, magnitude`                        |
+| Distributed pressure (DLOAD)                     | `*DLOAD`       | `surface, P, magnitude`                       |
+
+---
+
+## 5. Full minimal example (fix left face, prescribe vertical displacement at node 105)
+
+```abaqus
+*Heading
+** Simple model showing correct BC usage
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+** 1. Geometry – just a placeholder (replace with yours)
+** -------------------------------------------------
+*Part, name=PART-1
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+3, 10., 10., 0.
+4, 0., 10., 0.
+5, 0., 0., 10.
+6, 10., 0., 10.
+7, 10., 10., 10.
+8, 0., 10., 10.
+*Element, type=C3D8R, elset=EALL
+1, 1,2,3,4,5,6,7,8
+*End Part
+
+** -------------------------------------------------
+** 2. Assembly
+** -------------------------------------------------
+*Assembly, name=ASSEMBLY
+*Instance, name=PART-1-1, part=PART-1
+*End Instance
+*End Assembly
+
+** -------------------------------------------------
+** 3. Node sets for BCs (adjust numbers to your mesh)
+** -------------------------------------------------
+*NSET, NSET=FIX_FACE, GENERATE
+1, 4, 1               ; nodes 1‑4 are the left face (example)
+*NSET, NSET=N105
+105                    ; the node that will receive the prescribed U3
+
+** -------------------------------------------------
+** 4. Boundary conditions
+** -------------------------------------------------
+*BOUNDARY, NSET=FIX_FACE
+1, 1, 6, 0.0           ; fix all 6 DOFs on the left face
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005       ; prescribe U3 = +5 mm at node 105
+
+** -------------------------------------------------
+** 5. Step definition (static, linear)
+** -------------------------------------------------
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+*END STEP
+```
+
+Replace the node numbers, sets, and geometry with those of your actual model. The key point is that the **prescribed displacement** is entered with `*BOUNDARY` (or `*DISPLACEMENT`), while `*EQUATION` is reserved for *ties* or other linear relations between DOFs.
+
+---
+
+### Bottom line
+
+| Desired action | Correct Abaqus keyword |
+|----------------|------------------------|
+| **Set a displacement value** (U₁ = 0.005, R₂ = –0.02, …) | `*BOUNDARY` (or `*DISPLACEMENT` inside a step) |
+| **Tie two nodes together** or **enforce a linear combination** of DOFs | `*EQUATION` (MPC) |
+
+Use the table and the example above, and you’ll avoid the “over‑constrained” errors that arise when an `*EQUATION` is mistakenly used for a simple prescribed displacement.
+
+=== 2026-04-20 16:50:16 ===
+Q: **Short answer**
+
+- **Prescribed displacement → `*BOUNDARY` (or the `*DISPLACEMENT` sub‑option inside a step).**  
+- **Tie / linear relation between two or more DOFs → `*EQUATION` (MPC).**  
+
+Your line  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+creates the constraint  
+
+\[
+U_{3}(105)-U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+which is a *tie* between node 105 and node 129, **not** a prescribed value for either node.  
+
+If you only want to set a displacement (e.g. U₃ = 0.005 mm at node 105) you must use `*BOUNDARY` (or `*DISPLACEMENT` inside a step), e.g.:
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005   ; prescribe U3 = +5 mm at node 105
+```
+
+Use `*EQUATION` only when you need a relationship between DOFs (ties, linear combinations). Otherwise, prescribe the displacement with `*BOUNDARY`.
+A: ## Short answer  
+
+| What you want to do | Abaqus keyword | What it does |
+|---------------------|----------------|--------------|
+| **Prescribe a single displacement (or rotation) at a node or a set of nodes** | `*BOUNDARY` (or `*DISPLACEMENT` inside a step) | Directly sets the value of the chosen DOF(s). |
+| **Tie two (or more) DOFs together, i.e. enforce a linear relation such as  U(i)=U(j)** | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the two DOFs move together. |
+| **Create a “contact‑type” tie over a surface** | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; not a single‑node constraint. |
+
+The line you posted  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+**does not prescribe a displacement**. It tells Abaqus that the third DOF of node 105 and the third DOF of node 129 must stay equal:
+
+\[
+1\cdot U_{3}(105) \;+\; (-1)\cdot U_{3}(129)=0
+\;\Longrightarrow\;
+U_{3}(105)=U_{3}(129)
+\]
+
+If you really want to **set** `U3 = 0.005 mm` at node 105, you must use `*BOUNDARY` (or `*DISPLACEMENT`).  
+
+---
+
+## Complete guide – how to prescribe a displacement correctly
+
+Below is a step‑by‑step template that you can copy‑paste into an Abaqus input file.  
+All the essential pieces are highlighted and explained.
+
+### 1. Define the node (or node set) that will receive the displacement
+
+```abaqus
+*NODE
+105, 12.345, 0.0, 0.0   ; node 105 at (x,y,z) – coordinates are just an example
+
+*NSET, NSET=N105
+105
+```
+
+*If you have many nodes that share the same prescribed value, put them all in a single `*NSET`.*
+
+### 2. Create a step (static, dynamic, etc.)
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+```
+
+> **Tip** – `*STATIC` is the most common for simple displacement‑controlled analyses.  
+> For a time‑dependent (ramped) displacement you would also need an `*AMPLITUDE` definition and reference it in the `*BOUNDARY` line.
+
+### 3. Prescribe the displacement with `*BOUNDARY`
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005   ; node 105, DOF 3 (U3), start=3, end=3, value=0.005 mm
+```
+
+**Explanation of the fields**
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | The node set that contains the node(s) to be constrained. |
+| `105` | Node label (optional when a node set is given; kept for clarity). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as the previous column when only one DOF). |
+| `0.005` | Value to be imposed (units are those of the model, e.g. mm). |
+
+If you want the displacement to **ramp** from 0 to 0.005 mm over the step, add an amplitude:
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.
+1., 1.
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+Now the 0.005 mm is multiplied by the amplitude (0→1) as the step progresses.
+
+### 4. End the step
+
+```abaqus
+*END STEP
+```
+
+That’s all you need for a simple prescribed displacement.
+
+---
+
+## When to use `*EQUATION` (or `*MPC`) instead
+
+Use `*EQUATION` **only** when you need a **linear relationship** between two or more DOFs, e.g.:
+
+* Tie two nodes together (`U(i)=U(j)`).  
+* Impose a proportionality (`U(i)=2·U(j)`).  
+* Enforce a combination (`U(i)+U(j)-U(k)=0`).
+
+#### Example: Tie node 105 to node 129 in the Z‑direction
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,   ; +1·U3(105)
+129, 3, -1.0    ; -1·U3(129)
+```
+
+If you also want to **prescribe** a value for that tied DOF, you must add a `*BOUNDARY` line **after** the equation (or before – the order does not matter). The equation forces the two nodes to move together; the boundary condition then fixes the common value.
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005   ; now the tied pair moves to U3 = 0.005 mm
+```
+
+### Important notes
+
+| Situation | Recommended keyword |
+|-----------|----------------------|
+| Simple prescribed displacement/rotation | `*BOUNDARY` (static) or `*DISPLACEMENT` (dynamic) |
+| Linear relation between DOFs (tie, proportional, combination) | `*EQUATION` (or `*MPC` for older versions) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+| Need to prescribe a displacement **and** keep two nodes together | Use **both** `*EQUATION` (to tie) **and** `*BOUNDARY` (to set the value) |
+
+---
+
+## Common pitfalls & how to avoid them
+
+| Pitfall | Why it happens | How to fix it |
+|---------|----------------|---------------|
+| Using `*EQUATION` when you really wanted a prescribed value | `*EQUATION` only defines a relation, not a value. | Replace it with `*BOUNDARY` (or `*DISPLACEMENT`). |
+| Forgetting to list the node in a node set (`NSET`) | Abaqus will issue “node not found” or silently ignore the line. | Always create an `*NSET` (or use the node label directly) before the `*BOUNDARY` line. |
+| Mixing up DOF numbers (e.g., using 3 for a rotation) | DOF numbering is fixed: 1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ. | Double‑check the DOF you intend to constrain. |
+| Applying a `*BOUNDARY` inside a step that already has a `*DISPLACEMENT` for the same DOF | Abaqus will keep the last definition, possibly overriding the intended value. | Use **one** method per DOF per step, or deliberately overwrite with the later line. |
+| Not scaling the prescribed value with the model’s unit system | Abaqus does not know your “mm” vs “m”. | Keep a consistent unit system throughout the model (e.g., mm‑kg‑s). |
+| Forgetting `NLGEOM=YES` when large displacements are expected | The solver will linearize the geometry and give wrong results. | Set `NLGEOM=YES` in the `*STEP` header for large‑deformation problems. |
+
+---
+
+## Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+- The `*BOUNDARY` line **sets** the displacement.  
+- The `*EQUATION` block **ties** the two nodes together, so they will always have the same `U3`.  
+
+Remove the `*EQUATION` block if you do **not** need the tie.
+
+---
+
+## Bottom line
+
+* **Prescribed displacement →** `*BOUNDARY` (or `*DISPLACEMENT`).  
+* **Tie / linear relation →** `*EQUATION` (or `*MPC`).  
+
+Your original line creates a tie, not a prescribed value. Replace it with a `*BOUNDARY` line (or add a `*BOUNDARY` line in addition to the equation if you need both).  
+
+Feel free to ask if you need a concrete example for a time‑dependent load, a multi‑node set, or a surface tie!
+
+=== 2026-04-20 16:51:12 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword | What it does |
+|---------------------|----------------|--------------|
+| **Prescribe a displacement (or rotation) at a node or a set of nodes** | `*BOUNDARY` (or `*DISPLACEMENT` inside a step) | Directly sets the value of the chosen DOF(s). |
+| **Tie two (or more) DOFs together, i.e. enforce a linear relation such as U(i)=U(j)** | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the two DOFs move together. |
+| **Create a surface‑to‑surface tie (contact‑type)** | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; not a single‑node constraint. |
+
+The line you posted  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+**does not prescribe a displacement**. It tells Abaqus that the third DOF of node 105 and the third DOF of node 129 must stay equal:
+
+\[
+1\cdot U_{3}(105) + (-1)\cdot U_{3}(129)=0
+\;\Longrightarrow\;
+U_{3}(105)=U_{3}(129)
+\]
+
+If you simply want to **set** `U3 = 0.005 mm` at node 105, you must use `*BOUNDARY` (or `*DISPLACEMENT`).  
+
+---
+
+## How to prescribe a displacement correctly
+
+Below is a minimal, copy‑paste‑able template that you can drop into any Abaqus *.inp* file.  
+Replace the node numbers, sets, and geometry with those of your actual model.
+
+### 1. Define the node (or node set) that will receive the displacement
+
+```abaqus
+*NODE
+105, 12.345, 0.0, 0.0   ; example coordinates – adjust as needed
+
+*NSET, NSET=N105
+105
+```
+
+*If many nodes share the same prescribed value, put them all in a single `*NSET`.*
+
+### 2. Create a step (static, dynamic, etc.)
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.      ; (time, initial increment, min increment, max increment)
+```
+
+> **Tip** – Use `NLGEOM=YES` for large‑deformation problems.
+
+### 3. Prescribe the displacement with `*BOUNDARY`
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005        ; node 105, DOF 3 (U3), value = 0.005 mm
+```
+
+**Field meaning**
+
+| Field | Explanation |
+|-------|-------------|
+| `NSET=N105` | Node set that contains the constrained node(s). |
+| `105` | Node label (optional when a node set is given). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as previous column when only one DOF). |
+| `0.005` | Value to impose (units of your model, e.g. mm). |
+
+#### Ramped displacement (optional)
+
+If you want the displacement to increase from 0 to 0.005 mm during the step, define an amplitude and reference it:
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.
+1., 1.
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+Now the imposed value is multiplied by the amplitude (0 → 1) as the step progresses.
+
+### 4. End the step
+
+```abaqus
+*END STEP
+```
+
+That’s all you need for a simple prescribed displacement.
+
+---
+
+## When to use `*EQUATION` (or `*MPC`) instead
+
+Use `*EQUATION` **only** when you need a **linear relationship** between two or more DOFs, for example:
+
+* Tie two nodes together (`U(i)=U(j)`).  
+* Impose a proportionality (`U(i)=2·U(j)`).  
+* Enforce a combination (`U(i)+U(j)-U(k)=0`).
+
+#### Example: Tie node 105 to node 129 in the Z‑direction
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,   ; +1·U3(105)
+129, 3, -1.0    ; –1·U3(129)
+```
+
+If you also want to **prescribe** a value for that tied DOF, add a `*BOUNDARY` line (the equation forces the two nodes to move together; the boundary condition then fixes the common value):
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005   ; now the tied pair moves to U3 = 0.005 mm
+```
+
+### Important notes
+
+| Situation | Recommended keyword(s) |
+|-----------|------------------------|
+| Simple prescribed displacement/rotation | `*BOUNDARY` (static) or `*DISPLACEMENT` (dynamic) |
+| Linear relation between DOFs (tie, proportional, combination) | `*EQUATION` (or `*MPC`) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+| Need both a tie **and** a prescribed value | Use **both** `*EQUATION` (to tie) **and** `*BOUNDARY` (to set the value) |
+
+---
+
+## Common pitfalls & how to avoid them
+
+| Pitfall | Why it happens | Fix |
+|---------|----------------|-----|
+| Using `*EQUATION` when you really wanted a prescribed value | `*EQUATION` only defines a relation, not a value. | Replace it with `*BOUNDARY` (or `*DISPLACEMENT`). |
+| Forgetting to create an `*NSET` before the `*BOUNDARY` line | Abaqus cannot find the node and ignores the line. | Always define an `*NSET` (or use the node label directly). |
+| Mixing up DOF numbers (e.g., using 3 for a rotation) | DOF numbering is fixed (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ). | Double‑check the DOF you intend to constrain. |
+| Applying a `*BOUNDARY` inside a step that already has a `*DISPLACEMENT` for the same DOF | The later definition overwrites the earlier one. | Use **one** method per DOF per step, or deliberately overwrite. |
+| Not scaling the prescribed value with the model’s unit system | Abaqus does not know “mm” vs “m”. | Keep a consistent unit system throughout the model (e.g., mm‑kg‑s). |
+| Forgetting `NLGEOM=YES` for large‑deformation problems | Solver linearizes geometry → wrong results. | Set `NLGEOM=YES` in the `*STEP` header when large displacements are expected. |
+
+---
+
+## Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; (optional) tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+- **Remove the `*EQUATION` block** if you do **not** need the tie.  
+- **Keep the `*BOUNDARY` line** – it is the command that actually sets the displacement.
+
+---
+
+### Bottom line
+
+* **Prescribed displacement →** `*BOUNDARY` (or `*DISPLACEMENT`).  
+* **Tie / linear relation →** `*EQUATION` (or `*MPC`).  
+
+Your original line creates a tie, not a prescribed value. Replace it (or supplement it) with a `*BOUNDARY` line to impose the desired displacement. If you need any further examples—time‑dependent loads, multi‑node sets, or surface ties—just let me know!
+A: **Short answer**
+
+| What you want to do | Abaqus keyword(s) | What it does |
+|---------------------|-------------------|--------------|
+| Prescribe a displacement (or rotation) at a node or a node set | `*BOUNDARY` (static steps) or `*DISPLACEMENT` (dynamic steps) | Directly imposes a value on the selected DOF(s). |
+| Enforce a linear relation between two (or more) DOFs (e.g. U(i)=U(j)) | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the DOFs move together. |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; not a single‑node constraint. |
+
+The line you posted  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+**does not prescribe a displacement**. It tells Abaqus that  
+
+\[
+1\cdot U_{3}(105) + (-1)\cdot U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+i.e. the Z‑translation of node 105 must stay equal to the Z‑translation of node 129.  
+If you simply want to **set** `U3 = 0.005 mm` at node 105, you must use `*BOUNDARY` (or `*DISPLACEMENT`).  
+
+Below is a minimal, copy‑paste‑able template that does exactly that.  
+Replace the node numbers, sets, and geometry with those of your model.
+
+---
+
+## 1. Define the node (or node set) that will receive the displacement
+
+```abaqus
+*NODE
+105, 0., 0., 0.          ; coordinates – change as needed
+
+*NSET, NSET=N105
+105
+```
+
+*If many nodes share the same prescribed value, put them all in the same `*NSET`.*
+
+---
+
+## 2. Create a step (static, dynamic, etc.)
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; (total time, initial inc., min inc., max inc.)
+```
+
+> **Tip** – Use `NLGEOM=YES` for large‑deformation problems.
+
+---
+
+## 3. Prescribe the displacement with `*BOUNDARY`
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005        ; node 105, DOF 3 (U3), value = 0.005 mm
+```
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | Node set that contains the constrained node(s). |
+| `105` | Node label (optional when a node set is given). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as previous column when only one DOF). |
+| `0.005` | Value to impose (units of your model, e.g. mm). |
+
+### Ramped (time‑dependent) displacement (optional)
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.
+1., 1.
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+The amplitude multiplies the prescribed value from 0 → 1 as the step progresses.
+
+---
+
+## 4. End the step
+
+```abaqus
+*END STEP
+```
+
+That’s all you need for a simple prescribed displacement.
+
+---
+
+## When you *also* need a tie between two nodes
+
+If you want node 105 and node 129 to move together **and** you want that common motion to be 0.005 mm, use **both** keywords:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005
+```
+
+The `*EQUATION` forces the two DOFs to stay equal; the `*BOUNDARY` then fixes the value of that shared DOF.
+
+---
+
+## Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; (optional) tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+- **Remove the `*EQUATION` block** if you do **not** need the tie.  
+- **Keep the `*BOUNDARY` line** – it is the command that actually sets the displacement.
+
+---
+
+### Bottom line
+
+| Goal | Keyword to use |
+|------|----------------|
+| Prescribed displacement/rotation | `*BOUNDARY` (static) or `*DISPLACEMENT` (dynamic) |
+| Linear relation / tie between DOFs | `*EQUATION` (or `*MPC`) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+
+Your original `*EQUATION` line creates a tie, **not** a prescribed value. Replace (or supplement) it with a `*BOUNDARY` line to impose the desired displacement. If you need any further examples—time‑dependent loads, multi‑node sets, or surface ties—just let me know!
+
+=== 2026-04-20 16:51:53 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword(s) | What it does |
+|--------------------|-------------------|--------------|
+| Prescribe a displacement (or rotation) at a node or a node set | `*BOUNDARY` (static steps) or `*DISPLACEMENT` (dynamic steps) | Directly imposes a value on the selected DOF(s). |
+| Enforce a linear relation between two (or more) DOFs (e.g. U(i)=U(j)) | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the DOFs move together. |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; not a single‑node constraint. |
+
+The line you posted  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+**does not prescribe a displacement**. It tells Abaqus that  
+
+\[
+1\cdot U_{3}(105)+(-1)\cdot U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+i.e. the Z‑translation of node 105 must stay equal to the Z‑translation of node 129.  
+If you simply want to **set** `U3 = 0.005 mm` at node 105, you must use `*BOUNDARY` (or `*DISPLACEMENT`).  
+
+Below is a minimal, copy‑paste‑able template that does exactly that. Replace the node numbers, sets, and geometry with those of your model.
+
+---
+
+### 1. Define the node (or node set) that will receive the displacement
+
+```abaqus
+*NODE
+105, 0., 0., 0.          ; coordinates – change as needed
+
+*NSET, NSET=N105
+105
+```
+
+*(If many nodes share the same prescribed value, put them all in the same `*NSET`.)*
+
+---
+
+### 2. Create a step (static example)
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; total time, initial increment, min increment, max increment
+```
+
+> **Tip** – Use `NLGEOM=YES` for large‑deformation problems.
+
+---
+
+### 3. Prescribe the displacement with `*BOUNDARY`
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005        ; node 105, DOF 3 (U3), value = 0.005 mm
+```
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | Node set that contains the constrained node(s). |
+| `105` | Node label (optional when a node set is given). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as previous column when only one DOF). |
+| `0.005` | Value to impose (units of your model, e.g. mm). |
+
+#### Ramped (time‑dependent) displacement (optional)
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.
+1., 1.
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+The amplitude multiplies the prescribed value from 0 → 1 as the step progresses.
+
+---
+
+### 4. End the step
+
+```abaqus
+*END STEP
+```
+
+That’s all you need for a simple prescribed displacement.
+
+---
+
+## When you also need a tie between two nodes
+
+If you want node 105 and node 129 to move together **and** you want that common motion to be 0.005 mm, use **both** keywords:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005
+```
+
+The `*EQUATION` forces the two DOFs to stay equal; the `*BOUNDARY` then fixes the value of that shared DOF.
+
+---
+
+## Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; (optional) tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+- **Remove the `*EQUATION` block** if you do **not** need the tie.  
+- **Keep the `*BOUNDARY` line** – it is the command that actually sets the displacement.
+
+---
+
+### Bottom line
+
+| Goal | Keyword to use |
+|------|----------------|
+| Prescribed displacement/rotation | `*BOUNDARY` (static) or `*DISPLACEMENT` (dynamic) |
+| Linear relation / tie between DOFs | `*EQUATION` (or `*MPC`) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+
+Your original `*EQUATION` line creates a tie, **not** a prescribed value. Replace (or supplement) it with a `*BOUNDARY` line to impose the desired displacement. If you need any further examples—time‑dependent loads, multi‑node sets, or surface ties—just let me know!
+A: **Short answer**
+
+| What you want to do | Abaqus keyword(s) | What it does |
+|---------------------|-------------------|--------------|
+| Prescribe a displacement (or rotation) at a node or node‑set | `*BOUNDARY` (static steps)  <br>or `*DISPLACEMENT` (dynamic steps) | Directly imposes a value on the selected DOF(s). |
+| Enforce a linear relation between two (or more) DOFs (e.g. U(i)=U(j)) | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the DOFs move together. |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; not a single‑node constraint. |
+
+---
+
+## 1. Prescribing a displacement (the usual case)
+
+Your line  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+**does not prescribe a displacement** – it only forces the Z‑translation of node 105 to be equal to that of node 129.  
+To *set* a displacement you must use `*BOUNDARY` (static) or `*DISPLACEMENT` (dynamic).
+
+### Minimal, copy‑paste‑able static example
+
+```abaqus
+*NODE
+105, 0., 0., 0.          ; node coordinates (change as needed)
+129, 10., 0., 0.         ; another node (optional)
+
+*NSET, NSET=N105
+105                      ; put every node that receives the same value in this set
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; total time, initial inc., min inc., max inc.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3 = U3 = +0.005 mm (units of your model)
+
+*END STEP
+```
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | Node set that contains the constrained node(s). |
+| `105` | Node label (optional when a node set is given). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as previous column when only one DOF). |
+| `0.005` | Value to impose (e.g. mm). |
+
+### Time‑dependent (ramped) displacement (optional)
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.
+1., 1.
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+The amplitude multiplies the prescribed value from 0 → 1 as the step progresses.
+
+---
+
+## 2. When you also need a **tie** between two nodes
+
+If you want node 105 and node 129 to move together **and** you want that common motion to be 0.005 mm, combine the two keywords:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; forces U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; prescribes the value of the tied DOF
+```
+
+* `*EQUATION` → enforces the linear relation (U3(105)=U3(129)).  
+* `*BOUNDARY` → gives the numerical value (0.005 mm) to that relation.
+
+If you **do not** need the tie, simply omit the `*EQUATION` block and keep only the `*BOUNDARY` line.
+
+---
+
+## 3. Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; (optional) tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+*Remove the `*EQUATION` block* if you only need the prescribed displacement.
+
+---
+
+## 4. Bottom line (what to use)
+
+| Goal | Keyword to use |
+|------|----------------|
+| Prescribed displacement/rotation | `*BOUNDARY` (static) or `*DISPLACEMENT` (dynamic) |
+| Linear relation / tie between DOFs | `*EQUATION` (or `*MPC`) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+
+Your original `*EQUATION` line creates a **constraint**, not a **prescribed value**. Replace (or supplement) it with a `*BOUNDARY` line to impose the desired displacement. If you need any further examples—e.g., multi‑node sets, dynamic steps, or contact ties—just let me know!
+
+=== 2026-04-20 16:52:35 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword(s) | What it does |
+|---------------------|-------------------|--------------|
+| Prescribe a displacement (or rotation) at a node or a node‑set | `*BOUNDARY` (static steps)  <br>or `*DISPLACEMENT` (dynamic steps) | Directly imposes a numerical value on the selected DOF(s). |
+| Enforce a linear relation between two (or more) DOFs (e.g. U(i)=U(j)) | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the DOFs move together. |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; not a single‑node constraint. |
+
+The line you have
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```
+
+**does not prescribe a displacement**. It only tells Abaqus that  
+
+\[
+1\cdot U_{3}(105)+(-1)\cdot U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+i.e. the Z‑translation of node 105 must stay equal to the Z‑translation of node 129.  
+If you simply want to set a displacement of **0.005 mm** in the Z‑direction at node 105, you must use `*BOUNDARY` (or `*DISPLACEMENT`).  
+
+Below is a minimal, copy‑paste‑able static example that does exactly that. Replace the node numbers, sets, and geometry with those of your model.
+
+---
+
+## 1. Prescribing a displacement (static step)
+
+```abaqus
+*NODE
+105, 0., 0., 0.          ; coordinates – change as needed
+129, 10., 0., 0.         ; another node (optional, only needed if you later tie)
+
+*NSET, NSET=N105
+105                      ; put every node that receives the same value in this set
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; total time, initial inc., min inc., max inc.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3 (U3) = +0.005 mm (units of your model)
+
+*END STEP
+```
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | Node set that contains the constrained node(s). |
+| `105` | Node label (optional when a node set is given). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as previous column when only one DOF). |
+| `0.005` | Value to impose (e.g. mm). |
+
+### Ramped (time‑dependent) displacement (optional)
+
+If the displacement must increase from 0 to 0.005 mm during the step, define an amplitude and attach it to the boundary condition:
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.
+1., 1.
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+The amplitude multiplies the prescribed value from 0 → 1 as the step progresses.
+
+---
+
+## 2. When you also need a **tie** (linear relation) between two nodes
+
+If you want node 105 and node 129 to move together **and** you want that common motion to be 0.005 mm, combine the two keywords:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; forces U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; prescribes the value of the tied DOF
+```
+
+* `*EQUATION` → enforces the linear relation (U3(105)=U3(129)).  
+* `*BOUNDARY` → gives the numerical value (0.005 mm) to that relation.
+
+If you **do not** need the tie, simply omit the `*EQUATION` block and keep only the `*BOUNDARY` line.
+
+---
+
+## 3. Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; (optional) tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+*Remove the `*EQUATION` block* if you only need the prescribed displacement.
+
+---
+
+## 4. Bottom line (what to use)
+
+| Goal | Keyword to use |
+|------|----------------|
+| Prescribed displacement/rotation | `*BOUNDARY` (static) or `*DISPLACEMENT` (dynamic) |
+| Linear relation / tie between DOFs | `*EQUATION` (or `*MPC`) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+
+Your original `*EQUATION` line creates a **constraint**, not a **prescribed value**. Replace (or supplement) it with a `*BOUNDARY` line to impose the desired displacement. If you need further examples—e.g., multi‑node sets, dynamic steps, or contact ties—just let me know!
+A: **Short answer**
+
+| What you want to do | Abaqus keyword(s) | What it does |
+|---------------------|-------------------|--------------|
+| Prescribe a displacement (or rotation) at a node or node‑set | `*BOUNDARY` (static steps)  <br>or `*DISPLACEMENT` (dynamic steps) | Directly imposes a numerical value on the selected DOF(s). |
+| Enforce a linear relation between two (or more) DOFs (e.g. U(i)=U(j)) | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the DOFs move together. |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; not a single‑node constraint. |
+
+Your line  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+**does not prescribe a displacement**. It only tells Abaqus that  
+
+\[
+1\;U_{3}(105) + (-1)\;U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+i.e. the Z‑translation of node 105 must stay equal to the Z‑translation of node 129.  
+If you simply want to set a displacement of **0.005 mm** in the Z‑direction at node 105, you must use `*BOUNDARY` (or `*DISPLACEMENT`).  
+
+Below is a minimal, copy‑paste‑able static example that does exactly that. Replace the node numbers, sets, and geometry with those of your model.
+
+---
+
+## 1. Prescribing a displacement (static step)
+
+```abaqus
+*NODE
+105, 0., 0., 0.          ; coordinates – change as needed
+129, 10., 0., 0.         ; another node (optional, only needed if you later tie)
+
+*NSET, NSET=N105
+105                      ; put every node that receives the same value in this set
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; total time, initial inc., min inc., max inc.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3 (U3) = +0.005 mm (units of your model)
+
+*END STEP
+```
+
+### What each field means  
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | Node set that contains the constrained node(s). |
+| `105` | Node label (optional when a node set is given). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as previous column when only one DOF). |
+| `0.005` | Value to impose (e.g. mm). |
+
+### Ramped (time‑dependent) displacement (optional)
+
+If the displacement must increase from 0 to 0.005 mm during the step, define an amplitude and attach it to the boundary condition:
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.
+1., 1.
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+The amplitude multiplies the prescribed value from 0 → 1 as the step progresses.
+
+---
+
+## 2. When you also need a **tie** (linear relation) between two nodes
+
+If you want node 105 and node 129 to move together **and** you want that common motion to be 0.005 mm, combine the two keywords:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; forces U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; prescribes the value of the tied DOF
+```
+
+* `*EQUATION` → enforces the linear relation (U3(105)=U3(129)).  
+* `*BOUNDARY` → gives the numerical value (0.005 mm) to that relation.
+
+If you **do not** need the tie, simply omit the `*EQUATION` block and keep only the `*BOUNDARY` line.
+
+---
+
+## 3. Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; (optional) tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+*Remove the `*EQUATION` block* if you only need the prescribed displacement.
+
+---
+
+## 4. Bottom line (what to use)
+
+| Goal | Keyword to use |
+|------|----------------|
+| Prescribed displacement/rotation | `*BOUNDARY` (static) or `*DISPLACEMENT` (dynamic) |
+| Linear relation / tie between DOFs | `*EQUATION` (or `*MPC`) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+
+Your original `*EQUATION` line creates a **constraint**, not a **prescribed value**. Replace (or supplement) it with a `*BOUNDARY` line to impose the desired displacement. If you need further examples—e.g., multi‑node sets, dynamic steps, or contact ties—just let me know!
+
+=== 2026-04-20 16:53:16 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword(s) | What it does |
+|---------------------|-------------------|--------------|
+| Prescribe a displacement (or rotation) at a node or node‑set | `*BOUNDARY` (static steps)  <br>or `*DISPLACEMENT` (dynamic steps) | Directly imposes a numerical value on the selected DOF(s). |
+| Enforce a linear relation between two (or more) DOFs (e.g. U(i)=U(j)) | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the DOFs move together. |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; not a single‑node constraint. |
+
+---
+
+## Why your line does **not** give a displacement
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```
+
+`*EQUATION` only tells Abaqus that  
+
+\[
+1\;U_{3}(105) + (-1)\;U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+i.e. the Z‑translation of node 105 must stay equal to that of node 129.  
+No numerical value is prescribed. To *set* a displacement you must use `*BOUNDARY` (static analysis) or `*DISPLACEMENT` (dynamic analysis).
+
+---
+
+## 1. Minimal, copy‑paste‑able static example that applies a 0.005 mm Z‑displacement to node 105
+
+```abaqus
+*NODE
+105, 0., 0., 0.          ; coordinates – change as needed
+129, 10., 0., 0.         ; another node (only needed later if you tie)
+
+*NSET, NSET=N105
+105                      ; all nodes that receive the same value go in this set
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; total time, initial inc., min inc., max inc.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3 (U3) = +0.005 mm (units of your model)
+
+*END STEP
+```
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | Node set that contains the constrained node(s). |
+| `105` | Node label (optional when a node set is given). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as previous column when only one DOF). |
+| `0.005` | Value to impose (e.g. mm). |
+
+### Ramped (time‑dependent) displacement (optional)
+
+If the displacement must increase from 0 to 0.005 mm during the step, define an amplitude and attach it to the boundary condition:
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.
+1., 1.
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+The amplitude multiplies the prescribed value from 0 → 1 as the step progresses.
+
+---
+
+## 2. When you also need a **tie** (linear relation) between two nodes
+
+If you want node 105 and node 129 to move together **and** you want that common motion to be 0.005 mm, combine the two keywords:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; forces U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; prescribes the value of the tied DOF
+```
+
+* `*EQUATION` → enforces the linear relation (U3(105)=U3(129)).  
+* `*BOUNDARY` → gives the numerical value (0.005 mm) to that relation.
+
+If you **do not** need the tie, simply omit the `*EQUATION` block and keep only the `*BOUNDARY` line.
+
+---
+
+## 3. Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; (optional) tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+*Remove the `*EQUATION` block* if you only need the prescribed displacement.
+
+---
+
+## 4. Bottom line (what to use)
+
+| Goal | Keyword to use |
+|------|----------------|
+| Prescribed displacement/rotation | `*BOUNDARY` (static) or `*DISPLACEMENT` (dynamic) |
+| Linear relation / tie between DOFs | `*EQUATION` (or `*MPC`) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+
+Your original `*EQUATION` line creates a **constraint**, not a **prescribed value**. Replace (or supplement) it with a `*BOUNDARY` line to impose the desired displacement. If you need further examples—e.g., multi‑node sets, dynamic steps, or contact ties—just let me know!
+A: **Short answer**
+
+| What you want to do | Abaqus keyword(s) | What it does |
+|---------------------|-------------------|--------------|
+| Prescribe a displacement (or rotation) at a node or node‑set | `*BOUNDARY` (static steps)  <br>or `*DISPLACEMENT` (dynamic steps) | Directly imposes a numerical value on the selected DOF(s). |
+| Enforce a linear relation between two (or more) DOFs (e.g. U(i)=U(j)) | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the DOFs move together. |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; not a single‑node constraint. |
+
+---
+
+## 1. Why the line you wrote does **not** give a displacement  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```
+
+`*EQUATION` tells Abaqus that  
+
+\[
+1\;U_{3}(105) + (-1)\;U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+In other words, the **Z‑translation of node 105 must stay equal to that of node 129**.  
+No numerical value is prescribed, so the model is free to move as long as the two DOFs stay equal.  
+To *set* a displacement you must use a **boundary condition** (`*BOUNDARY` for static analyses or `*DISPLACEMENT` for dynamic analyses).
+
+---
+
+## 2. Minimal, copy‑paste‑able **static** example that applies a **0.005 mm** Z‑displacement to node 105  
+
+```abaqus
+*HEADING
+** Example: prescribe U3 = +0.005 mm at node 105
+*NODE
+105, 0., 0., 0.          ; coordinates of node 105 (change as needed)
+129, 10., 0., 0.         ; a second node – only needed later if you tie
+
+*NSET, NSET=N105
+105                      ; node set that will receive the prescribed value
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; total time, initial inc., min inc., max inc.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3 (U3) = +0.005 mm (units of your model)
+
+*END STEP
+```
+
+### What each field means  
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | Name of the node set that contains the constrained node(s). |
+| `105` | Node label (optional when a node set is given). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as previous column when only one DOF). |
+| `0.005` | Value to impose (e.g. mm). |
+
+---
+
+### 2‑a. Ramped (time‑dependent) displacement (optional)
+
+If the displacement must increase from 0 → 0.005 mm during the step, define an amplitude and attach it to the boundary condition:
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.          ; at step time = 0, factor = 0
+1., 1.          ; at step end, factor = 1
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+The amplitude multiplies the prescribed value (0.005 mm) as the step progresses.
+
+---
+
+## 3. When you also need a **tie** (linear relation) between two nodes  
+
+Suppose you want node 105 and node 129 to move together **and** you want that common motion to be 0.005 mm. Combine the two keywords:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; forces U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; prescribes the value of the tied DOF
+```
+
+* `*EQUATION` → enforces the linear relation (U3(105)=U3(129)).  
+* `*BOUNDARY` → gives the numerical value (0.005 mm) to that relation.
+
+If you **do not** need the tie, simply omit the `*EQUATION` block and keep only the `*BOUNDARY` line.
+
+---
+
+## 4. Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*HEADING
+** Prescribed displacement at node 105 (optional tie to node 129)
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; (optional) tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+*Remove the `*EQUATION` block* if you only need the prescribed displacement.
+
+---
+
+## 5. Bottom line – which keyword to use for which goal  
+
+| Goal | Keyword to use |
+|------|----------------|
+| Prescribed displacement/rotation (static) | `*BOUNDARY` |
+| Prescribed displacement/rotation (dynamic) | `*DISPLACEMENT` |
+| Linear relation / tie between DOFs (node‑to‑node) | `*EQUATION` (or `*MPC`) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+
+---
+
+### TL;DR  
+
+*Your original `*EQUATION` line only **links** two DOFs; it does **not** set a value.*  
+To impose a 0.005 mm Z‑displacement on node 105, add a `*BOUNDARY` (or `*DISPLACEMENT`) entry.  
+If you also need node 105 to move together with node 129, keep the `*EQUATION` (or `*MPC`) in addition to the `*BOUNDARY`.  
+
+Feel free to ask for further variations (multiple nodes, dynamic steps, contact definitions, etc.).
+
+=== 2026-04-20 16:54:01 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword(s) | What it does |
+|--------------------|-------------------|--------------|
+| Prescribe a displacement (or rotation) at a node or a node‑set | `*BOUNDARY` (static analysis)  <br>or `*DISPLACEMENT` (dynamic analysis) | Directly imposes a numerical value on the selected DOF(s). |
+| Enforce a linear relation between two (or more) DOFs (e.g. U(i)=U(j)) | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the linked DOFs must stay equal. |
+| Tie two surfaces (contact) | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; it does **not** prescribe a displacement. |
+
+---
+
+### 1. Why the line you wrote does **not** give a displacement  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```
+
+`*EQUATION` only tells Abaqus that  
+
+\[
+1\;U_{3}(105) + (-1)\;U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+i.e. the **Z‑translation of node 105 must stay equal to the Z‑translation of node 129**.  
+No numerical value (0.005 mm, 1 mm, …) is prescribed, so the model can move freely as long as the two DOFs remain equal.  
+To *set* a displacement you must use a **boundary condition** (`*BOUNDARY` for static analyses or `*DISPLACEMENT` for dynamic analyses).
+
+---
+
+### 2. Minimal, copy‑paste‑able static example that applies a **0.005 mm** Z‑displacement to node 105  
+
+```abaqus
+*HEADING
+** Example: prescribe U3 = +0.005 mm at node 105
+*NODE
+105, 0., 0., 0.          ; coordinates of node 105 (change as needed)
+129, 10., 0., 0.         ; a second node – only needed later if you also tie
+
+*NSET, NSET=N105
+105                      ; node set that will receive the prescribed value
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; total time, initial increment, minimum increment, maximum increment
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3 (U3) = +0.005 mm (units of your model)
+
+*END STEP
+```
+
+**Field meaning**
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | Name of the node set that contains the constrained node(s). |
+| `105` | Node label (optional when a node set is given). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as previous column when only one DOF). |
+| `0.005` | Value to impose (e.g. mm). |
+
+---
+
+#### 2‑a. Ramped (time‑dependent) displacement (optional)
+
+If the displacement must increase from 0 → 0.005 mm during the step, define an amplitude and attach it to the boundary condition:
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.          ; at step time = 0, factor = 0
+1., 1.          ; at step end, factor = 1
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+The amplitude multiplies the prescribed value (0.005 mm) as the step progresses.
+
+---
+
+### 3. When you also need a **tie** (linear relation) between two nodes  
+
+Suppose you want node 105 and node 129 to move together **and** you want that common motion to be 0.005 mm. Use both `*EQUATION` (or `*MPC`) and `*BOUNDARY`:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; forces U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; prescribes the value of the tied DOF
+```
+
+* `*EQUATION` enforces the linear relation `U3(105)=U3(129)`.  
+* `*BOUNDARY` supplies the numerical value (0.005 mm) that the linked DOFs must take.
+
+If you **do not** need the tie, simply omit the `*EQUATION` block and keep only the `*BOUNDARY` entry.
+
+---
+
+### 4. Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*HEADING
+** Prescribed Z‑displacement at node 105 (optional tie to node 129)
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; (optional) tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+Remove the `*EQUATION` block if you only need the prescribed displacement.
+
+---
+
+### 5. Bottom line – which keyword for which goal  
+
+| Goal | Keyword to use |
+|------|----------------|
+| Prescribed displacement/rotation (static) | `*BOUNDARY` |
+| Prescribed displacement/rotation (dynamic) | `*DISPLACEMENT` |
+| Linear relation / tie between DOFs (node‑to‑node) | `*EQUATION` (or `*MPC`) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+
+---
+
+**TL;DR** – Your original `*EQUATION` line only **links** two DOFs; it does **not** set a value.  
+To impose a 0.005 mm Z‑displacement on node 105, add a `*BOUNDARY` (or `*DISPLACEMENT`) entry.  
+If you also need node 105 to move together with node 129, keep the `*EQUATION` (or `*MPC`) in addition to the `*BOUNDARY`.  
+
+Feel free to ask for variations (multiple nodes, dynamic steps, contact definitions, etc.).
+A: **Short answer**
+
+| What you want to do | Abaqus keyword(s) | What it does |
+|---------------------|-------------------|--------------|
+| Prescribe a displacement (or rotation) at a node or node‑set (static) | `*BOUNDARY` | Directly imposes a numerical value on the selected DOF(s). |
+| Prescribe a displacement (or rotation) at a node or node‑set (dynamic) | `*DISPLACEMENT` | Same as `*BOUNDARY` but for explicit/implicit dynamic steps. |
+| Enforce a linear relation between two (or more) DOFs (e.g. U(i)=U(j)) | `*EQUATION` (or the older `*MPC`) | Creates a multi‑point constraint (MPC). No value is prescribed – the linked DOFs must stay equal. |
+| Tie two surfaces (contact) | `*TIE` (or `*CONTACT`) | Generates a master‑slave contact pair; it does **not** prescribe a displacement. |
+
+---
+
+## 1. Why the line you wrote does **not** give a displacement  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```
+
+`*EQUATION` tells Abaqus that  
+
+\[
+1\;U_{3}(105) + (-1)\;U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+i.e. **the Z‑translation of node 105 must stay equal to the Z‑translation of node 129**.  
+No numerical value (0.005 mm, 1 mm, …) is prescribed, so the model can translate freely as long as the two DOFs remain equal.  
+To *set* a displacement you must use a **boundary condition** (`*BOUNDARY` for static analyses or `*DISPLACEMENT` for dynamic analyses).
+
+---
+
+## 2. Minimal, copy‑paste‑able static example that applies a **0.005 mm** Z‑displacement to node 105  
+
+```abaqus
+*HEADING
+** Example: prescribe U3 = +0.005 mm at node 105
+*NODE
+105, 0., 0., 0.          ; coordinates of node 105 (change as needed)
+129, 10., 0., 0.         ; a second node – only needed later if you also tie
+
+*NSET, NSET=N105
+105                      ; node set that will receive the prescribed value
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; total time, initial increment, min inc, max inc
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3 (U3) = +0.005 mm (units of your model)
+
+*END STEP
+```
+
+### Field meaning
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | Name of the node set that contains the constrained node(s). |
+| `105` | Node label (optional when a node set is given). |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z translation; 4‑RX, 5‑RY, 6‑RZ rotation). |
+| `3` | First DOF to be constrained (same as previous column when only one DOF). |
+| `0.005` | Value to impose (e.g. mm). |
+
+---
+
+## 2‑a. Ramped (time‑dependent) displacement (optional)
+
+If the displacement must increase from 0 → 0.005 mm during the step, define an amplitude and attach it to the boundary condition:
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.          ; at step time = 0, factor = 0
+1., 1.          ; at step end, factor = 1
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+The amplitude multiplies the prescribed value (0.005 mm) as the step progresses.
+
+---
+
+## 3. When you also need a **tie** (linear relation) between two nodes  
+
+Suppose you want node 105 and node 129 to move together **and** you want that common motion to be 0.005 mm. Use both `*EQUATION` (or `*MPC`) **and** `*BOUNDARY`:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; forces U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; prescribes the value of the tied DOF
+```
+
+* `*EQUATION` enforces the linear relation `U3(105)=U3(129)`.  
+* `*BOUNDARY` supplies the numerical value (0.005 mm) that the linked DOFs must take.
+
+If you **do not** need the tie, simply omit the `*EQUATION` block and keep only the `*BOUNDARY` entry.
+
+---
+
+## 4. Quick cheat‑sheet (copy‑paste)
+
+```abaqus
+*HEADING
+** Prescribed Z‑displacement at node 105 (optional tie to node 129)
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribe U3 = +0.005 mm at node 105
+
+*EQUATION                  ; (optional) tie node 105 and 129 in Z‑direction
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+Remove the `*EQUATION` block if you only need the prescribed displacement.
+
+---
+
+## 5. Bottom line – which keyword for which goal  
+
+| Goal | Keyword to use |
+|------|----------------|
+| Prescribed displacement/rotation (static) | `*BOUNDARY` |
+| Prescribed displacement/rotation (dynamic) | `*DISPLACEMENT` |
+| Linear relation / tie between DOFs (node‑to‑node) | `*EQUATION` (or `*MPC`) |
+| Surface‑to‑surface tie (contact) | `*TIE` (or `*CONTACT`) |
+
+---
+
+### TL;DR  
+
+*Your original `*EQUATION` line only **links** two DOFs; it does **not** set a value.*  
+To impose a **0.005 mm Z‑displacement** on node 105, add a `*BOUNDARY` (or `*DISPLACEMENT`) entry.  
+If you also need node 105 to move together with node 129, keep the `*EQUATION` (or `*MPC`) in addition to the `*BOUNDARY`.  
+
+Feel free to ask for variations (multiple nodes, dynamic steps, contact definitions, etc.).
+
+=== 2026-04-20 16:54:53 ===
+Q: **简要结论**
+
+| 目标 | 关键字 | 说明 |
+|------|--------|------|
+| 在 **静态** 分析中给节点（或节点集）施加位移/转角 | `*BOUNDARY` | 直接在指定的 DOF 上给出数值（如 0.005 mm）。 |
+| 在 **动态**（显式/隐式）分析中给节点（或节点集）施加位移/转角 | `*DISPLACEMENT` | 与 `*BOUNDARY` 功能相同，只能在动态步中使用。 |
+| 使两个（或多个） DOF **保持相等**（如 U(i)=U(j)） | `*EQUATION`（或旧版 `*MPC`） | 形成多点约束（MPC），**不**给出位移值，只是把 DOF 关联起来。 |
+| 将两块表面 **粘结**（接触） | `*TIE`（或 `*CONTACT`） | 产生主‑从接触对，**不**施加位移。 |
+
+---
+
+## 1. 为什么 `*EQUATION` 不能直接给位移
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```
+
+这条语句的含义是  
+
+\[
+1\;U_{3}(105) + (-1)\;U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+即 **节点 105 的 Z 位移必须等于节点 129 的 Z 位移**。  
+这里没有出现任何数值（0.005 mm、1 mm …），因此模型仍然可以自由移动，只要两个 DOF 保持相等即可。  
+要 **设定** 位移，需要使用 **边界条件**：`*BOUNDARY`（静态）或 `*DISPLACEMENT`（动态）。
+
+---
+
+## 2. 最小、可直接拷贝的 **静态** 示例——在节点 105 上施加 0.005 mm 的 Z 位移
+
+```abaqus
+*HEADING
+** 例：在节点 105 上施加 U3 = +0.005 mm
+*NODE
+105, 0., 0., 0.          ; 节点 105 的坐标（自行修改）
+129, 10., 0., 0.         ; 另一个节点，仅在需要“节点‑节点”约束时使用
+
+*NSET, NSET=N105
+105                      ; 包含受约束节点的节点集
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; 总步长、初始增量、最小增量、最大增量
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3（U3） = +0.005 mm（单位与模型一致）
+
+*END STEP
+```
+
+### 关键字段解释
+
+| 字段 | 含义 |
+|------|------|
+| `NSET=N105` | 约束所在的节点集名称 |
+| `105` | 节点编号（若已给出 NSET，可省略） |
+| `3` | DOF 编号（1‑X，2‑Y，3‑Z 位移，4‑RX，5‑RY，6‑RZ） |
+| `3` | 第一个受约束的 DOF（若只约束一个 DOF，前后相同） |
+| `0.005` | 施加的位移值（本例为 mm） |
+
+---
+
+## 2‑a. 若位移随时间线性增长（幅值）——可选
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.          ; 步开始时，系数 0
+1., 1.          ; 步结束时，系数 1
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+幅值 `AMP-1` 会把 0.005 mm 乘以 0→1 的因子，使位移在步内从 0 线性增长到 0.005 mm。
+
+---
+
+## 3. 同时需要 **节点‑节点约束（Tie）** 的情况
+
+如果希望节点 105 与节点 129 **保持相同的 Z 位移**，且该共同位移为 0.005 mm，则两条关键字必须同时出现：
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; 强制 U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; 为关联的 DOF 施加数值位移
+```
+
+- `*EQUATION`（或 `*MPC`）负责 **关联** 两个 DOF。  
+- `*BOUNDARY`（或 `*DISPLACEMENT`）负责 **给出** 具体的位移值。
+
+如果不需要这种关联，只保留 `*BOUNDARY` 即可。
+
+---
+
+## 4. 快速复制‑粘贴的完整输入（含可选约束）
+
+```abaqus
+*HEADING
+** 在节点 105 上施加 Z 位移（可选与节点 129 绑定）
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; 施加 U3 = +0.005 mm
+
+*EQUATION                  ;（可选）将节点 105 与 129 在 Z 方向绑定
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+如只需位移，删除 `*EQUATION` 块即可。
+
+---
+
+## 5. 关键字对应目标一览
+
+| 目标 | 关键字 |
+|------|--------|
+| 静态分析中的位移/转角 | `*BOUNDARY` |
+| 动态分析中的位移/转角 | `*DISPLACEMENT` |
+| 节点‑节点或节点‑自由度的线性约束 | `*EQUATION`（或 `*MPC`） |
+| 表面‑表面粘结（接触） | `*TIE`（或 `*CONTACT`） |
+
+---
+
+### TL;DR（最重要的两句话）
+
+1. `*EQUATION` 只能 **关联** 两个自由度，**不**给出位移值。  
+2. 若要在节点 105 上施加 **0.005 mm 的 Z 位移**，必须使用 `*BOUNDARY`（静态）或 `*DISPLACEMENT`（动态）。  
+   - 如还需要节点 105 与节点 129 同步移动，则在 `*BOUNDARY` 之外再加入 `*EQUATION`（或 `*MPC`）即可。
+
+如需进一步的示例（多节点、显式/隐式动态、接触定义等），请随时提问。祝您建模顺利！
+A: **简要结论**  
+
+| 目标 | 关键字 | 备注 |
+|------|--------|------|
+| **静态** 分析中给节点（或节点集）施加位移/转角 | `*BOUNDARY` | 只能在 *STEP‑STATIC*（或 *STEP‑STATIC, *NLGEOM=YES*）中使用 |
+| **动态** （显式/隐式）分析中给节点（或节点集）施加位移/转角 | `*DISPLACEMENT` | 只能在 *STEP‑DYNAMIC*（*STATIC*、*DYNAMIC*、*IMPLICIT*、*EXPLICIT*）中使用 |
+| 使两个（或多个） DOF **保持相等**（U(i)=U(j)） | `*EQUATION`（或旧版 `*MPC`） | 只建立 **约束关系**，不提供数值位移 |
+| 将两块表面 **粘结**（接触） | `*TIE`（或 `*CONTACT`） | 产生主‑从接触对，亦不提供位移 |
+
+下面逐条说明，并给出 **最小、可直接拷贝‑粘贴** 的完整 Abaqus 输入文件示例。
+
+---
+
+## 1. 为什么 `*EQUATION` 不能直接给位移  
+
+`*EQUATION` 用来 **定义线性多点约束（MPC）**，其语法是  
+
+```
+*EQUATION
+N
+node1, dof1, coeff1, node2, dof2, coeff2, … , nodeN, dofN, coeffN, RHS
+```
+
+- **左侧**：各自由度乘以系数的线性组合  
+- **右侧**：常数项（RHS），默认 0  
+
+示例  
+
+```abaqus
+*EQUATION
+2
+105, 3, 1., 129, 3, -1.
+```
+
+含义是  
+
+\[
+1\;U_{3}(105) + (-1)\;U_{3}(129) = 0 \;\Longrightarrow\; U_{3}(105)=U_{3}(129)
+\]
+
+**没有出现任何位移数值**，因此模型仍然可以整体平移或转动，只要两个 DOF 保持相等即可。  
+若想 **指定** 位移大小，必须使用 **边界条件关键字**（`*BOUNDARY` / `*DISPLACEMENT`），它们在 DOF 上直接写入数值。
+
+---
+
+## 2. 最小、可直接拷贝的 **静态** 示例  
+在节点 **105** 上施加 **+0.005 mm** 的 Z 位移（U3），其它节点保持自由。
+
+```abaqus
+*HEADING
+** 示例：在节点 105 上施加 U3 = +0.005 mm（静态分析）
+*NODE
+105, 0., 0., 0.          ; 节点 105 的坐标（自行修改为实际位置）
+*END NODE
+
+*NSET, NSET=N105
+105                      ; 包含受约束节点的节点集
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; 总步长、初始增量、最小增量、最大增量
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3（U3） = +0.005 mm
+*END STEP
+```
+
+### 关键字段解释  
+
+| 关键字 | 说明 |
+|--------|------|
+| `NSET=N105` | 约束所在的节点集名称 |
+| `105` | 节点编号（若已在 NSET 中，可省略） |
+| `3` | DOF 编号（1‑X，2‑Y，3‑Z 位移，4‑RX，5‑RY，6‑RZ） |
+| `0.005` | 施加的位移值（单位与模型一致，例：mm） |
+
+---
+
+## 2‑a. 位移随时间线性增长（幅值）——可选  
+
+如果希望位移在步内 **从 0 线性增长到 0.005 mm**，可以配合 `*AMPLITUDE`：
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.          ; 步开始时，系数 0
+1., 1.          ; 步结束时，系数 1
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```
+
+`AMP-1` 把 0.005 mm 乘以 0→1 的因子，使位移在 STEP‑1 内线性插值。
+
+---
+
+## 3. 同时需要 **节点‑节点约束（Tie）** 的情况  
+
+假设 **节点 105 与节点 129 必须保持相同的 Z 位移**，且该共同位移为 **0.005 mm**。  
+则需要 **两条关键字** 同时出现：
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; 强制 U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; 为关联的 DOF 施加数值位移
+```
+
+- `*EQUATION`（或 `*MPC`）负责 **关联** 两个 DOF。  
+- `*BOUNDARY`（或 `*DISPLACEMENT`）负责 **给出** 具体的位移值。  
+
+如果不需要关联，只保留 `*BOUNDARY` 即可。
+
+---
+
+## 4. 完整、可直接复制‑粘贴的输入文件（含可选约束）  
+
+```abaqus
+*HEADING
+** 在节点 105 上施加 Z 位移（可选与节点 129 绑定）
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.        ; 仅在需要节点‑节点约束时保留
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; 施加 U3 = +0.005 mm
+
+*EQUATION                  ;（可选）将节点 105 与 129 在 Z 方向绑定
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+> **提示**：如果只需要位移，直接删除 `*EQUATION` 块；如果需要随时间变化的位移，加入 `*AMPLITUDE` 并在 `*BOUNDARY` 中引用。
+
+---
+
+## 5. 动态分析中施加位移的写法  
+
+在显式或隐式 **动态** 步中，使用 `*DISPLACEMENT`（而不是 `*BOUNDARY`）：
+
+```abaqus
+*STEP, NAME=DYNA, NLGEOM=YES
+*DYNAMIC, EXPLICIT
+0.001, 0.01, 1e-06, 1.0   ; (dt, total time, min dt, max dt)
+
+*DISPLACEMENT, NSET=N105
+105, 3, 0.005            ; 同样是 U3 = 0.005 mm（在该时间步内保持不变）
+*END STEP
+```
+
+`*DISPLACEMENT` 的语法与 `*BOUNDARY` 完全相同，只是 **只能在动态步** 中使用。
+
+---
+
+## 6. 关键字对应目标一览（快速查表）  
+
+| 目标 | 关键字 | 适用步类型 |
+|------|--------|------------|
+| 静态位移/转角 | `*BOUNDARY` | `*STATIC`、`*STATIC, *NLGEOM=YES` |
+| 动态位移/转角 | `*DISPLACEMENT` | `*DYNAMIC`（显式/隐式） |
+| 多点约束（DOF 相等） | `*EQUATION`（或 `*MPC`） | 任意步 |
+| 表面‑表面粘结（接触） | `*TIE`（或 `*CONTACT`） | 任意步（需配合接触定义） |
+
+---
+
+## 7. TL;DR（最重要的两句话）  
+
+1. **`*EQUATION` 只能关联自由度，不能直接给出位移值**；若要施加具体位移，必须使用 `*BOUNDARY`（静态）或 `*DISPLACEMENT`（动态）。  
+2. 在节点 105 上施加 **0.005 mm 的 Z 位移** 的最简输入如下（如需节点‑节点同步移动，再加入 `*EQUATION`）：
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005
+*EQUATION   ;（可选） 105‑129 Z 位移相等
+2
+105, 3, 1.0,
+129, 3,-1.0
+```
+
+如需进一步示例（多节点、显式/隐式动态、接触、温度耦合等），请告诉具体需求，我会为您补充完整的输入文件。祝建模顺利！
+
+=== 2026-04-20 16:55:53 ===
+Q: **简要结论**  
+
+| 目标 | 关键字 | 适用步类型 | 备注 |
+|------|--------|------------|------|
+| **静态** 分析中给节点（或节点集）施加位移/转角 | `*BOUNDARY` | `*STATIC`（或 `*STATIC, *NLGEOM=YES`） | 直接在 DOF 上写数值 |
+| **动态** （显式/隐式）分析中给节点（或节点集）施加位移/转角 | `*DISPLACEMENT` | `*DYNAMIC`（显式/隐式） | 只能在动态步中使用 |
+| 使两个（或多个） DOF **保持相等**（U(i)=U(j)） | `*EQUATION`（或旧版 `*MPC`） | 任意步 | 只建立 **约束关系**，不提供数值位移 |
+| 将两块表面 **粘结**（接触） | `*TIE`（或 `*CONTACT`） | 任意步（需配合接触定义） | 产生主‑从接触对，亦不提供位移 |
+
+下面逐条说明，并给出 **最小、可直接拷贝‑粘贴** 的完整 Abaqus 输入文件示例。
+
+---
+
+## 1. 为什么 `*EQUATION` 不能直接给位移  
+
+`*EQUATION` 用来 **定义线性多点约束（MPC）**，其语法是  
+
+```
+*EQUATION
+N
+node1, dof1, coeff1, node2, dof2, coeff2, … , nodeN, dofN, coeffN, RHS
+```  
+
+- **左侧**：各自由度乘以系数的线性组合  
+- **右侧**：常数项（RHS），默认 0  
+
+示例  
+
+```abaqus
+*EQUATION
+2
+105, 3, 1., 129, 3, -1.
+```  
+
+含义是  
+
+\[
+1\;U_{3}(105) + (-1)\;U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+**没有出现任何位移数值**，因此模型仍然可以整体平移或转动，只要两个 DOF 保持相等即可。  
+若要 **指定** 位移大小，必须使用 **边界条件关键字**（`*BOUNDARY` / `*DISPLACEMENT`），它们在 DOF 上直接写入数值。
+
+---
+
+## 2. 最小、可直接拷贝的 **静态** 示例  
+
+在节点 **105** 上施加 **+0.005 mm** 的 Z 位移（U3），其它节点保持自由。
+
+```abaqus
+*HEADING
+** 示例：在节点 105 上施加 U3 = +0.005 mm（静态分析）
+*NODE
+105, 0., 0., 0.          ; 节点 105 的坐标（自行修改为实际位置）
+*END NODE
+
+*NSET, NSET=N105
+105                      ; 包含受约束节点的节点集
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; 总步长、初始增量、最小增量、最大增量
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3（U3） = +0.005 mm
+*END STEP
+```  
+
+### 关键字段解释  
+
+| 字段 | 含义 |
+|------|------|
+| `NSET=N105` | 约束所在的节点集名称 |
+| `105` | 节点编号（若已在 NSET 中，可省略） |
+| `3` | DOF 编号（1‑X，2‑Y，3‑Z 位移，4‑RX，5‑RY，6‑RZ） |
+| `0.005` | 施加的位移值（单位与模型一致，例：mm） |
+
+---
+
+## 2‑a. 位移随时间线性增长（幅值）——可选  
+
+如果希望位移在步内 **从 0 线性增长到 0.005 mm**，可以配合 `*AMPLITUDE`：
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.          ; 步开始时，系数 0
+1., 1.          ; 步结束时，系数 1
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```  
+
+`AMP-1` 把 0.005 mm 乘以 0→1 的因子，使位移在 STEP‑1 内线性插值。
+
+---
+
+## 3. 同时需要 **节点‑节点约束（Tie）** 的情况  
+
+假设 **节点 105 与节点 129 必须保持相同的 Z 位移**，且该共同位移为 **0.005 mm**。  
+则需要 **两条关键字** 同时出现：
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; 强制 U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; 为关联的 DOF 施加数值位移
+```  
+
+- `*EQUATION`（或 `*MPC`）负责 **关联** 两个 DOF。  
+- `*BOUNDARY`（或 `*DISPLACEMENT`）负责 **给出** 具体的位移值。  
+
+如果不需要这种关联，只保留 `*BOUNDARY` 即可。
+
+---
+
+## 4. 完整、可直接复制‑粘贴的输入文件（含可选约束）  
+
+```abaqus
+*HEADING
+** 在节点 105 上施加 Z 位移（可选与节点 129 绑定）
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.        ; 仅在需要节点‑节点约束时保留
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; 施加 U3 = +0.005 mm
+
+*EQUATION                  ;（可选）将节点 105 与 129 在 Z 方向绑定
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```  
+
+> **提示**：如果只需要位移，直接删除 `*EQUATION` 块；如果需要随时间变化的位移，加入 `*AMPLITUDE` 并在 `*BOUNDARY` 中引用。
+
+---
+
+## 5. 动态分析中施加位移的写法  
+
+在显式或隐式 **动态** 步中，使用 `*DISPLACEMENT`（而不是 `*BOUNDARY`）：
+
+```abaqus
+*STEP, NAME=DYNA, NLGEOM=YES
+*DYNAMIC, EXPLICIT
+0.001, 0.01, 1e-06, 1.0   ; (dt, total time, min dt, max dt)
+
+*DISPLACEMENT, NSET=N105
+105, 3, 0.005            ; 同样是 U3 = 0.005 mm（在该时间步内保持不变）
+*END STEP
+```  
+
+`*DISPLACEMENT` 的语法与 `*BOUNDARY` 完全相同，只能在 **动态步** 中使用。
+
+---
+
+## 6. 关键字对应目标快速查表  
+
+| 目标 | 关键字 | 适用步类型 |
+|------|--------|------------|
+| 静态位移/转角 | `*BOUNDARY` | `*STATIC`、`*STATIC, *NLGEOM=YES` |
+| 动态位移/转角 | `*DISPLACEMENT` | `*DYNAMIC`（显式/隐式） |
+| 多点约束（DOF 相等） | `*EQUATION`（或 `*MPC`） | 任意步 |
+| 表面‑表面粘结（接触） | `*TIE`（或 `*CONTACT`） | 任意步（需配合接触定义） |
+
+---
+
+## 7. TL;DR（最重要的两句话）  
+
+1. **`*EQUATION` 只能建立自由度之间的线性约束，不能直接给出位移数值**；若要施加具体位移，必须使用 `*BOUNDARY`（静态）或 `*DISPLACEMENT`（动态）。  
+2. 在节点 105 上施加 **0.005 mm 的 Z 位移** 的最简输入如下（如需节点‑节点同步移动，再加入 `*EQUATION`）：
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005
+*EQUATION   ;（可选） 105‑129 Z 位移相等
+2
+105, 3, 1.0,
+129, 3,-1.0
+```  
+
+如需进一步示例（多节点、显式/隐式动态、接触、温度耦合等），请告诉具体需求，我会为您补充完整的输入文件。祝建模顺利！
+A: **简要结论**  
+
+| 目标 | 关键字 | 适用步类型 | 备注 |
+|------|--------|------------|------|
+| **静态** 分析中给节点（或节点集）施加位移/转角 | `*BOUNDARY` | `*STATIC`（或 `*STATIC, NLGEOM=YES`） | 直接在 DOF 上写数值 |
+| **动态** （显式/隐式）分析中给节点（或节点集）施加位移/转角 | `*DISPLACEMENT` | `*DYNAMIC`（显式/隐式） | 只能在动态步中使用 |
+| 使两个（或多个） DOF **保持相等**（U(i)=U(j)） | `*EQUATION`（或旧版 `*MPC`） | 任意步 | 只建立 **约束关系**，不提供数值位移 |
+| 将两块表面 **粘结**（接触） | `*TIE`（或 `*CONTACT`） | 任意步（需配合接触定义） | 产生主‑从接触对，亦不提供位移 |
+
+下面逐条说明，并给出 **最小、可直接拷贝‑粘贴** 的完整 Abaqus 输入文件示例。
+
+---
+
+## 1. 为什么 `*EQUATION` 不能直接给位移  
+
+`*EQUATION` 用来 **定义线性多点约束（MPC）**，其语法是  
+
+```
+*EQUATION
+N
+node1, dof1, coeff1, node2, dof2, coeff2, … , nodeN, dofN, coeffN, RHS
+```  
+
+- **左侧**：各自由度乘以系数的线性组合  
+- **右侧**：常数项（RHS），默认 0  
+
+示例  
+
+```abaqus
+*EQUATION
+2
+105, 3, 1., 129, 3, -1.
+```  
+
+含义是  
+
+\[
+1\;U_{3}(105) + (-1)\;U_{3}(129)=0\;\Longrightarrow\;U_{3}(105)=U_{3}(129)
+\]
+
+**没有出现任何位移数值**，因此模型仍然可以整体平移或转动，只要两个 DOF 保持相等即可。  
+若要 **指定** 位移大小，必须使用 **边界条件关键字**（`*BOUNDARY` / `*DISPLACEMENT`），它们在 DOF 上直接写入数值。
+
+---
+
+## 2. 最小、可直接拷贝的 **静态** 示例  
+
+在节点 **105** 上施加 **+0.005 mm** 的 Z 位移（U3），其它节点保持自由。
+
+```abaqus
+*HEADING
+** 示例：在节点 105 上施加 U3 = +0.005 mm（静态分析）
+*NODE
+105, 0., 0., 0.          ; 节点 105 的坐标（自行修改为实际位置）
+*END NODE
+
+*NSET, NSET=N105
+105                      ; 包含受约束节点的节点集
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; 总步长、初始增量、最小增量、最大增量
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3（U3） = +0.005 mm
+*END STEP
+```  
+
+### 关键字段解释  
+
+| 字段 | 含义 |
+|------|------|
+| `NSET=N105` | 约束所在的节点集名称 |
+| `105` | 节点编号（若已在 NSET 中，可省略） |
+| `3` | DOF 编号（1‑X，2‑Y，3‑Z 位移，4‑RX，5‑RY，6‑RZ） |
+| `0.005` | 施加的位移值（单位与模型一致，例：mm） |
+
+---
+
+### 2‑a. 位移随时间线性增长（幅值）——可选  
+
+如果希望位移在步内 **从 0 线性增长到 0.005 mm**，可以配合 `*AMPLITUDE`：
+
+```abaqus
+*AMPLITUDE, NAME=AMP-1, DEFINITION=TABULAR
+0., 0.          ; 步开始时，系数 0
+1., 1.          ; 步结束时，系数 1
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP-1
+105, 3, 3, 0.005
+```  
+
+`AMP-1` 把 0.005 mm 乘以 0→1 的因子，使位移在 STEP‑1 内线性插值。
+
+---
+
+## 3. 同时需要 **节点‑节点约束（Tie）** 的情况  
+
+假设 **节点 105 与节点 129 必须保持相同的 Z 位移**，且该共同位移为 **0.005 mm**。  
+则需要 **两条关键字** 同时出现：
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; 强制 U3(105) = U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005      ; 为关联的 DOF 施加数值位移
+```  
+
+- `*EQUATION`（或 `*MPC`）负责 **关联** 两个 DOF。  
+- `*BOUNDARY`（或 `*DISPLACEMENT`）负责 **给出** 具体的位移值。  
+
+如果不需要这种关联，只保留 `*BOUNDARY` 即可。
+
+---
+
+## 4. 完整、可直接复制‑粘贴的输入文件（含可选约束）  
+
+```abaqus
+*HEADING
+** 在节点 105 上施加 Z 位移（可选与节点 129 绑定）
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.        ; 仅在需要节点‑节点约束时保留
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; 施加 U3 = +0.005 mm
+
+*EQUATION                  ;（可选）将节点 105 与 129 在 Z 方向绑定
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```  
+
+> **提示**：如果只需要位移，直接删除 `*EQUATION` 块；如果需要随时间变化的位移，加入 `*AMPLITUDE` 并在 `*BOUNDARY` 中引用。
+
+---
+
+## 5. 动态分析中施加位移的写法  
+
+在显式或隐式 **动态** 步中，使用 `*DISPLACEMENT`（而不是 `*BOUNDARY`）：
+
+```abaqus
+*STEP, NAME=DYNA, NLGEOM=YES
+*DYNAMIC, EXPLICIT
+0.001, 0.01, 1e-06, 1.0   ; (dt, total time, min dt, max dt)
+
+*DISPLACEMENT, NSET=N105
+105, 3, 0.005            ; 同样是 U3 = 0.005 mm（在该时间步内保持不变）
+*END STEP
+```  
+
+`*DISPLACEMENT` 的语法与 `*BOUNDARY` 完全相同，只能在 **动态步** 中使用。
+
+---
+
+## 6. 关键字对应目标快速查表  
+
+| 目标 | 关键字 | 适用步类型 |
+|------|--------|------------|
+| 静态位移/转角 | `*BOUNDARY` | `*STATIC`、`*STATIC, NLGEOM=YES` |
+| 动态位移/转角 | `*DISPLACEMENT` | `*DYNAMIC`（显式/隐式） |
+| 多点约束（DOF 相等） | `*EQUATION`（或 `*MPC`） | 任意步 |
+| 表面‑表面粘结（接触） | `*TIE`（或 `*CONTACT`） | 任意步（需配合接触定义） |
+
+---
+
+## 7. TL;DR（最重要的两句话）  
+
+1. **`*EQUATION` 只能建立自由度之间的线性约束，不能直接给出位移数值**；若要施加具体位移，必须使用 `*BOUNDARY`（静态）或 `*DISPLACEMENT`（动态）。  
+2. 在节点 105 上施加 **0.005 mm 的 Z 位移** 的最简输入如下（如需节点‑节点同步移动，再加入 `*EQUATION`）：
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005
+*EQUATION   ;（可选） 105‑129 Z 位移相等
+2
+105, 3, 1.0,
+129, 3,-1.0
+```  
+
+如需进一步示例（多节点、显式/隐式动态、接触、温度耦合等），请告诉具体需求，我会为您补充完整的输入文件。祝建模顺利！
+
+=== 2026-04-20 16:56:50 ===
+Q: **Your summary is correct.**  
+
+| 目标 | 关键字 | 适用步类型 | 备注 |
+|------|--------|------------|------|
+| 静态 分析中给节点（或节点集）施加位移/转角 | `*BOUNDARY` | `*STATIC`（或 `*STATIC, NLGEOM=YES`） | 直接在 DOF 上写数值 |
+| 动态 （显式/隐式）分析中给节点（或节点集）施加位移/转角 | `*DISPLACEMENT` | `*DYNAMIC`（显式/隐式） | 只能在动态步中使用 |
+| 使两个（或多个） DOF **保持相等**（U(i)=U(j)） | `*EQUATION`（或旧版 `*MPC`） | 任意步 | 只建立 **约束关系**，不提供数值位移 |
+| 将两块表面 **粘结**（接触） | `*TIE`（或 `*CONTACT`） | 任意步（需配合接触定义） | 产生主‑从接触对，亦不提供位移 |
+
+---
+
+### 1️⃣  Why `*EQUATION` cannot give a displacement value  
+
+`*EQUATION` defines a **linear multi‑point constraint (MPC)**  
+
+```
+*EQUATION
+N
+node, dof, coeff, … , node, dof, coeff, RHS
+```
+
+The left‑hand side is a linear combination of DOFs; the right‑hand side is a constant (default 0).  
+Example  
+
+```abaqus
+*EQUATION
+2
+105, 3, 1., 129, 3, -1.
+```
+
+means  
+
+\[
+U_3(105)-U_3(129)=0\;\Longrightarrow\;U_3(105)=U_3(129)
+\]
+
+No displacement magnitude appears, so the model can still translate or rotate as a whole.  
+To prescribe an actual displacement you must use a **boundary‑condition keyword** (`*BOUNDARY` for static steps, `*DISPLACEMENT` for dynamic steps).
+
+---
+
+### 2️⃣  Minimal static input – 0.005 mm Z‑displacement of node 105  
+
+```abaqus
+*HEADING
+** 0.005 mm Z‑displacement of node 105 (static)
+*NODE
+105, 0., 0., 0.
+*END NODE
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; DOF 3 (U3) = +0.005 mm
+*END STEP
+```
+
+*Key fields*  
+
+| Field | Meaning |
+|-------|---------|
+| `NSET=N105` | node set that receives the condition |
+| `3` | DOF number (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ) |
+| `0.005` | prescribed displacement (units of the model) |
+
+---
+
+#### 2‑a.  Time‑varying displacement (optional)  
+
+```abaqus
+*AMPLITUDE, NAME=AMP1, DEFINITION=TABULAR
+0., 0.
+1., 1.
+
+*BOUNDARY, NSET=N105, AMPLITUDE=AMP1
+105, 3, 3, 0.005
+```
+
+`AMP1` scales the 0.005 mm value from 0 → 1 over the step.
+
+---
+
+### 3️⃣  Adding a node‑to‑node equality (tie)  
+
+If node 105 must move **exactly the same** as node 129 while the pair receives a 0.005 mm displacement:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0               ; U3(105)=U3(129)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005           ; prescribe the actual value
+```
+
+`*EQUATION` (or `*MPC`) creates the equality; `*BOUNDARY` (or `*DISPLACEMENT`) supplies the magnitude.
+
+---
+
+### 4️⃣  Full example (with optional equality)
+
+```abaqus
+*HEADING
+** 0.005 mm Z‑displacement of node 105 (optional tie to node 129)
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.          ; keep only if the tie is required
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribed displacement
+
+*EQUATION                  ; optional: enforce equality with node 129
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+Delete the `*EQUATION` block if you do **not** need the node‑to‑node constraint.
+
+---
+
+### 5️⃣  Dynamic analysis – use `*DISPLACEMENT`
+
+```abaqus
+*STEP, NAME=DYNA, NLGEOM=YES
+*DYNAMIC, EXPLICIT
+0.001, 0.01, 1e-06, 1.0
+
+*DISPLACEMENT, NSET=N105
+105, 3, 0.005            ; same syntax as *BOUNDARY, but only valid in a dynamic step
+*END STEP
+```
+
+---
+
+### 6️⃣  Quick‑reference table
+
+| Goal | Keyword | Step type |
+|------|---------|-----------|
+| Static displacement/rotation | `*BOUNDARY` | `*STATIC` (or `*STATIC, NLGEOM=YES`) |
+| Dynamic displacement/rotation | `*DISPLACEMENT` | `*DYNAMIC` (explicit or implicit) |
+| Equality of DOFs (Uᵢ = Uⱼ) | `*EQUATION` (or `*MPC`) | Any step |
+| Surface‑to‑surface bonding | `*TIE` (or `*CONTACT`) | Any step (requires contact definition) |
+
+---
+
+### 7️⃣ TL;DR  
+
+1. **`*EQUATION` only creates a linear relation between DOFs; it cannot assign a displacement value.** Use `*BOUNDARY` for static steps or `*DISPLACEMENT` for dynamic steps to prescribe the magnitude.  
+2. Minimal input for a 0.005 mm Z‑displacement of node 105 (add the `*EQUATION` block only if you also need node 105 and node 129 to move together):
+
+```abaqus
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; prescribed displacement
+
+*EQUATION                 ; optional – keep if equality with node 129 is required
+2
+105, 3, 1.0,
+129, 3, -1.0
+```
+
+If you need any other examples (multiple nodes, dynamic loading, contact, thermal‑mechanical coupling, etc.) just let me know. Happy modelling!
+A: 下面给出 **完整、最简** 的 Abaqus 输入示例以及关键概念的说明，帮助你在 **静态** 步中把 **节点 105 的 Z 位移 (U3) 设为 +0.005 mm**，并说明 **何时需要 `*EQUATION`（或 `*MPC`）**，以及在 **动态** 步中该如何写。
+
+---
+
+## 1️⃣ 关键概念一览
+
+| 目标 | Abaqus 关键字 | 适用步类型 | 备注 |
+|------|--------------|-----------|------|
+| **直接给节点/节点集施加位移或转角** | `*BOUNDARY` | `*STATIC`（或 `*STATIC, NLGEOM=YES`） | 在 **DOF** 上写具体数值 |
+| **在显式/隐式动态步中施加位移或转角** | `*DISPLACEMENT` | `*DYNAMIC`（显式或隐式） | 只能在动态步里使用 |
+| **让两个（或多个） DOF 保持相等**<br>（U(i)=U(j)） | `*EQUATION`（或旧版 `*MPC`） | 任意步 | 只建立 **约束关系**，不提供数值位移 |
+| **把两块表面粘结（接触）** | `*TIE`（或 `*CONTACT`） | 任意步（需配合接触定义） | 产生主‑从接触对，亦不提供位移 |
+
+> **为什么 `*EQUATION` 不能直接给位移值？**  
+> `*EQUATION` 定义的是 **线性多点约束（MPC）**，其左端是若干 DOF 的线性组合，右端只能是一个常数（默认 0）。  
+> 例如  
+> ```abaqus
+> *EQUATION
+> 2
+> 105, 3, 1., 129, 3, -1.
+> ```  
+> 表示 `U3(105) – U3(129) = 0`，即两点 **相等**，但没有给出具体的位移大小。  
+> 若要真正 **施加** 位移，需要使用 `*BOUNDARY`（静态）或 `*DISPLACEMENT`（动态）关键字。
+
+---
+
+## 2️⃣ 仅用 `*BOUNDARY` 的 **最小静态输入**（0.005 mm Z‑位移）
+
+```abaqus
+*HEADING
+** 0.005 mm Z‑displacement of node 105 (static step)
+*NODE
+105, 0., 0., 0.          ; 只需要声明节点坐标，坐标值可随模型实际情况而定
+
+*NSET, NSET=N105
+105                      ; 创建只含节点 105 的节点集
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.       ; (time, initial increment, min increment, max increment)
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005         ; DOF 3 (U3) = +0.005 mm
+*END STEP
+```
+
+### 关键字段解释
+
+| 字段 | 含义 |
+|------|------|
+| `NSET=N105` | 目标节点集 |
+| `3` | DOF 编号（1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ） |
+| `0.005` | 施加的位移值（模型使用的长度单位） |
+
+---
+
+## 3️⃣ 如需 **节点‑节点相等约束**（例如 105 必须与 129 同步位移）
+
+在上面的模型中再加入：
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0            ; U3(105) = U3(129)
+```
+
+> **注意**：`*EQUATION` 只建立 **U3(105) 与 U3(129) 相等** 的关系，实际位移大小仍由 `*BOUNDARY`（或 `*DISPLACEMENT`）给出。若不需要这种相等约束，直接删除 `*EQUATION` 块即可。
+
+---
+
+## 4️⃣ 动态分析时的写法（显式或隐式）
+
+```abaqus
+*STEP, NAME=DYNA, NLGEOM=YES
+*DYNAMIC, EXPLICIT
+0.001, 0.01, 1e-06, 1.0   ; (total time, initial dt, min dt, max dt)
+
+*DISPLACEMENT, NSET=N105
+105, 3, 0.005            ; 同样的 0.005 mm 位移，只能在 *DYNAMIC 步中使用
+*END STEP
+```
+
+> `*DISPLACEMENT` 的语法与 `*BOUNDARY` 完全相同，只是 **只能在动态步** 中出现。
+
+---
+
+## 5️⃣ TL;DR（快速参考）
+
+| 目标 | 关键字 | 步类型 |
+|------|--------|--------|
+| **静态位移/转角** | `*BOUNDARY` | `*STATIC`（或 `*STATIC, NLGEOM=YES`） |
+| **动态位移/转角** | `*DISPLACEMENT` | `*DYNAMIC`（显式/隐式） |
+| **DOF 相等约束** | `*EQUATION`（或 `*MPC`） | 任意步 |
+| **表面粘结** | `*TIE`（或 `*CONTACT`） | 任意步（需接触定义） |
+
+---
+
+## 6️⃣ 完整示例（含可选相等约束）
+
+```abaqus
+*HEADING
+** 0.005 mm Z‑displacement of node 105, optional tie to node 129
+*NODE
+105, 0., 0., 0.
+129, 10., 0., 0.          ; 仅在需要相等约束时保留
+
+*NSET, NSET=N105
+105
+
+*STEP, NAME=STEP-1, NLGEOM=NO
+*STATIC
+0.1, 1., 1e-05, 1.
+
+*BOUNDARY, NSET=N105
+105, 3, 3, 0.005          ; 施加位移
+
+*EQUATION                  ; ← 可选：若要 105 与 129 同步位移
+2
+105, 3,  1.0,
+129, 3, -1.0
+
+*END STEP
+```
+
+- **不需要相等约束** → 删除 `*EQUATION` 块。  
+- **需要在动态分析中** → 把 `*STATIC` → `*DYNAMIC`，并把 `*BOUNDARY` 换成 `*DISPLACEMENT`。
+
+---
+
+### 如还有其他需求（多节点、随时间变化的位移、接触、热‑机械耦合等），请告诉我，我会再提供相应的完整输入示例。祝建模顺利！
+

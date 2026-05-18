@@ -1,0 +1,142 @@
+I’m happy the package hits all the points you listed! 🎉  
+
+Below is a quick “what‑to‑do‑next” checklist, plus a few optional add‑ons you can pull in with just a couple of lines of code if you ever need them.
+
+---
+
+## 1️⃣ Get the files in place  
+
+1. **Create a folder** (e.g. `beamtor_demo/`).  
+2. **Copy the four files** into that folder:  
+
+   * `beamtor.inp` – the CalculiX model (with the extra 2 MPa pressure step).  
+   * `parse_beamtor.py` – the pure‑Python parser.  
+   * `paraview_snapshot.py` – optional ParaView visualiser.  
+   * `run_all.sh` – optional one‑liner wrapper.  
+
+3. **Make the scripts executable**  
+
+   ```bash
+   chmod +x parse_beamtor.py
+   chmod +x run_all.sh   # only if you want to use the wrapper
+   ```
+
+---
+
+## 2️⃣ Run the workflow step‑by‑step  
+
+| Step | Command | What you’ll see |
+|------|---------|-----------------|
+| **Run CalculiX** | `ccx beamtor.inp` | `results.json` appears in the same folder (thanks to `*OUTPUT, JSON`). |
+| **Parse the JSON** | `./parse_beamtor.py` | Terminal prints the three global numbers (max U, total RF, max σ<sub>VM</sub>) and creates `summary.csv`. |
+| **(Optional) Visualise** | `pvpython paraview_snapshot.py` | A high‑resolution `result.png` showing the deformed mesh coloured by von Mises stress. |
+| **(Optional) One‑liner** | `./run_all.sh` (uncomment the PNG line if you want the image) | Does the three commands above in one go. |
+
+---
+
+## 3️⃣ What the output files contain  
+
+| File | Content |
+|------|---------|
+| **`results.json`** | JSON dump of all nodal (`U`) and element (`S`) results for *each* step. |
+| **`summary.csv`** | Columns: `NodeID, X, Y, Z, Ux, Uy, Uz, ElemID, VonMises, Pressure`.  Every node gets a row; the element columns contain the von Mises and pressure of the *first* element (just a placeholder – you can easily extend the script to map each node to the elements that actually contain it). |
+| **`result.png`** | 1920 × 1080 px image of the deformed mesh coloured by von Mises stress (default “Cool to Warm” colormap). |
+| **`run_all.sh`** | Bash wrapper that runs CalculiX → parser → (optional) PNG in one shot. |
+
+---
+
+## 4️⃣ Common “what‑if” scenarios  
+
+| Situation | What to check / tweak |
+|-----------|-----------------------|
+| **CalculiX complains about `*OUTPUT, JSON`** | Make sure you are using a recent CalculiX version (≥ 2.19). Older releases only support the binary `.frd` output. |
+| **No `RF` entries in the JSON** | You only asked for nodal displacements (`U`). Add `*NODE PRINT, NSET=ALL` and `RF` to the output block if you need reaction forces on the constrained nodes. |
+| **You have a different geometry** | Keep the two `*STEP` blocks exactly as they are (they define the two pressure steps). Replace the `*NODE`, `*ELEMENT`, `*ELSET`, and `*SURFACE` sections with your own mesh definition. |
+| **You want a *strict* node‑to‑element mapping** | In `parse_beamtor.py` replace the “representative element” logic with a proper mapping (e.g. loop over `step["E"]` to collect element connectivity, then assign each node the von Mises of the first element that contains it). |
+| **You need a load‑displacement curve** | Add `*STEP` blocks for each load increment, then modify the parser to loop over **all** steps, pull the vertical `RF` of the constrained node and the vertical `U` of a reference node, and plot with `matplotlib`. |
+| **You want strain‑energy** | Add `*EL PRINT, ENERGY` to the input deck and extend `extract_globals()` to also read `step["ENERGY"]`. |
+
+---
+
+## 5️⃣ Quick‑add‑on: Load‑Displacement Curve (optional)
+
+If you ever decide you’d like a classic **P‑U curve**, just drop the following tiny helper script into the same folder and run it after the CalculiX run:
+
+```python
+#!/usr/bin/env python3
+"""
+ld_curve.py – extracts reaction force (RF) and vertical displacement (U)
+for every step and plots a load‑displacement curve.
+"""
+
+import json, math, sys
+from pathlib import Path
+import matplotlib.pyplot as plt
+
+def vec_norm(v):
+    return math.sqrt(v[0]**2 + v[1]**2 + v[2]**2)
+
+def load_json(fp):
+    with fp.open() as f:
+        return json.load(f)
+
+def main():
+    data = load_json(Path("results.json"))
+    loads = []   # total vertical RF
+    disps = []   # vertical U of node 2 (just an example)
+
+    for i, step in enumerate(data, start=1):
+        # sum of vertical reaction forces (assuming Z‑direction is vertical)
+        total_rf = sum(node["value"][2] for node in step.get("RF", []))
+        loads.append(total_rf)
+
+        # vertical displacement of node 2 (change index if you prefer another node)
+        u_node2 = next((n["value"][2] for n in step.get("U", []) if n["node"] == 2), 0.0)
+        disps.append(u_node2)
+
+    plt.figure()
+    plt.plot(disps, loads, marker='o')
+    plt.xlabel('Vertical displacement of node 2 (m)')
+    plt.ylabel('Total vertical reaction force (N)')
+    plt.title('Load‑Displacement Curve (all steps)')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    main()
+```
+
+*Run it*: `./ld_curve.py` (or `python3 ld_curve.py`).  
+It will pop up a Matplotlib window with the curve for **all** steps (including the 1 MPa and 2 MPa cases).
+
+---
+
+## 6️⃣ What’s next for you?
+
+- **Do you need the load‑displacement curve?** Just drop the `ld_curve.py` script in and run it.  
+- **Do you want a richer CSV (node‑to‑element mapping, extra fields, etc.)?** I can extend `parse_beamtor.py` accordingly.  
+- **Batch mode** (run dozens of `.inp` files and collect the three global numbers into a single Excel sheet)? I can sketch a tiny driver script for that.  
+- **Anything else**—different material model, non‑linear contact, etc.—just let me know.
+
+---
+
+### TL;DR – One‑liner if you want everything (including PNG)
+
+```bash
+# In the folder with the three scripts:
+chmod +x parse_beamtor.py run_all.sh   # first time only
+./run_all.sh   # (uncomment the PNG line inside run_all.sh if you want the image)
+```
+
+If everything runs cleanly you’ll end up with:
+
+```
+beamtor.inp
+results.json
+summary.csv
+result.png   ← (optional)
+run_all.sh   ← (optional)
+```
+
+Feel free to fire away with any follow‑up request—whether it’s a tiny tweak or a whole new post‑processing routine. I’m here to help!

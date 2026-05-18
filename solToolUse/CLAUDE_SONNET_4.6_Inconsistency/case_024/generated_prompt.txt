@@ -1,0 +1,35 @@
+Use FEniCS legacy (dolfin) for all implementation.
+Solve a 2D plane-stress linear elasticity problem for a rectangular plate with a centred circular hole.
+The domain is a rectangle (0, 1.0) x (0, 0.20) metres with a circular hole of radius a = 0.05 m centred at (0.50, 0.10).
+Build the geometry using mshr: create a Rectangle from Point(0,0) to Point(1.0, 0.20) and subtract a Circle centred at Point(0.50, 0.10) with radius 0.05.
+Generate the mesh using mshr.generate_mesh with a resolution of 64 or higher to resolve the hole boundary accurately.
+Use plane-stress linear elasticity for the displacement field u = (u_x, u_y).
+Material properties: Young's modulus E = 200e9 Pa, Poisson's ratio nu = 0.30.
+Compute the plane-stress Lame-like parameters: lambda_ps = E*nu / (1 - nu**2), mu = E / (2*(1 + nu)).
+Define the plane-stress constitutive law: sigma(u) = lambda_ps * tr(eps(u)) * I + 2*mu * eps(u), where eps(u) = sym(grad(u)) and I is the 2x2 identity.
+Use a vector-valued continuous Lagrange finite element space of degree 2 (VectorFunctionSpace with 'CG', 2) for the displacement.
+Define the variational problem: find u in V such that inner(sigma(u), eps(v)) * dx = dot(t_vec, v) * ds(right_tag) for all v in V, where t_vec = Constant((2e6, 0.0)) representing the traction in Pa (N/m^2) applied as a line traction per unit thickness on the right edge.
+Mark boundaries using a MeshFunction of size_t on facets.
+Mark the left edge (x = 0) with tag 1: all facets where all vertices satisfy x < DOLFIN_EPS.
+Mark the right edge (x = 1.0) with tag 2: all facets where all vertices satisfy x > 1.0 - DOLFIN_EPS.
+Mark the hole boundary with tag 3: all facets where all vertices satisfy sqrt((x-0.5)**2 + (y-0.1)**2) < 0.05 + 1e-3.
+Define the measure ds using the facet MeshFunction so that ds(1) integrates over the left edge, ds(2) over the right edge, and ds(3) over the hole boundary.
+Apply Dirichlet boundary conditions on the left edge (tag 1): fix both components u_x = 0 and u_y = 0 using DirichletBC with the SubDomain or the marked boundary.
+Apply no Dirichlet condition on the hole boundary for the tangential direction; instead impose zero normal displacement on the hole boundary as a constraint.
+Impose zero normal displacement on the hole boundary by projecting the displacement onto the outward normal direction: define a DirichletBC that constrains the normal component of u to zero on the hole boundary using a projected scalar subspace or by constraining u dot n = 0 via a Lagrange multiplier or by constraining both u_x and u_y to zero on the hole boundary only in the normal direction.
+Implement the zero-normal-displacement constraint on the hole boundary using a penalty method or by rotating the local coordinate system: add a penalty term alpha * dot(u, n) * dot(v, n) * ds(3) to the bilinear form, where n is the outward normal on the hole boundary and alpha = E * 1e4 (a large penalty parameter).
+The right edge traction contributes the linear form: L = dot(Constant((2e6, 0.0)), v) * ds(2).
+All other boundaries (top, bottom external edges, hole) have zero traction in the linear form (natural boundary condition), so no additional terms are needed for them in L.
+Assemble the system and solve using a direct linear solver (LUSolver or the default direct solver via solve(a == L, u, bcs)).
+After solving, compute the von Mises stress field.
+Compute the stress tensor sigma_h = lambda_ps * tr(eps(u_h)) * I + 2*mu * eps(u_h) projected onto a TensorFunctionSpace or computed pointwise.
+Compute von Mises stress as: vm = sqrt(sigma_xx**2 - sigma_xx*sigma_yy + sigma_yy**2 + 3*sigma_xy**2) using the plane-stress formula.
+Project the von Mises expression onto a scalar FunctionSpace('CG', 1) or ('DG', 0).
+Save the von Mises stress plot as q3_vm.png using matplotlib: plot the mesh-based field with a colorbar labelled 'Von Mises Stress (Pa)', add a title 'Plane-Stress Von Mises Stress', and save with dpi=150.
+Save the displacement field u_h to a file named displacement.xdmf using XDMFFile in dolfin, writing the mesh and the displacement function.
+To find the maximum von Mises stress on the hole boundary, evaluate the von Mises function at all mesh vertices that lie on the hole boundary (distance from (0.5, 0.1) within tolerance 0.05 + 1e-3) and take the maximum value.
+Report the maximum von Mises stress on the hole boundary as sigma_max in Pa.
+Compute the stress concentration factor Kt = sigma_max / 2e6.
+Print to stdout: "Max von Mises stress on hole boundary: {sigma_max:.4e} Pa" and "Stress concentration factor Kt = {Kt:.4f}".
+Use unit thickness (thickness = 1.0 m) throughout; no thickness scaling is needed since the traction is already in Pa.
+Do not use any deprecated or non-legacy FEniCS API; use only dolfin imports.

@@ -1,0 +1,87 @@
+**TL;DR – The script you already have checks every box you listed and can be dropped straight into your pipelines or CI jobs.**  
+
+Below is a quick‑reference that maps each of your original requirements to the concrete implementation in the script, followed by a few optional “next‑step” tweaks you can pick if you need anything extra.
+
+---
+
+## ✅ How the script satisfies the original spec
+
+| Requirement | Where it’s handled |
+|-------------|--------------------|
+| **Argument parsing** – required `--input`, optional `--delimiter`, `--log`, `--error‑code‑map` | `argparse.ArgumentParser` (‑i/‑‑input required, ‑d/‑‑delimiter defaults to `,`, ‑l/‑‑log adds a file handler, ‑e/‑‑error‑code‑map loads a JSON dict). |
+| **Single‑character delimiter (default “,”)** | `delimiter = args.delimiter` – any one‑character string works (`|`, `\t`, etc.). |
+| **Configurable error‑code map** | `DEFAULT_ERROR_CODES` dict is the fallback; a JSON file supplied via `‑e/‑‑error‑code‑map` merges/overrides it. |
+| **Logging** – INFO to console, DEBUG to optional file | Console handler at INFO is always on; `‑l/‑‑log` adds a DEBUG‑level file handler. |
+| **Streaming I/O** – line‑by‑line, no whole‑file load | `csv.reader` reads one row at a time; rows are written immediately to `sys.stdout`. |
+| **Extensible row processing** | All per‑row logic lives in `process_line(row, delimiter, logger)`. Swap out the checksum, add columns, reorder fields, etc., without touching the driver code. |
+| **Exit status reflects error‑code map** | `sys.exit(exit_code)` where `exit_code` is taken from the (default or custom) map (`SUCCESS`, `MISSING_INPUT`, …). |
+
+---
+
+## 🚀 Quick‑start usage
+
+```bash
+# 1️⃣ Default CSV → stdout
+./process_file.py --input data.csv
+
+# 2️⃣ Pipe‑separated file + debug log
+./process_file.py -i data.psv -d '|' -l process.log
+
+# 3️⃣ Custom error‑code map (JSON)
+./process_file.py -i data.csv -e err_map.json
+```
+
+You can chain it in a shell script and react to the exit code:
+
+```bash
+./process_file.py -i data.csv
+rc=$?
+if (( rc != 0 )); then
+    echo "❌ Processing failed (code $rc) – see log for details"
+fi
+```
+
+---
+
+## 📦 Optional tweaks you might want (pick any)
+
+| Desired change | Where to edit | One‑liner example |
+|----------------|---------------|-------------------|
+| **Different checksum / extra columns** | `process_line()` | Replace the ASCII‑sum checksum with `zlib.crc32(row[0].encode())` or any custom function. |
+| **Write output to a file instead of stdout** | Driver block (`writer = csv.writer(...)`) | `with open('out.csv','w',newline='') as out: writer = csv.writer(out, delimiter=delimiter)` |
+| **Skip malformed rows instead of aborting** | Exception block inside the loop | Change `return` → `continue` and keep a `malformed += 1` counter to report at the end. |
+| **More verbose console output** | Add a `--verbose` flag | `if args.verbose: ch.setLevel(logging.DEBUG)` |
+| **Multi‑character delimiters** | Replace `csv.reader`/`writer` with manual split | `row = line.rstrip('\n').split(args.delimiter)` |
+| **Docker container** | Add a `Dockerfile` | *(see snippet below)* |
+| **GitHub Actions step** | CI integration | *(see snippet below)* |
+
+### Example Dockerfile (if you need it)
+
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY process_file.py .
+RUN chmod +x process_file.py
+ENTRYPOINT ["./process_file.py"]
+```
+
+### Example GitHub Actions step
+
+```yaml
+- name: Process CSV
+  run: |
+    ./process_file.py -i data/input.csv -d ',' -l logs/process.log
+  continue-on-error: false   # job fails if script exits non‑zero
+```
+
+---
+
+## 🎯 What to do next
+
+1. **If the script already does everything you need** – go ahead and integrate it using the examples above.  
+2. **If you’d like any of the optional tweaks (or something else entirely)** – just tell me which one(s). I can:
+   * **Patch the script** right here with the exact changes.
+   * **Provide a wrapper** (Makefile target, Dockerfile, CI snippet, etc.).
+   * **Show unit‑test scaffolding** (`pytest` tests for `process_line`) so you can lock down future changes.
+
+Let me know which path you’d like to take, and I’ll deliver the precise modifications you need. 🚀

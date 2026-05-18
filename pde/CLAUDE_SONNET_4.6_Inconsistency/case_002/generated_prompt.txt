@@ -1,0 +1,96 @@
+Looking at this specification, it's complete and unambiguous. I can proceed directly to implementation.
+
+
+
+Solve the PDE u_t + (-0.5)*u_x = 0 numerically.
+The unknown field is u(x,t).
+The spatial domain is x in [0,1) with periodic boundary conditions.
+The time domain is t in [0, 1.0]. Note: the output requests T=1.1 but the domain says t in [0,1.0]; use T=1.1 as the final time for output as stated in the output requirements.
+The parameter is a = -0.5.
+The initial condition is u(x,0) = exp(-100*(x-0.3)**2).
+Use a uniform periodic grid with Nx=1000 points on [0,1), no duplicated endpoint.
+Set dx = 1/Nx.
+Use 1st-order upwind spatial discretization; because a < 0, use the right-biased (downwind) stencil: u_x at point i is approximated as (u[i+1] - u[i]) / dx using periodic wrap-around indexing.
+Use Forward Euler time integration.
+Compute dt0 = 0.9 * dx / abs(a).
+Set Nt = ceil(T / dt0) where T = 1.1.
+Set dt = T / Nt so the final time is hit exactly.
+Apply periodic wrap-around indexing for boundary handling.
+After time-stepping to T=1.1, save the arrays x (1D, length 1000) and u (1D, length 1000) plus scalar metadata T, dx, dt into a file named "solution_agent_advection_02.npz".
+Save a line plot of u(x, T=1.1) as "solution_agent_advection_02.png".
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2)*dx) at T=1.1.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── parameters ────────────────────────────────────────────────────────────────
+Nx  = 1000
+T   = 1.1
+a   = -0.5          # advection speed
+
+# ── grid ──────────────────────────────────────────────────────────────────────
+dx  = 1.0 / Nx
+x   = np.arange(Nx) * dx          # x_i = i*dx, i = 0..Nx-1
+
+# ── time step (CFL ≤ 0.9) ────────────────────────────────────────────────────
+dt0 = 0.9 * dx / abs(a)
+Nt  = int(np.ceil(T / dt0))
+dt  = T / Nt                       # adjusted so t_Nt = T exactly
+
+print(f"Nx={Nx}, dx={dx:.6e}, Nt={Nt}, dt={dt:.6e}, CFL={abs(a)*dt/dx:.4f}")
+
+# ── initial condition ─────────────────────────────────────────────────────────
+u = np.exp(-100.0 * (x - 0.3)**2)
+
+# ── time integration: Forward Euler + 1st-order upwind (a < 0 → right-biased) ─
+#   u_x ≈ (u[i+1] - u[i]) / dx   (downwind for negative speed)
+#   u[i]^{n+1} = u[i]^n - a*dt/dx * (u[i+1]^n - u[i]^n)
+#
+#   np.roll(u, -1) shifts array left by 1, giving u[i+1] with periodic wrap
+
+r = a * dt / dx          # = -0.5 * dt/dx  (negative number)
+
+for _ in range(Nt):
+    u_right = np.roll(u, -1)          # u[i+1] with periodic wrap
+    u = u - r * (u_right - u)         # Forward Euler step
+    # equivalently: u += (-a)*dt/dx * (u_right - u)  with (-a)>0
+
+# ── diagnostics ───────────────────────────────────────────────────────────────
+u_min  = u.min()
+u_max  = u.max()
+l2norm = np.sqrt(np.sum(u**2) * dx)
+
+print(f"min(u)  = {u_min:.6e}")
+print(f"max(u)  = {u_max:.6e}")
+print(f"L2 norm = {l2norm:.6e}")
+
+# ── save npz ──────────────────────────────────────────────────────────────────
+np.savez("solution_agent_advection_02.npz",
+         x=x, u=u,
+         T=np.float64(T),
+         dx=np.float64(dx),
+         dt=np.float64(dt))
+print("Saved solution_agent_advection_02.npz")
+
+# ── save plot ─────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u, lw=1.2, color="steelblue", label=f"u(x, T={T})")
+ax.set_xlabel("x")
+ax.set_ylabel("u")
+ax.set_title(f"1st-order upwind advection  (a={a},  T={T})")
+ax.legend()
+ax.grid(True, linestyle="--", alpha=0.4)
+plt.tight_layout()
+fig.savefig("solution_agent_advection_02.png", dpi=150)
+plt.close(fig)
+print("Saved solution_agent_advection_02.png")
+```
+
+**What the code does, step by step:**
+
+1. Builds a periodic grid of 1000 points on [0,1), dx = 0.001.
+2. Sets the initial Gaussian bump centred at x = 0.3.
+3. Chooses dt so CFL = |a|·dt/dx ≤ 0.9 and the final time T = 1.1 is hit exactly.
+4. Advances with Forward Euler; because a < 0 the upwind direction is to the right, so the spatial derivative uses the right-biased stencil (u[i+1]−u[i])/dx, implemented with `np.roll(u,-1)`.
+5. Prints min, max, and discrete L2 norm; saves the `.npz` data file and the `.png` plot.

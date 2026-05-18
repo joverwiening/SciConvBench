@@ -1,0 +1,89 @@
+**原因**  
+`*MPC` 是关键字行，所有参数必须写在同一行。  
+在你的卡片里写成  
+
+```abaqus
+*MPC
+PLANE,Nplane
+```  
+
+Abaqus 把 `*MPC` 当成 **没有参数的关键字**，随后期待一行 **节点列表**（数据行）。于是把第二行 `PLANE,Nplane` 当成数据行处理：  
+
+* 第一个字段 `PLANE` 被解释为 **MPC 名称**（即 `TYPE=PLANE`），  
+* 第二个字段 `Nplane` 被解释为 **要约束的节点集**。  
+
+此时 `Nplane` 还没有被定义（或为空），于是出现报错并在此处停止：
+
+```
+the user has defined an MPC named PLANE for a node set Nplane that does not exist or is empty
+```
+
+所以错误完全是 **语法写错**，而不是模型本身的问题。
+
+---
+
+## 正确的写法步骤
+
+| 步骤 | 关键点 | 示例 |
+|------|--------|------|
+| 1️⃣ 定义要约束的节点集 | 必须在 `*MPC` 之前出现，节点编号已在 `*NODE` 中定义。 | `*NSET, NSET=Nplane`<br>`7, 8, 86, 27, …` |
+| 2️⃣ 写完整的 `*MPC` 行 | 所有参数（`TYPE`、`NSET` 等）必须写在 **同一行**，后面 **不能** 再跟任何数据行。 | `*MPC, TYPE=PLANE, NSET=Nplane` |
+| 3️⃣ 把 `*MPC` 放在 **任何 *STEP 块之外** | `*MPC` 属于模型定义阶段，必须在第一个 `*STEP` 之前出现。 | `*MPC, TYPE=PLANE, NSET=Nplane`<br>`*STEP, NLGEOM` |
+| 4️⃣ 正常的分析步 | 之后可以正常写 `*STEP`、`*STATIC`（或其他）等。 | `*STEP, NLGEOM`<br>`*STATIC`<br>`*END STEP` |
+
+---
+
+## 最小可运行示例（完整模型）
+
+```abaqus
+*HEADING
+Cantilever beam – plane constraint (MPC)
+
+*NODE, NSET=NALL, GENERATE
+1, 261
+
+*ELEMENT, TYPE=C3D20R, ELSET=B1
+1, 1, 10, 95, 19, 61, 105, 222, 192, 9, 93,
+   94, 20, 104, 220, 221, 193, 62, 103, 219, 190
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+* MATERIAL, NAME=LIN_ISO_EL
+*ELASTIC
+210000., 0.3
+*SOLID SECTION, ELSET=EALL, MATERIAL=LIN_ISO_EL
+*SECTION CONTROLS
+*INTEGRATION, TYPE=FULL
+
+*------ 1️⃣ 定义平面约束的节点集 ------*
+*NSET, NSET=Nplane
+7, 8, 86, 27, 28, 29, 63, 64, 65, 66, 67, 68, 69, 70,
+71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
+84, 85, 87, 88, 89, 90, 91, 92, 161, 162, 163, 164,
+165, 166, 167, 168, 169, 170, 171, 172, 173, 174,
+175, 176, 177, 178, 179, 180, 181, 182, 183, 184,
+185, 186, 187, 188, 189
+
+*------ 2️⃣ 正确的 MPC 定义（单行） ------*
+*MPC, TYPE=PLANE, NSET=Nplane
+
+*------ 3️⃣ 分析步（MPC 必须在 *STEP 之外） ------*
+*STEP, NLGEOM
+*STATIC
+*END STEP
+```
+
+---
+
+## 提交前快速检查清单
+
+| 检查项 | 正确状态 |
+|--------|----------|
+| **节点集 `Nplane` 已定义** | `*NSET, NSET=Nplane` 在 `*MPC` 前出现 |
+| **`*MPC` 行语法完整** | `*MPC, TYPE=PLANE, NSET=Nplane`（同一行） |
+| **`*MPC` 后没有数据行** | 紧随其后是下一个关键字（如 `*STEP`） |
+| **`*MPC` 不在 `*STEP` 内** | 位于模型定义阶段，未被 `*STEP` 包围 |
+| **所有节点编号已在 `*NODE` 中出现** | `*NODE` 包含 `Nplane` 中的每个编号 |
+| **如需大变形分析** | 在 `*STEP` 中加入 `NLGEOM`（可选） |
+
+只要上述全部满足，作业将不再出现 “the user has defined an MPC named … for a node set … that does not exist or is empty” 的错误，能够顺利完成求解。祝你建模顺利！

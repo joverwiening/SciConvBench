@@ -1,0 +1,140 @@
+**Why the error is raised**
+
+`*STEP, PERTURBATION` is a *linear‑perturbation* step.  
+In a perturbation step Abaqus can only use loads that are **defined inside that same step** (the
+`*CLOAD`, `*DLOAD`, `*GRAVITY`, … cards that belong to the perturbation step).  
+If a load is created in a preceding static step and you try to “reuse’’ that load case in the
+perturbation step, Abaqus cannot find a perturbation‑load definition and aborts with  
+
+```
+The specified load case is not supported for the perturbation step.
+```
+
+In addition, the point‑load lines you wrote are not valid for a **node set**:
+
+```abaqus
+*CLOAD
+N4,3,80.33333
+N5,3,160.66666
+```
+
+Abaqus interprets `N4` and `N5` as **node numbers** (nodes 4 and 5), not as the node‑sets you defined,
+and the line format does not follow the required `*CLOAD` syntax.
+
+---
+
+## How to fix the model
+
+### 1. Correct `*CLOAD` syntax
+
+| What you want to load | Correct input |
+|-----------------------|---------------|
+| **All nodes in node‑set `N4`** | `*CLOAD, NSET=N4`<br>`3, 80.33333` |
+| **All nodes in node‑set `N5`** | `*CLOAD, NSET=N5`<br>`3, 160.66666` |
+| **A single node (node 4)** | `*CLOAD`<br>`4, 3, 80.33333` |
+| **A single node (node 5)** | `*CLOAD`<br>`5, 3, 160.66666` |
+
+*`3` is the degree of freedom (Z‑direction).  
+When a node‑set is used the `NSET=` keyword **must** be on the `*CLOAD` line, and the next line
+contains only `dof, magnitude`.
+
+### 2. Use the proper step type
+
+| Desired analysis | Correct step organisation (do **not** reuse a static load case in a perturbation step) |
+|------------------|----------------------------------------------------------------------------------------|
+| **Static (non‑linear) analysis only** | One static step that contains the loads. **No** `*STEP, PERTURBATION`. |
+| **Linear buckling / eigenvalue analysis** | 1) Static step – apply the pre‑load.<br>2) `*STEP, BUCKLE` – request eigenvalues. **Never** place loads in the buckling step. |
+| **Linear‑perturbation result (frequency, modal, sensitivity, etc.) after a pre‑stress** | 1) Static step – apply the loads and obtain the pre‑stressed state.<br>2) `*STEP, PERTURBATION` – **no loads are defined here**; only the perturbation request (`*FREQUENCY`, `*MODAL`, …). |
+
+---
+
+## Example input fragments
+
+### 1. Static analysis only (remove the perturbation step)
+
+```abaqus
+*STEP, NLGEOM
+1., 1.
+*CLOAD, NSET=N4
+3, 80.33333
+*CLOAD, NSET=N5
+3, 160.66666
+*END STEP
+```
+
+All loads are inside a single static step; no perturbation step is present, so the error cannot occur.
+
+---
+
+### 2. Linear buckling (eigenvalue) analysis
+
+```abaqus
+*STEP, NLGEOM               ! static pre‑load
+1., 1.
+*CLOAD, NSET=N4
+3, 80.33333
+*CLOAD, NSET=N5
+3, 160.66666
+*END STEP
+
+*STEP, BUCKLE               ! buckling step – request eigenvalues
+1., 1., 10                  ! ask for 10 eigenvalues
+*END STEP
+```
+
+The loads stay in the static step; the buckling step contains **no** loads, which is the correct way to obtain buckling eigenvalues.
+
+---
+
+### 3. Proper linear‑perturbation (frequency) analysis
+
+```abaqus
+*STEP, NLGEOM               ! static step – creates the pre‑stress state
+1., 1.
+*CLOAD, NSET=N4
+3, 80.33333
+*CLOAD, NSET=N5
+3, 160.66666
+*END STEP
+
+*STEP, PERTURBATION         ! perturbation step – **no loads inside!**
+*FREQUENCY
+10                          ! request 10 natural frequencies (or *MODAL, etc.)
+*END STEP
+```
+
+The static step builds the pre‑stressed configuration. The subsequent perturbation step contains **only** the perturbation request (`*FREQUENCY`, `*MODAL`, …) and **no** load definitions, satisfying the requirement that a perturbation step can only use loads defined **within** that step.
+
+---
+
+## Quick checklist to avoid the error
+
+1. **Never reference a static load case from a perturbation step.**  
+   - Either move the loads into the perturbation step (pure linear‑perturbation) **or** keep them in a preceding static step and start a perturbation step **without any loads**.
+
+2. **Use `NSET=` when loading a node‑set.**  
+   ```abaqus
+   *CLOAD, NSET=MySet
+   3, magnitude
+   ```
+
+3. **Select the correct step type** for the analysis you intend (static, buckling, or linear‑perturbation).
+
+4. **Verify `*CLOAD` syntax** – either `node, dof, magnitude` (single node) or `*CLOAD, NSET=set_name` followed by `dof, magnitude` (node‑set).
+
+5. **Check the order of steps**:  
+   - Static → Buckle (or Eigen) → End, **or**  
+   - Static → Perturbation (no loads) → End.
+
+---
+
+### Bottom line
+
+The error occurs because a perturbation step was asked to use a load case that was defined in a previous static step, and the `*CLOAD` lines were not written in the correct node‑set format.
+
+**Fix the input by:**
+
+* writing the `*CLOAD` lines with the proper `NSET=` syntax, and  
+* arranging the steps so that either the loads are inside the perturbation step **or** the perturbation step contains **no loads at all** (the loads stay in the preceding static step).
+
+With the corrected syntax and the appropriate step sequence the “specified load case is not supported for the perturbation step’’ error disappears and the analysis will run as intended.

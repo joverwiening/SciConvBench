@@ -1,0 +1,119 @@
+Solve the PDE u_t = 0.05*u_xx - 1.0*u + sin(pi*x) numerically using the specifications below.
+
+The spatial domain is x in [0,1], a closed interval.
+The time domain is t in [0,1.0].
+Use D = 0.05 and k = 1.0.
+Apply Dirichlet boundary conditions u(0,t) = 0 and u(1,t) = 0.
+
+Use Nx = 300 uniform intervals, giving 301 grid points including both endpoints.
+Compute dx = 1.0 / 300.
+Set x_i = i * dx for i = 0, 1, ..., 300.
+
+Use dt = 0.001 and take 1000 time steps to reach T = 1.0.
+
+Discretize the diffusion term using 2nd-order central differences on the interior points (i = 1 to 299).
+Enforce Dirichlet BCs by fixing u[0] = 0 and u[300] = 0 at all times; these points are not unknowns.
+The discrete Laplacian L operates only on the 299 interior unknowns.
+L is the standard tridiagonal matrix with 2 on the diagonal and -1 on the off-diagonals, divided by dx**2, sized 299x299.
+
+At each time step apply the IMEX scheme: (I - dt * D * L) u^{n+1} = u^n + dt * R(u^n).
+The reaction term R(u) = -1.0 * u + sin(pi * x) evaluated at interior points.
+Solve the linear system using a sparse direct solver (scipy.sparse.linalg.spsolve) at each step.
+Build the system matrix once before the time loop since it does not change.
+
+After 1000 steps, collect the full solution array of length 301 including the boundary points (u[0] = 0 and u[300] = 0).
+
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2) * dx) at T = 1.0, where the sum is over all 301 grid points.
+
+Save a file named "solution_agent_diffusion_reaction_06.npz" containing the 1D array x of length 301, the 1D array u of length 301, and scalar metadata T = 1.0, dx = 1.0/300, dt = 0.001.
+
+Save a line plot of u(x, T=1.0) versus x as "solution_agent_diffusion_reaction_06.png" with x on the horizontal axis and u on the vertical axis.
+
+Use radians for all trigonometric functions.
+Use ** for exponentiation in Python code.
+
+```python
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+
+# Grid setup
+Nx = 300
+x_full = np.linspace(0.0, 1.0, Nx + 1)  # 301 points, x[0]=0, x[300]=1
+dx = 1.0 / Nx
+dt = 0.001
+T = 1.0
+n_steps = int(round(T / dt))  # 1000
+
+D = 0.05
+k = 1.0
+
+# Interior points only (indices 1 to 299, count = 299)
+N_int = Nx - 1  # 299
+x_int = x_full[1:Nx]  # interior x values
+
+# Build sparse tridiagonal Laplacian for interior points (299x299)
+diag_main = -2.0 * np.ones(N_int)
+diag_off = np.ones(N_int - 1)
+L = sp.diags([diag_off, diag_main, diag_off], [-1, 0, 1], shape=(N_int, N_int), format='csr')
+L = L / dx**2
+
+# Build IMEX system matrix: A = I - dt * D * L
+I_mat = sp.eye(N_int, format='csr')
+A = I_mat - dt * D * L  # constant matrix, build once
+
+# Initial condition: u(x, 0) not specified, assume u = 0 everywhere
+u_int = np.zeros(N_int)
+
+# Precompute reaction source term contribution that does not depend on u
+# R(u) = -k * u + sin(pi * x)
+# The sin(pi * x) part is constant in time
+sin_term = np.sin(np.pi * x_int)
+
+# Time integration
+for n in range(n_steps):
+    # Reaction term at current step (explicit)
+    R_n = -k * u_int + sin_term
+    # Right-hand side
+    rhs = u_int + dt * R_n
+    # Solve sparse linear system
+    u_int = spla.spsolve(A, rhs)
+
+# Assemble full solution including boundary points
+u_full = np.zeros(Nx + 1)
+u_full[0] = 0.0
+u_full[Nx] = 0.0
+u_full[1:Nx] = u_int
+
+# Diagnostics
+u_min = np.min(u_full)
+u_max = np.max(u_full)
+l2_norm = np.sqrt(np.sum(u_full**2) * dx)
+print(f"min(u)   = {u_min:.6e}")
+print(f"max(u)   = {u_max:.6e}")
+print(f"L2 norm  = {l2_norm:.6e}")
+
+# Save npz
+np.savez(
+    "solution_agent_diffusion_reaction_06.npz",
+    x=x_full,
+    u=u_full,
+    T=T,
+    dx=dx,
+    dt=dt
+)
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(x_full, u_full, linewidth=1.5, color='steelblue')
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T=1.0)")
+ax.set_title("Solution of diffusion-reaction PDE at T=1.0")
+ax.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
+plt.savefig("solution_agent_diffusion_reaction_06.png", dpi=150)
+plt.close()
+
+print("Files saved: solution_agent_diffusion_reaction_06.npz, solution_agent_diffusion_reaction_06.png")
+```

@@ -1,0 +1,118 @@
+Solve the 1D Reaction-Diffusion PDE u_t = nu * u_xx + rho * u*(1 - u) numerically using the specifications below.
+Treat all mathematical functions exactly as written and use radians for trigonometric functions.
+In Python code, use ** for exponentiation wherever ^ appears in the math.
+
+Domain: x in [0, 1) with periodic boundary condition, t in [0, 1.0].
+Parameters: nu = 10.0, rho = 2.0.
+Boundary condition: Periodic, u(0,t) = u(1,t) for all t.
+Initial condition: u(x,0) = 0.25 + 0.1*sin(2*pi*x).
+
+Spatial grid: Use a uniform periodic grid with Nx = 512 points on [0,1).
+Define dx = 1/Nx and x_j = j*dx for j = 0, 1, ..., Nx-1.
+Time grid: Use fixed dt = 0.001 with Nt = 1000 steps so that T = 1.0 is reached exactly.
+
+Numerical method: Strang splitting applied at each full time step dt.
+
+Step A (Diffusion half-step, duration dt/2): Compute u_hat = FFT(u).
+Compute the wavenumbers k = 2*pi*fftfreq(Nx, d=dx).
+Multiply u_hat(k) by exp(-nu * k**2 * (dt/2)).
+Set u = real(IFFT(u_hat)).
+
+Step B (Reaction full-step, duration dt): Apply the exact pointwise logistic ODE update.
+For each grid point, compute u = (u * exp(rho*dt)) / (1 + u * (exp(rho*dt) - 1)).
+
+Step C (Diffusion half-step again): Repeat Step A identically with duration dt/2.
+
+Repeat Steps A, B, C for all Nt = 1000 time steps to advance from t=0 to t=1.0.
+
+Output: Compute u(x, T=1.0) on the periodic grid.
+Print min(u), max(u), mean(u), and the discrete L2 norm sqrt(sum(u**2)*dx) at T=1.0.
+Save a file named "solution_pdebench_reacdiff_nu10_rho2.npz" containing the following arrays and scalars: x (1D array of length Nx), u (1D array of length Nx), nu (scalar), rho (scalar), T (scalar), dx (scalar), dt (scalar), Nx (scalar), Nt (scalar).
+Save a line plot of u(x, T=1.0) as a PNG file named "solution_pdebench_reacdiff_nu10_rho2.png".
+
+Below is the complete Python implementation.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Parameters
+nu   = 10.0
+rho  = 2.0
+T    = 1.0
+Nx   = 512
+dt   = 0.001
+Nt   = 1000
+
+# Spatial grid
+dx = 1.0 / Nx
+x  = np.arange(Nx) * dx          # x_j = j*dx, j=0,...,Nx-1
+
+# Wavenumbers for periodic FFT
+k = 2.0 * np.pi * np.fft.fftfreq(Nx, d=dx)
+
+# Precompute diffusion damping factor for a half-step dt/2
+diff_factor = np.exp(-nu * k**2 * (dt / 2.0))
+
+# Precompute reaction constants for a full step dt
+exp_rho_dt = np.exp(rho * dt)
+
+# Initial condition
+u = 0.25 + 0.1 * np.sin(2.0 * np.pi * x)
+
+def diffusion_half_step(u):
+    """Apply diffusion half-step exactly in Fourier space."""
+    u_hat = np.fft.fft(u)
+    u_hat *= diff_factor
+    return np.fft.ifft(u_hat).real
+
+def reaction_full_step(u):
+    """Apply exact logistic ODE update for a full step dt."""
+    return (u * exp_rho_dt) / (1.0 + u * (exp_rho_dt - 1.0))
+
+# Time integration: Strang splitting (A -> B -> C) for Nt steps
+for _ in range(Nt):
+    u = diffusion_half_step(u)   # Step A: diffusion half-step
+    u = reaction_full_step(u)    # Step B: reaction full-step
+    u = diffusion_half_step(u)   # Step C: diffusion half-step
+
+# Diagnostics
+u_min  = np.min(u)
+u_max  = np.max(u)
+u_mean = np.mean(u)
+u_l2   = np.sqrt(np.sum(u**2) * dx)
+
+print(f"min(u)  = {u_min:.6e}")
+print(f"max(u)  = {u_max:.6e}")
+print(f"mean(u) = {u_mean:.6e}")
+print(f"L2 norm = {u_l2:.6e}")
+
+# Save .npz
+np.savez(
+    "solution_pdebench_reacdiff_nu10_rho2.npz",
+    x=x,
+    u=u,
+    nu=nu,
+    rho=rho,
+    T=T,
+    dx=dx,
+    dt=dt,
+    Nx=Nx,
+    Nt=Nt
+)
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u, linewidth=1.5, color="steelblue")
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T=1.0)")
+ax.set_title(
+    f"1D Reaction-Diffusion at T={T}  (nu={nu}, rho={rho})\n"
+    f"min={u_min:.4f}, max={u_max:.4f}, mean={u_mean:.4f}, L2={u_l2:.4f}"
+)
+ax.grid(True, linestyle="--", alpha=0.5)
+plt.tight_layout()
+plt.savefig("solution_pdebench_reacdiff_nu10_rho2.png", dpi=150)
+plt.close()
+print("Files saved: solution_pdebench_reacdiff_nu10_rho2.npz / .png")
+```

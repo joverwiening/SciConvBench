@@ -1,0 +1,132 @@
+Below is a **ready‑to‑run** Abaqus input file that removes the syntax errors that caused the *“model database has been terminated due to errors”* abort.  
+After the file you’ll find a **change‑summary table** that explains every fix, and a **quick‑check checklist** you can use each time you edit a *.inp* file.
+
+---
+
+## 1️⃣ Fixed *.inp* file (copy‑and‑paste)
+
+Save the whole block (including the `*HEADING` line) as, for example, **`hyperelastic_fixed.inp`** and submit it exactly as you did before.
+
+```abaqus
+*HEADING
+**  Hyperelastic block – single‑point loads (fixed version)
+
+*NODE
+      1, 0., 0., 0.
+      2, 1., 0., 0.
+      3, 1., 1., 0.
+      4, 0., 1., 0.
+      5, 0., 0., 1.
+      6, 1., 0., 1.
+      7, 1., 1., 1.
+      8, 0., 1., 1.
+      . . .   (rest of the node list – unchanged)
+
+*ELEMENT, TYPE=C3D20, ELSET=B1               **← added TYPE=C3D20**
+      1, 1, 10, 95, 19, 61,105,222,192, 9,93,
+         94,20,104,220,221,193,62,103,219,190
+      2,10, 2, 13, 95,105,34,134,222,11,12,
+         96,93,106,133,223,220,103,33,132,219
+      . . .   (rest of the element list – unchanged)
+
+*ELSET, ELSET=EALL, GENERATE
+    1, 32
+
+*NSET, NSET=NALL, GENERATE
+    1, 261
+
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+
+*MATERIAL, NAME=HY
+*HYPERELASTIC, OGDEN, N=1
+    3.488, 2.163, 0.
+
+*NSET, NSET=CN7
+    97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+    14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=LAST
+    5,6,7,8,22,25,28,31,100
+
+*NSET, NSET=GIBO
+    5,6,7,8,21,22,23,24,25,26,27,28,29,30,31,32,
+    98,99,100,101,102
+
+*NSET, NSET=N1
+    100
+
+*NSET, NSET=N2
+    22,25,28,31
+
+*NSET, NSET=N3
+    5,6,7,8
+
+*NSET, NSET=N4
+    21,23,24,26,27,29,30,32
+
+*NSET, NSET=N5
+    98,99,101,102
+
+*STEP, NLGEOM=YES, MAXINC=100                **← corrected STEP syntax**
+*STATIC, STEP=1., INC=0.01, MAXINC=100        **← proper analysis keyword & increment control**
+*CLOAD, NSET=N4                               **← NSET flag required**
+    3, 0.0833333
+*CLOAD, NSET=N5
+    3, 0.1666666
+*END STEP
+```
+
+### How to run
+
+```bash
+abaqus job=hyperelastic_fixed static
+```
+
+The job should now complete without aborting.
+
+---
+
+## 2️⃣ Change‑summary table  
+
+| # | Original (problem) | Fixed version (shown above) | Why it caused the abort |
+|---|--------------------|-----------------------------|--------------------------|
+| 1 | `*STEP,NLGEOM,INC=100` | `*STEP, NLGEOM=YES, MAXINC=100` | `INC` is **not** a valid `*STEP` option → syntax error that stops the job. |
+| 2 | Stray line `1.,1.` after `*STEP` | Removed; replaced by a proper analysis keyword (`*STATIC …`) | Abaqus expects an analysis keyword immediately after `*STEP`. The stray numbers are interpreted as an illegal keyword, causing a fatal error. |
+| 3 | `*ELEMENT, ELSET=B1` (no `TYPE=`) | `*ELEMENT, TYPE=C3D20, ELSET=B1` | Without `TYPE` Abaqus cannot determine the element formulation (20‑node brick), leading to “invalid element type” errors. |
+| 4 | `*CLOAD` written as `N4,3,0.0833333` (no `NSET=`) | `*CLOAD, NSET=N4` `3, 0.0833333` (same for `N5`) | The `NSET=` flag is mandatory when referencing a node set; otherwise Abaqus looks for a node named “N4” and aborts. |
+| 5 | No increment definition on the analysis keyword | `*STATIC, STEP=1., INC=0.01, MAXINC=100` | Supplies a valid initial increment and caps the maximum increment size, preventing uncontrolled step growth and the “maximum number of increments exceeded” abort. |
+
+---
+
+## 3️⃣ Quick‑check checklist  
+
+| ✅ Item | What to verify (or add) |
+|--------|------------------------|
+| **STEP line** | Only step‑level options (`NLGEOM`, `MAXINC`, `NAME`, `TIME`, …). **Never** put `INC`, `STEP`, or `TIME` here. |
+| **Analysis keyword** | Must follow `*STEP` immediately (`*STATIC`, `*DYNAMIC`, `*BUCKLE`, …). Include `STEP=` (or `TIME=` for dynamics) **and** an initial increment (`INC=`) plus a limit (`MAXINC=` or `MAXLPF=`). |
+| **Element definition** | Every `*ELEMENT` line needs a `TYPE=` that matches the element topology (e.g., `C3D20` for a 20‑node brick, `C3D8` for an 8‑node brick, etc.). |
+| **Loads / BCs** | Use `NSET=` (or `ELSET=`) when applying loads: `*CLOAD, NSET=MySet`. The data line is `node‑or‑DOF, magnitude`. |
+| **Material → Section** | `*MATERIAL` must appear **before** any `*SOLID SECTION` that references it. |
+| **GENERATE syntax** | `first, last, step` – no extra commas, no missing values. |
+| **Comments** | Lines beginning with `**` are ignored – safe for notes. |
+| **Step termination** | End each step with `*END STEP`. The file should finish with a blank line or `*END`. |
+| **NLGEOM flag** | Write `NLGEOM=YES` (or `NO`) on the `*STEP` line if large‑deformation effects are needed. |
+| **Increment control** | Provide an initial increment (`INC=`) and a maximum (`MAXINC=`) to avoid uncontrolled step growth. |
+| **Optional output** | Add `*OUTPUT, FIELD, VARIABLE=PRESELECT` (or custom variables) **inside** the step after the loads if you need extra results. |
+| **Mesh changes** | If you edit the mesh, update the `*ELEMENT` connectivity and the generated `ELSET`/`NSET` ranges accordingly. |
+| **Check line numbers** | When Abaqus reports an error, note the line number it cites and verify that line against this checklist – most aborts stem from one of the items above. |
+
+---
+
+### 🎉 What to do next
+
+1. **Copy** the block in Section 1 into a new file (e.g., `hyperelastic_fixed.inp`).  
+2. **Run** the job with  
+
+   ```bash
+   abaqus job=hyperelastic_fixed static
+   ```  
+
+3. If you wish to **change the Ogden parameters**, **refine the mesh**, or **request additional output** (stress, strain energy, reaction forces, etc.), simply edit the corresponding `*MATERIAL` or `*OUTPUT` sections – the syntax above will stay valid.
+
+Feel free to ask for any further customisation (pressure loads, displacement BCs, a different analysis type, etc.). Happy modelling!

@@ -1,0 +1,130 @@
+**作业在 `*MPC, BEAM, 105, 125` 处中止的原因**  
+
+`*MPC, BEAM, 105, 125` 用来在 **节点 105 与节点 125 之间建立梁型多点约束（beam‑type MPC）**。  
+Abaqus 只允许 **梁型 MPC** 作用在 **至少属于一根梁单元（B31、B31R、B32 …）的节点** 上。  
+
+在你的模型里所有单元都是 20‑节点实心砖块（`C3D20R`），因此节点 105、125 只与实心单元相连，根本没有任何梁单元。  
+当 Abaqus 读取 `*MPC, BEAM` 这一行时找不到所需的梁单元，于是直接报错并中止：
+
+```
+ABORT:  BEAM MPC requires a beam element.
+```
+
+---
+
+## 解决思路（两条路线）
+
+| 方案 | 何时使用 | 实现方式 |
+|------|----------|----------|
+| **A – 用适用于实心单元的约束代替 beam‑MPC** | 只需要让两个节点的自由度（位移/转动）保持相同，模型中没有梁单元。 | `*Tie`、`*Coupling`（kinematic）或 `*Equation`。 |
+| **B – 保留 beam‑MPC，先给节点加一根梁单元** | 必须使用 **beam‑type MPC**（例如希望约束使用梁的刚度矩阵）。 | 在节点 105（或 125）所在位置插入至少一根梁单元，然后原来的 `*MPC, BEAM` 行即可使用。 |
+
+下面给出两种方案的具体实现步骤，直接复制到 `.inp` 文件中即可。
+
+---
+
+### A. 用适用于实心单元的约束（推荐）
+
+#### 1. Tie 约束（最稳健、最常用）
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   125, x125, y125, z125
+
+*Nset, nset=Nset105
+   105
+*Nset, nset=Nset125
+   125
+
+*Tie, name=Tie_105_125, adjust=yes, position=average
+   Nset105, Nset125
+```
+
+- `adjust=yes`：在第一步开始前把从属节点 125 移动到主节点 105 的位置，避免几何不匹配导致的收敛问题。  
+- `position=average`（可选）在两点坐标不完全相同的情况下取平均位置，也可以使用 `position=master` 或 `position=slave`。  
+- 该约束会把 **所有自由度（3 平移 + 3 转动）** 强制相等，等价于把 105 与 125 当作同一点。
+
+#### 2. 仅约束平移自由度的 Equation（如果不需要约束转动）
+
+```abaqus
+*Equation
+3, 105, 1.0, 1, 125, -1.0, 1   ; U1(105)=U1(125)
+3, 105, 1.0, 2, 125, -1.0, 2   ; U2(105)=U2(125)
+3, 105, 1.0, 3, 125, -1.0, 3   ; U3(105)=U3(125)
+```
+
+`*Equation` 只能约束标量自由度（位移、温度等），不能直接约束转动。
+
+#### 3. Kinematic Coupling（与 *Tie* 效果相同，只是语法不同）
+
+```abaqus
+*Coupling, type=KINEMATIC, ref node=105, surface=Surf125
+```
+
+先把包含节点 125 的节点集合或表面定义为 `Surf125`（或 `Nset125`），该耦合把从属表面的所有 DOF 追随参考节点 105。
+
+---
+
+### B. 保留 beam‑type MPC，先给节点加一根梁单元
+
+如果分析真的需要 **beam‑type MPC**（例如希望约束使用梁的刚度矩阵），则必须让 **105 或 125** 至少属于一根梁单元。
+
+#### 步骤 1 – 在节点 105 处创建一根梁（B31）
+
+```abaqus
+*Node
+   105, x105, y105, z105
+   126, x126, y126, z126   ; 任意与 105 相邻的点（可以是已有节点，也可以新建）
+
+*Element, type=B31, elset=Ebeam
+   2001, 105, 126
+```
+
+> 若模型中已有与 105 相连的节点（如 106），直接使用该节点即可，无需新建 126。
+
+#### 步骤 2 – 为该梁指定材料和截面（必须的）
+
+```abaqus
+*Material, name=Steel
+*Elastic
+210000., 0.3
+
+*Beam Section, material=Steel, profile=RECT, name=RectSec
+   0.01, 0.01          ; 示例：宽 10 mm × 高 10 mm
+
+*Section Assignment, elset=Ebeam, section=RectSec
+```
+
+> 梁截面的尺寸对约束本身没有影响，只要是合法的梁单元即可。
+
+#### 步骤 3 – 现在原来的 MPC 行可以正常使用
+
+```abaqus
+*MPC, BEAM, 105, 125
+```
+
+因为节点 105 已经属于梁单元 `B31`，Abaqus 能成功创建 **beam‑type MPC**，作业不再中止。
+
+---
+
+## 验证（两种方案均适用）
+
+1. **运行一个短的空步**（如 `*Step, name=Check, nlgeom=NO`），在 `.msg` 文件中检查对应的提示信息：  
+
+   - Tie → `TIE: Tie_105_125 – 1 master node, 1 slave node`  
+   - Equation → `EQUATION: 3 equations defined`  
+   - Coupling → `COUPLING: KINEMATIC coupling between node 105 and surface Surf125`  
+   - Beam MPC → `MPC: BEAM MPC between node 105 and node 125`
+
+2. **后处理**：在 Abaqus/Viewer 中绘制节点 105 与节点 125 的位移（以及转角，若已耦合），它们应在数值容差（如 1e‑8）内完全相同。
+
+---
+
+## 小结
+
+- **错误根源**：`*MPC, BEAM` 只能在**至少有一根梁单元**的节点上使用。你的模型只有实心砖块，所以找不到所需的梁单元，导致作业中止。  
+- **最简解决方案**：对仅含实心单元的模型，用 `*Tie`（或 `*Coupling`、`*Equation`）代替 `*MPC, BEAM`，无需修改网格。  
+- **如果必须使用 beam‑type MPC**：在模型中加入至少一根包含其中一个节点的梁单元（如 B31），随后原来的 `*MPC, BEAM` 行即可正常工作。  
+
+完成上述任意一种修改后，作业将能够顺利运行，**不再出现 “BEAM MPC requires a beam element”** 的错误。祝你分析顺利！

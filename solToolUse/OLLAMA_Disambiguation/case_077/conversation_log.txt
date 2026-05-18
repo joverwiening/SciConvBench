@@ -1,0 +1,2477 @@
+=== 2026-04-17 19:09:17 ===
+Q: **Short answer** – the model is unstable because it is not constrained enough (the bottom edge is completely free) and the material definition is incomplete.  
+Abaqus therefore builds a singular stiffness matrix, the Newton‑Raphson iterations cannot find a solution and the step aborts with “did not converge” messages.
+
+Below is a systematic checklist that shows why the model diverges and how to fix it.
+
+---
+
+## 1.  Rigid‑body freedom – the most common cause
+
+### What you have
+
+```text
+*NSET,NSET=Ntop
+1,4,8,10,13,15,18,20,23,25,28,30,33,35,38,40,43,45,48,50,53,
+
+*NSET,NSET=Nbottom
+310,311,313,315,316,318,319,321,322,324,325,327,328,330,331,333,
+334,336,337,339,340,341,
+
+*BOUNDARY,AMPLITUDE=A1
+Ntop,2,2,-1.          ! prescribed vertical displacement of the whole top edge
+```
+
+Only the **top** edge is given a displacement.  
+The **bottom** edge (or any other node) is *not* restrained in any direction.  
+Consequences:
+
+* The model can translate in X, translate in Y (the prescribed displacement does not prevent a rigid‑body translation of the whole part) and rotate about the Z‑axis.
+* With three uncontrolled rigid‑body modes the global stiffness matrix is singular → the solver cannot solve the equilibrium equations → “did not converge”.
+
+### How to fix it
+
+Add a minimal set of constraints that removes the three rigid‑body modes. The simplest way is to fix one node (or a small group of nodes) in all three DOFs, e.g.
+
+```text
+*BOUNDARY
+310,1,3,0.          ! fix node 310 in X, Y and Z (or 1,2,3)
+```
+
+or, if you want the bottom edge to stay in place while the top edge is pulled down:
+
+```text
+*BOUNDARY
+Nbottom,1,1,0.     ! fix X‑translation of the bottom edge
+Nbottom,2,2,0.     ! fix Y‑translation of the bottom edge
+Nbottom,3,3,0.     ! fix rotation about Z (or fix a single node in Z)
+```
+
+Only two constraints are needed to prevent translation in X and Y; a third one (either a rotation or a second point in Y) eliminates the remaining rigid‑body rotation.
+
+---
+
+## 2.  Missing elastic properties
+
+### What you have
+
+```text
+*MATERIAL,NAME=EL
+*DENSITY
+10.E-9
+*SHELL SECTION,ELSET=Eall,MATERIAL=EL
+0.0762
+```
+
+Only density is defined. No *ELASTIC* (or *PLASTIC*) data are supplied.  
+Abaqus therefore creates a material with **zero stiffness**. The element stiffness matrix is zero → the global matrix is singular again.
+
+### How to fix it
+
+Add a realistic elastic definition (the units must be consistent with the geometry you used – here the coordinates are in **mm**, so use MPa for stress and mm³ for volume).
+
+```text
+*MATERIAL,NAME=EL
+*DENSITY
+1.0e-9                ! (optional for static, can be omitted)
+*ELASTIC
+0.001, 0.3            ! E = 0.001 MPa, ν = 0.3   (or any realistic value)
+```
+
+If you really want an “ultra‑soft” material, keep the low modulus, but it must be **non‑zero**.
+
+---
+
+## 3.  Units and magnitude of the prescribed displacement
+
+* Geometry: the plate spans roughly 2.3 mm in X and Y.
+* Thickness: 0.0762 mm (≈ 0.003 in).
+* Prescribed displacement: `-1` (i.e. –1 mm) on the top edge.
+
+A displacement of 1 mm is **≈ 40 %** of the plate height. With `NLGEOM=ON` this is a large‑deformation problem. The Newton‑Raphson algorithm may still converge, but it becomes much more sensitive to the initial guess and to the material stiffness.
+
+If you only need a linear‑elastic response, either:
+
+* Turn **NLGEOM OFF** (remove `NLGEOM` from the *STEP line) and keep the displacement as is, **or**
+* Reduce the displacement to a small fraction of the thickness (e.g. `-0.001` mm) and keep `NLGEOM=ON`.
+
+---
+
+## 4.  Time increment and amplitude
+
+```text
+*STEP,NLGEOM,INC=1000
+1.e-4,1.e-4
+*AMPLITUDE,NAME=A1
+0.,0.,1.,1.
+*BOUNDARY,AMPLITUDE=A1
+Ntop,2,2,-1.
+```
+
+* The step time is `1.e‑4` s (both initial and total).  
+* The amplitude ramps from 0 to 1 over the same interval, so the prescribed displacement is applied **instantly** at the beginning of the step.  
+* With a large displacement applied in a single increment the solver may need many sub‑increments to converge.
+
+**Recommendation**
+
+* Use a longer step (e.g. `0.0, 1.0`) and let the amplitude control the loading rate, or
+* Keep the short step but increase the maximum number of increments (`*STEP, INC=10000`) and let Abaqus automatically reduce the increment size when convergence is difficult.
+
+---
+
+## 5.  Summary of the minimal changes that make the model converge
+
+```text
+*STEP,NLGEOM,INC=1000
+0.0, 1.0
+*BOUNDARY,AMPLITUDE=A1
+Ntop,2,2,-1.          ! prescribed displacement
+Nbottom,1,3,0.        ! fix bottom edge (or a single node)
+*END STEP
+```
+
+and add the elastic data:
+
+```text
+*MATERIAL,NAME=EL
+*DENSITY
+1.0e-9
+*ELASTIC
+0.001, 0.3
+```
+
+(If you really need the density, keep it; otherwise you can delete the *DENSITY* line – it is not used in a static analysis.)
+
+---
+
+## 6.  Checklist for future models
+
+| Item | What to verify |
+|------|----------------|
+| **Geometry & units** | All coordinates, thickness, loads, material properties use the same unit system (e.g. mm‑MPa‑s). |
+| **Material definition** | At least *ELASTIC* (or *PLASTIC*) is defined for every material used in a section. |
+| **Section assignment** | Shell sections have a non‑zero thickness. |
+| **Boundary conditions** | The model is fully constrained: 3 translational + 3 rotational DOFs are removed for a 3‑D solid, 2 translational + 1 rotational for a shell. |
+| **Loading** | Load magnitude is reasonable compared with geometry and material stiffness. |
+| **NLGEOM** | Turn it on only when large deformations are expected. |
+| **Step definition** | Use a realistic total time and let the amplitude control the load history. |
+| **Diagnostics** | If convergence fails, look at the Abaqus message file: “singular matrix”, “zero stiffness”, “excessive strain increments”, etc. They point directly to missing constraints or zero stiffness. |
+
+Apply the above fixes and the model should run without the “did not converge” error. If you still see convergence problems after the constraints are added, the next thing to check is the **increment size** (reduce `MAX INCREMENT` or let Abaqus automatically cut the increment) and the **material stiffness** (a too‑soft material combined with a large prescribed displacement can also cause divergence).
+A: **Why the analysis diverges**
+
+Abaqus aborts the step because the global stiffness matrix is singular.  
+Two things make the matrix singular in the posted model:
+
+1. **Rigid‑body freedom** – the bottom edge (or any node) is not restrained, so the model can translate/rotate as a whole.  
+2. **Zero stiffness material** – the material definition contains only a density entry; no *ELASTIC* (or *PLASTIC*) data are supplied, so every element has a stiffness of 0.
+
+Both problems produce the same “did not converge” message (singular matrix, Newton‑Raphson cannot solve).
+
+---
+
+## Minimal set of changes that make the model run
+
+Below is a **complete, ready‑to‑paste** input fragment that incorporates all the required fixes.  
+Only the parts that need to be changed/added are shown; the rest of your model can stay unchanged.
+
+```text
+*HEADING
+--- Fixed‑constraint, elastic‑material Abaqus model -----------------
+
+*PART, NAME=PART-1
+...   (your node/element definitions)
+*END PART
+
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=PART-1-1, PART=PART-1
+*END INSTANCE
+*END ASSEMBLY
+
+*MATERIAL, NAME=EL
+*ELASTIC
+0.001, 0.3                ! E = 0.001 MPa (or any realistic non‑zero value), ν = 0.3
+*DENSITY
+1.0E-9                    ! optional for static; can be omitted
+
+*SHELL SECTION, ELSET=EALL, MATERIAL=EL
+0.0762                    ! thickness (mm)
+
+*ELSET, ELSET=EALL
+...                       ! all shell elements
+
+*NSET, NSET=NTOP
+1,4,8,10,13,15,18,20,23,25,28,30,33,35,38,40,43,45,48,50,53
+
+*NSET, NSET=NBOTTOM
+310,311,313,315,316,318,319,321,322,324,325,327,328,330,331,333,
+334,336,337,339,340,341
+
+*BOUNDARY, AMPLITUDE=A1
+NTOP, 2, 2, -1.0          ! prescribed vertical displacement of the top edge
+
+*BOUNDARY
+NBOTTOM, 1, 3, 0.0        ! fully constrain the bottom edge (X, Y & rotation)
+*END BOUNDARY
+
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.            ! ramp from 0 to full load
+
+*STEP, NLGEOM, INC=10000
+0.0, 1.0                  ! total step time = 1 s (or any convenient value)
+*STATIC
+*END STEP
+```
+
+### What each change does
+
+| Change | Reason |
+|--------|--------|
+| **Add *ELASTIC* entry** | Gives the material a non‑zero stiffness; without it the element stiffness matrix is zero → singular global matrix. |
+| **Constrain the bottom edge (or a single node)** | Removes the three rigid‑body modes (X‑translation, Y‑translation, rotation about Z). Any set of three independent constraints is sufficient. |
+| **Use a realistic step time (0 → 1 s) and keep the amplitude** | The load is now applied gradually; Abaqus can automatically sub‑increment if the displacement is large. |
+| **Increase `INC` (max increments)** | Gives the solver more freedom to reduce the increment size when convergence is difficult. |
+| **(Optional) Turn NLGEOM OFF** if you only need a linear‑elastic response and the prescribed displacement is small compared with the thickness. |
+
+---
+
+## Full checklist for future models
+
+| # | Item | What to verify / fix |
+|---|------|----------------------|
+| 1 | **Units** | All geometry, thickness, loads, and material properties must use the same unit system (e.g. mm‑MPa‑s). |
+| 2 | **Material definition** | Every material used in a section must have at least an *ELASTIC* (or *PLASTIC*) entry. A density line alone is insufficient for static analysis. |
+| 3 | **Section thickness** | Shell sections need a non‑zero thickness; otherwise the element stiffness is zero. |
+| 4 | **Rigid‑body constraints** | For a 3‑D solid: 3 translational + 3 rotational DOFs must be restrained. For a shell: 2 translational + 1 rotational DOFs. Use a minimal set (one node fully fixed, or an edge fixed in X & Y plus a rotation). |
+| 5 | **Loading magnitude** | Ensure the prescribed displacement/force is reasonable relative to geometry and material stiffness. Very large displacements with an ultra‑soft material often need NLGEOM = ON and many increments. |
+| 6 | **NLGEOM** | Turn it **ON** only when large deformations are expected. If you keep it OFF, keep the displacement small enough for linear theory. |
+| 7 | **Step definition** | Give a sensible total time; let the *AMPLITUDE* control the load history. Avoid applying the full load in a single increment. |
+| 8 | **Increment control** | Set a generous `MAX INCREMENT` (or let Abaqus decide) and increase `INC` (max number of increments) so the solver can automatically reduce the step size when needed. |
+| 9 | **Diagnostics** | If convergence still fails, read the `.msg` file: <br>• “Singular matrix” → missing constraints or zero stiffness. <br>• “Zero stiffness” → material definition incomplete. <br>• “Excessive strain increment” → load too large for the current increment size. |
+
+---
+
+### TL;DR – What you must do right now
+
+1. **Add an elastic modulus** (any non‑zero value) to the material.  
+2. **Fully constrain the bottom edge (or a single node)** in X, Y and rotation.  
+3. **Give the step a realistic duration** (e.g. 0 → 1 s) and let the amplitude ramp the load.  
+4. **Increase the maximum number of increments** (`INC=10000` is safe).  
+
+After these four edits the model will have a well‑posed stiffness matrix, the Newton‑Raphson solver will be able to find equilibrium, and the analysis will finish without the “did not converge” error. If you still see convergence warnings, reduce the prescribed displacement or make the material stiffer, and let Abaqus automatically cut the increment size.
+
+=== 2026-04-17 19:10:00 ===
+Q: **Why the analysis diverges**
+
+Abaqus aborts the step because the global stiffness matrix is **singular**.  
+In the posted model the matrix becomes singular for two independent reasons:
+
+| # | What is missing / wrong | Effect on the stiffness matrix |
+|---|--------------------------|--------------------------------|
+| 1 | **Rigid‑body constraints** – the bottom edge (or any node) is completely free. | The model can translate in X, translate in Y and rotate about Z. Those three uncontrolled rigid‑body modes make the global stiffness matrix rank‑deficient → “singular matrix” → Newton‑Raphson cannot solve → *did not converge*. |
+| 2 | **Zero‑stiffness material** – the material definition contains only a *DENSITY* entry; no *ELASTIC* (or *PLASTIC*) data are supplied. | Every shell element has a stiffness of **0**. The element stiffness matrices are zero, so the assembled global matrix is also singular. |
+| 3 (optional) | **Load applied instantly with a huge magnitude** – a –1 mm displacement is ~40 % of the plate height and is applied in a single increment. With `NLGEOM=ON` the Newton‑Raphson algorithm may need many sub‑increments to converge. | Even with a proper material, a load that is applied in one step can cause the solver to run out of increments and abort. |
+
+Both problems produce the same “did not converge” message (singular matrix, Newton‑Raphson cannot find a solution).
+
+---
+
+## Minimal set of changes that make the model run
+
+Below is a **complete, ready‑to‑paste** fragment that incorporates all the required fixes.  
+Only the parts that need to be changed/added are shown; the rest of your model can stay unchanged.
+
+```text
+*HEADING
+--- Fixed‑constraint, elastic‑material Abaqus model -----------------
+
+*PART, NAME=PART-1
+...   (your node/element definitions)
+*END PART
+
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=PART-1-1, PART=PART-1
+*END INSTANCE
+*END ASSEMBLY
+
+* MATERIAL, NAME=EL
+* ELASTIC
+0.001, 0.3                ! E = 0.001 MPa (any non‑zero value), ν = 0.3
+* DENSITY                 ! optional for static; can be omitted
+1.0E-9
+
+*SHELL SECTION, ELSET=EALL, MATERIAL=EL
+0.0762                    ! thickness (mm)
+
+*ELSET, ELSET=EALL
+...                       ! all shell elements
+
+*NSET, NSET=NTOP
+1,4,8,10,13,15,18,20,23,25,28,30,33,35,38,40,43,45,48,50,53
+
+*NSET, NSET=NBOTTOM
+310,311,313,315,316,318,319,321,322,324,325,327,328,330,331,333,
+334,336,337,339,340,341
+
+*BOUNDARY, AMPLITUDE=A1
+NTOP, 2, 2, -1.0          ! prescribed vertical displacement of the top edge
+
+*BOUNDARY
+NBOTTOM, 1, 3, 0.0        ! fully constrain the bottom edge (X, Y & rotation)
+*END BOUNDARY
+
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.            ! ramp from 0 to full load
+
+*STEP, NLGEOM, INC=10000
+0.0, 1.0                  ! total step time (any convenient value)
+*STATIC
+*END STEP
+```
+
+### What each change does
+
+| Change | Why it is needed |
+|--------|-----------------|
+| **Add *ELASTIC* entry** | Gives the material a non‑zero stiffness. A density line alone leaves the stiffness matrix zero → singular. |
+| **Constrain the bottom edge (or a single node)** | Removes the three rigid‑body modes (X‑translation, Y‑translation, rotation about Z). Any three independent constraints are sufficient. |
+| **Use a realistic step time (0 → 1 s)** | The load is now applied gradually; Abaqus can automatically sub‑increment if the displacement is large. |
+| **Increase `INC` (max increments)** | Allows the solver to cut the increment size when convergence becomes difficult. |
+| **(Optional) Turn NLGEOM OFF** if you only need a linear‑elastic response and the prescribed displacement is small compared with the thickness. |
+
+After these four edits the model has a well‑posed stiffness matrix, the Newton‑Raphson iterations can find equilibrium, and the analysis finishes without the “did not converge” error.
+
+---
+
+## Full checklist for future models
+
+| # | Item | What to verify / fix |
+|---|------|----------------------|
+| 1 | **Units** | All geometry, thickness, loads, and material properties must use the same unit system (e.g. mm‑MPa‑s). |
+| 2 | **Material definition** | Every material used in a section must have at least an *ELASTIC* (or *PLASTIC*) entry. A density line alone is insufficient for static analysis. |
+| 3 | **Section thickness** | Shell sections need a non‑zero thickness; otherwise the element stiffness is zero. |
+| 4 | **Rigid‑body constraints** | For a shell: 2 translational + 1 rotational DOFs must be restrained. Use a minimal set (one node fully fixed, or an edge fixed in X & Y plus a rotation). |
+| 5 | **Loading magnitude** | Ensure the prescribed displacement/force is reasonable relative to geometry and material stiffness. Very large displacements with an ultra‑soft material often need NLGEOM = ON and many increments. |
+| 6 | **NLGEOM** | Turn it **ON** only when large deformations are expected. If you keep it OFF, keep the displacement small enough for linear theory. |
+| 7 | **Step definition** | Give a sensible total time; let the *AMPLITUDE* control the load history. Avoid applying the full load in a single increment. |
+| 8 | **Increment control** | Set a generous `MAX INCREMENT` (or let Abaqus decide) and increase `INC` (max number of increments) so the solver can automatically reduce the step size when needed. |
+| 9 | **Diagnostics** | If convergence still fails, read the `.msg` file: <br>• “Singular matrix” → missing constraints or zero stiffness. <br>• “Zero stiffness” → material definition incomplete. <br>• “Excessive strain increment” → load too large for the current increment size. |
+
+---
+
+### TL;DR – What you must do right now
+
+1. **Add a non‑zero elastic modulus** to the material (`*ELASTIC`).  
+2. **Fully constrain the bottom edge (or a single node)** in X, Y and rotation (`*BOUNDARY`).  
+3. **Give the step a realistic duration** (e.g. `0.0, 1.0`) and let the amplitude ramp the load.  
+4. **Increase the maximum number of increments** (`INC=10000` is safe).  
+
+After these four edits the analysis will have a well‑posed stiffness matrix, the Newton‑Raphson solver will converge, and the step will complete without the “did not converge” error. If you still see convergence warnings, reduce the prescribed displacement or make the material stiffer, and let Abaqus automatically cut the increment size.
+A: **Why the analysis aborts – “singular matrix”**
+
+Abaqus can only solve a static (or quasi‑static) problem when the global stiffness matrix is **full rank**.  
+In the model you posted the matrix is rank‑deficient for two independent reasons:
+
+| # | What is missing / wrong | How it makes the matrix singular |
+|---|--------------------------|-----------------------------------|
+| 1 | **No elastic stiffness** – the material definition contains only a `*DENSITY` entry. | With no `*ELASTIC` (or `*PLASTIC`) data every shell element has a stiffness of **zero**. The element stiffness matrices are zero, therefore the assembled global matrix is singular. |
+| 2 | **No rigid‑body constraints** – the bottom edge (or any node) is completely free. | The model can translate in X, translate in Y and rotate about Z. Those three uncontrolled rigid‑body modes remove three rows/columns from the stiffness matrix → rank deficiency → “singular matrix”. |
+| 3 (optional) | **Load applied in one huge increment** – a –1 mm displacement is ~40 % of the plate thickness and is imposed in a single step with `NLGEOM=ON`. | Even with a proper material, the Newton‑Raphson algorithm may need many sub‑increments to converge; if it cannot create enough increments it aborts with the same “did not converge” message. |
+
+Both problems produce the same error text, so you have to fix **both** before the analysis can run.
+
+---
+
+## Minimal set of changes that make the model run
+
+Below is a **complete, ready‑to‑paste** Abaqus input fragment that incorporates all the required fixes.  
+Only the parts that needed to be added/changed are highlighted; everything else in your original file can stay unchanged.
+
+```text
+*HEADING
+--- Fixed‑constraint, elastic‑material Abaqus model -------------------------
+
+*PART, NAME=PART-1
+...                     ! your node/element definitions
+*END PART
+
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=PART-1-1, PART=PART-1
+*END INSTANCE
+*END ASSEMBLY
+
+* MATERIAL, NAME=EL
+* ELASTIC
+0.001, 0.3               ! E = 0.001 MPa (any non‑zero value), ν = 0.3
+* DENSITY                ! optional for static; can be omitted
+1.0E-9
+
+*SHELL SECTION, ELSET=EALL, MATERIAL=EL
+0.0762                   ! thickness (mm)
+
+*ELSET, ELSET=EALL
+...                      ! all shell elements
+
+! --------------------------------------------------------------
+! 1️⃣  Rigid‑body constraints – fully fix the bottom edge (or a node)
+! --------------------------------------------------------------
+*NSET, NSET=NBOTTOM
+310,311,313,315,316,318,319,321,322,324,325,327,328,330,331,333,
+334,336,337,339,340,341
+
+*BOUNDARY
+NBOTTOM, 1, 3, 0.0       ! X‑translation, Y‑translation and rotation Z = 0
+
+! --------------------------------------------------------------
+! 2️⃣  Prescribed displacement on the top edge
+! --------------------------------------------------------------
+*NSET, NSET=NTOP
+1,4,8,10,13,15,18,20,23,25,28,30,33,35,38,40,43,45,48,50,53
+
+*BOUNDARY, AMPLITUDE=A1
+NTOP, 2, 2, -1.0         ! vertical displacement of –1 mm
+
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.           ! ramp from 0 to full load
+
+! --------------------------------------------------------------
+! 3️⃣  Step definition – give the solver time to sub‑increment
+! --------------------------------------------------------------
+*STEP, NLGEOM, INC=10000
+0.0, 1.0                 ! total step time (any convenient value)
+*STATIC
+*END STEP
+```
+
+### What each change does
+
+| Change | Reason |
+|--------|--------|
+| **`*ELASTIC` entry** | Supplies a non‑zero Young’s modulus → every shell element now has stiffness. |
+| **`NBOTTOM` boundary** | Removes the three rigid‑body modes (X, Y, rotation). Any three independent constraints are sufficient; fixing the whole bottom edge is the simplest. |
+| **Amplitude ramp** | Loads the displacement gradually instead of instantaneously, allowing the Newton‑Raphson algorithm to converge. |
+| **`INC=10000` (or a large number)** | Gives the solver enough freedom to cut the increment size when the prescribed displacement is large. |
+| **(Optional) `NLGEOM`** | Keep it **ON** if you really need large‑deformation kinematics; otherwise set `NLGEOM` = OFF for a linear‑elastic analysis. |
+
+After these four edits the global stiffness matrix is full rank, the Newton‑Raphson iterations can find equilibrium, and the step finishes without the “did not converge” error.
+
+---
+
+## Full checklist for future models (so you never see the same error again)
+
+| # | Item to verify | How to check / fix |
+|---|----------------|--------------------|
+| 1 | **Units** | All geometry, thickness, loads, and material properties must be in the same unit system (e.g. mm‑MPa‑s). |
+| 2 | **Material definition** | Every material used in a section must contain at least an `*ELASTIC` (or `*PLASTIC`) entry. A density line alone does **not** give stiffness. |
+| 3 | **Shell thickness** | `*SHELL SECTION` must have a non‑zero thickness; otherwise the element stiffness is zero. |
+| 4 | **Rigid‑body constraints** | For a 2‑D shell model you need 2 translational + 1 rotational constraint. Fix a single node in X, Y and rotation, or fix an edge in X & Y and add a rotation constraint. |
+| 5 | **Load magnitude** | Verify that the prescribed displacement/force is reasonable compared with geometry and material stiffness. Very large loads often need many increments. |
+| 6 | **NLGEOM** | Turn **ON** only when large deformations are expected. If you keep it OFF, keep the displacement small enough for linear theory. |
+| 7 | **Step definition** | Give a sensible total time (e.g. 0‑1 s) and use an `*AMPLITUDE` to ramp the load. |
+| 8 | **Increment control** | Set a generous `MAX INCREMENT` (or let Abaqus decide) and increase `INC` (max number of increments) so the solver can automatically reduce the step size when needed. |
+| 9 | **Diagnostics** | If convergence still fails, read the `.msg` file: <br>• “Singular matrix” → missing constraints or zero stiffness. <br>• “Zero stiffness” → material definition incomplete. <br>• “Excessive strain increment” → load too large for the current increment size. |
+
+---
+
+## TL;DR – What you must do **right now**
+
+1. **Add a non‑zero elastic modulus** to the material (`*ELASTIC`).  
+2. **Fully constrain the bottom edge (or a single node)** in X, Y and rotation (`*BOUNDARY`).  
+3. **Apply the displacement with a ramp** (use an `*AMPLITUDE`).  
+4. **Give the step a realistic duration** (e.g. `0.0, 1.0`) and allow many increments (`INC=10000`).  
+
+After these four edits the global stiffness matrix is well‑posed, the Newton‑Raphson solver converges, and the analysis completes without the “did not converge” error. If you still see warnings, reduce the prescribed displacement or increase the material stiffness, and let Abaqus automatically cut the increment size.
+
+=== 2026-04-17 19:10:48 ===
+Q: **Why the analysis aborts – “singular matrix”**
+
+Abaqus can only solve a static (or quasi‑static) problem when the global stiffness matrix is **full rank**.  
+In the model you posted the matrix is rank‑deficient for two independent reasons:
+
+| # | What is missing / wrong | How it makes the matrix singular |
+|---|--------------------------|-----------------------------------|
+| 1 | **No elastic stiffness** – the material definition contains only a `*DENSITY` entry. | With no `*ELASTIC` (or `*PLASTIC`) data every shell element has a stiffness of **zero**. The element stiffness matrices are zero, therefore the assembled global matrix is singular. |
+| 2 | **No rigid‑body constraints** – the bottom edge (or any node) is completely free. | The model can translate in **X**, translate in **Y** and rotate about **Z**. Those three uncontrolled rigid‑body modes remove three rows/columns from the stiffness matrix → rank deficiency → “singular matrix”. |
+| 3 (optional) | **Load applied in one huge increment** – a –1 mm displacement is ~40 % of the plate height and is imposed in a single step with `NLGEOM=ON`. | Even with a proper material, the Newton‑Raphson algorithm may need many sub‑increments to converge; if it cannot create enough increments it aborts with the same “did not converge” message. |
+
+Both problems must be fixed before the analysis can run.
+
+---
+
+## Minimal set of changes that make the model run
+
+Below is a **complete, ready‑to‑paste** Abaqus input fragment that incorporates all the required fixes.  
+Only the parts that needed to be added/changed are highlighted; everything else in your original file can stay unchanged.
+
+```text
+*HEADING
+--- Fixed‑constraint, elastic‑material Abaqus model -------------------------
+
+*PART, NAME=PART-1
+...                     ! your node/element definitions
+*END PART
+
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=PART-1-1, PART=PART-1
+*END INSTANCE
+*END ASSEMBLY
+
+* MATERIAL, NAME=EL
+* ELASTIC
+0.001, 0.3               ! E = 0.001 MPa (any non‑zero value), ν = 0.3
+* DENSITY                ! optional for static; can be omitted
+1.0E-9
+
+*SHELL SECTION, ELSET=EALL, MATERIAL=EL
+0.0762                   ! thickness (mm)
+
+*ELSET, ELSET=EALL
+...                      ! all shell elements
+
+! --------------------------------------------------------------
+! 1️⃣  Rigid‑body constraints – fully fix the bottom edge (or a node)
+! --------------------------------------------------------------
+*NSET, NSET=NBOTTOM
+310,311,313,315,316,318,319,321,322,324,325,327,328,330,331,333,
+334,336,337,339,340,341
+
+*BOUNDARY
+NBOTTOM, 1, 3, 0.0       ! X‑translation, Y‑translation and rotation Z = 0
+
+! --------------------------------------------------------------
+! 2️⃣  Prescribed displacement on the top edge
+! --------------------------------------------------------------
+*NSET, NSET=NTOP
+1,4,8,10,13,15,18,20,23,25,28,30,33,35,38,40,43,45,48,50,53
+
+*BOUNDARY, AMPLITUDE=A1
+NTOP, 2, 2, -1.0         ! vertical displacement of –1 mm
+
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.           ! ramp from 0 to full load
+
+! --------------------------------------------------------------
+! 3️⃣  Step definition – give the solver time to sub‑increment
+! --------------------------------------------------------------
+*STEP, NLGEOM, INC=10000
+0.0, 1.0                 ! total step time (any convenient value)
+*STATIC
+*END STEP
+```
+
+### What each change does
+
+| Change | Why it is needed |
+|--------|-----------------|
+| **`*ELASTIC` entry** | Supplies a non‑zero Young’s modulus → every shell element now has stiffness. |
+| **`NBOTTOM` boundary** | Removes the three rigid‑body modes (X, Y, rotation). Any three independent constraints are sufficient; fixing the whole bottom edge is the simplest. |
+| **Amplitude ramp** | Loads the displacement gradually instead of instantaneously, allowing the Newton‑Raphson algorithm to converge. |
+| **`INC=10000` (or a large number)** | Gives the solver enough freedom to cut the increment size when the prescribed displacement is large. |
+| **(Optional) `NLGEOM`** | Keep it **ON** if you really need large‑deformation kinematics; otherwise set `NLGEOM=OFF` for a linear‑elastic analysis. |
+
+After these edits the global stiffness matrix is full rank, the Newton‑Raphson iterations can find equilibrium, and the step finishes without the “did not converge” error.
+
+---
+
+## Full checklist for future models (so you never see the same error again)
+
+| # | Item to verify | How to check / fix |
+|---|----------------|--------------------|
+| 1 | **Units** | All geometry, thickness, loads, and material properties must be in the same unit system (e.g. mm‑MPa‑s). |
+| 2 | **Material definition** | Every material used in a section must contain at least an `*ELASTIC` (or `*PLASTIC`) entry. A density line alone does **not** give stiffness. |
+| 3 | **Shell thickness** | `*SHELL SECTION` must have a non‑zero thickness; otherwise the element stiffness is zero. |
+| 4 | **Rigid‑body constraints** | For a 2‑D shell model you need 2 translational + 1 rotational constraint. Fix a single node in X, Y and rotation, or fix an edge in X & Y and add a rotation constraint. |
+| 5 | **Load magnitude** | Verify that the prescribed displacement/force is reasonable compared with geometry and material stiffness. Very large loads often need many increments. |
+| 6 | **NLGEOM** | Turn **ON** only when large deformations are expected. If you keep it OFF, keep the displacement small enough for linear theory. |
+| 7 | **Step definition** | Give a sensible total time (e.g. 0‑1 s) and use an `*AMPLITUDE` to ramp the load. |
+| 8 | **Increment control** | Set a generous `MAX INCREMENT` (or let Abaqus decide) and increase `INC` (max number of increments) so the solver can automatically reduce the step size when needed. |
+| 9 | **Diagnostics** | If convergence still fails, read the `.msg` file: <br>• “Singular matrix” → missing constraints or zero stiffness. <br>• “Zero stiffness” → material definition incomplete. <br>• “Excessive strain increment” → load too large for the current increment size. |
+
+---
+
+## TL;DR – What you must do **right now**
+
+1. **Add a non‑zero elastic modulus** to the material (`*ELASTIC`).  
+2. **Fully constrain the bottom edge (or a single node)** in X, Y and rotation (`*BOUNDARY`).  
+3. **Apply the displacement with a ramp** (use an `*AMPLITUDE`).  
+4. **Give the step a realistic duration** (e.g. `0.0, 1.0`) and allow many increments (`INC=10000`).  
+
+After these four edits the analysis will have a well‑posed stiffness matrix, the Newton‑Raphson solver will converge, and the step will complete without the “did not converge” error. If you still see warnings, reduce the prescribed displacement or increase the material stiffness, and let Abaqus automatically cut the increment size.
+A: ## Why the analysis aborts – “singular matrix”
+
+Abaqus can only solve a static (or quasi‑static) problem when the **global stiffness matrix is full rank**.  
+In the model you posted the matrix is rank‑deficient for two independent reasons:
+
+| # | What is missing / wrong | How it makes the matrix singular |
+|---|--------------------------|-----------------------------------|
+| **1** | **No elastic stiffness** – the material definition contains only a `*DENSITY` entry. | Without an `*ELASTIC` (or `*PLASTIC`) definition every shell element has **zero** stiffness. The element stiffness matrices are zero, therefore the assembled global matrix is singular. |
+| **2** | **No rigid‑body constraints** – the bottom edge (or any node) is completely free. | The model can translate in **X**, translate in **Y** and rotate about **Z**. Those three uncontrolled rigid‑body modes remove three rows/columns from the stiffness matrix → rank deficiency → “singular matrix”. |
+| **3 (optional)** | **Load applied in one huge increment** – a –1 mm displacement is ~40 % of the plate height and is imposed in a single step with `NLGEOM=ON`. | Even with a proper material, the Newton‑Raphson algorithm may need many sub‑increments to converge; if it cannot create enough increments it aborts with the same “did not converge” message. |
+
+Both problems **must be fixed** before the analysis can run.
+
+---
+
+## Minimal set of changes that make the model run
+
+Below is a **complete, ready‑to‑paste** Abaqus input fragment that incorporates all the required fixes.  
+Only the parts that needed to be added/changed are highlighted; everything else in your original file can stay unchanged.
+
+```text
+*HEADING
+--- Fixed‑constraint, elastic‑material Abaqus model -------------------------
+
+*PART, NAME=PART-1
+...                     ! your node/element definitions
+*END PART
+
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=PART-1-1, PART=PART-1
+*END INSTANCE
+*END ASSEMBLY
+
+*MATERIAL, NAME=EL
+*ELASTIC
+0.001, 0.3               ! E = 0.001 MPa (any non‑zero value), ν = 0.3
+*DENSITY
+1.0E-9
+
+*SHELL SECTION, ELSET=EALL, MATERIAL=EL
+0.0762                   ! thickness (mm)
+
+*ELSET, ELSET=EALL
+...                      ! all shell elements
+
+! --------------------------------------------------------------
+! 1️⃣  Rigid‑body constraints – fully fix the bottom edge (or a node)
+! --------------------------------------------------------------
+*NSET, NSET=NBOTTOM
+310,311,313,315,316,318,319,321,322,324,325,327,328,330,331,333,
+334,336,337,339,340,341
+
+*BOUNDARY
+NBOTTOM, 1, 3, 0.0       ! X‑translation, Y‑translation and rotation Z = 0
+
+! --------------------------------------------------------------
+! 2️⃣  Prescribed displacement on the top edge
+! --------------------------------------------------------------
+*NSET, NSET=NTOP
+1,4,8,10,13,15,18,20,23,25,28,30,33,35,38,40,43,45,48,50,53
+
+*BOUNDARY, AMPLITUDE=A1
+NTOP, 2, 2, -1.0         ! vertical displacement of –1 mm
+
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.           ! ramp from 0 to full load
+
+! --------------------------------------------------------------
+! 3️⃣  Step definition – give the solver time to sub‑increment
+! --------------------------------------------------------------
+*STEP, NLGEOM, INC=10000
+0.0, 1.0                 ! total step time (any convenient value)
+*STATIC
+*END STEP
+```
+
+### What each change does
+
+| Change | Why it is needed |
+|--------|------------------|
+| **`*ELASTIC` entry** | Supplies a non‑zero Young’s modulus → every shell element now has stiffness. |
+| **`NBOTTOM` boundary** | Removes the three rigid‑body modes (X, Y, rotation). Any three independent constraints are sufficient; fixing the whole bottom edge is the simplest. |
+| **Amplitude ramp** | Loads the displacement gradually instead of instantaneously, allowing the Newton‑Raphson algorithm to converge. |
+| **`INC=10000` (or a large number)** | Gives the solver enough freedom to cut the increment size when the prescribed displacement is large. |
+| **(Optional) `NLGEOM`** | Keep it **ON** only if you really need large‑deformation kinematics; otherwise set `NLGEOM=OFF` for a linear‑elastic analysis. |
+
+After these edits the global stiffness matrix is full rank, the Newton‑Raphson iterations can find equilibrium, and the step finishes without the “did not converge” error.
+
+---
+
+## Full checklist for future models (so you never see the same error again)
+
+| # | Item to verify | How to check / fix |
+|---|----------------|--------------------|
+| **1** | **Units** | All geometry, thickness, loads, and material properties must be in the same unit system (e.g. mm‑MPa‑s). |
+| **2** | **Material definition** | Every material used in a section must contain at least an `*ELASTIC` (or `*PLASTIC`) entry. A density line alone does **not** give stiffness. |
+| **3** | **Shell thickness** | `*SHELL SECTION` must have a non‑zero thickness; otherwise the element stiffness is zero. |
+| **4** | **Rigid‑body constraints** | For a 2‑D shell model you need 2 translational + 1 rotational constraint. Fix a single node in X, Y and rotation, or fix an edge in X & Y and add a rotation constraint. |
+| **5** | **Load magnitude** | Verify that the prescribed displacement/force is reasonable compared with geometry and material stiffness. Very large loads often need many increments. |
+| **6** | **NLGEOM** | Turn **ON** only when large deformations are expected. If you keep it OFF, keep the displacement small enough for linear theory. |
+| **7** | **Step definition** | Give a sensible total time (e.g. 0‑1 s) and use an `*AMPLITUDE` to ramp the load. |
+| **8** | **Increment control** | Set a generous `MAX INCREMENT` (or let Abaqus decide) and increase `INC` (max number of increments) so the solver can automatically reduce the step size when needed. |
+| **9** | **Diagnostics** | If convergence still fails, read the `.msg` file: <br>• “Singular matrix” → missing constraints or zero stiffness. <br>• “Zero stiffness” → material definition incomplete. <br>• “Excessive strain increment” → load too large for the current increment size. |
+
+---
+
+## TL;DR – What you must do **right now**
+
+1. **Add a non‑zero elastic modulus** to the material (`*ELASTIC`).  
+2. **Fully constrain the bottom edge (or a single node)** in X, Y and rotation (`*BOUNDARY`).  
+3. **Apply the displacement with a ramp** (use an `*AMPLITUDE`).  
+4. **Give the step a realistic duration** (e.g. `0.0, 1.0`) and allow many increments (`INC=10000`).  
+
+After these four edits the analysis will have a well‑posed stiffness matrix, the Newton‑Raphson solver will converge, and the step will complete without the “did not converge” error. If you still see warnings, reduce the prescribed displacement or increase the material stiffness, and let Abaqus automatically cut the increment size.
+
+=== 2026-04-17 19:11:36 ===
+Q: **Why the job aborts – “singular matrix”**
+
+Abaqus can only solve a static (or quasi‑static) problem when the **global stiffness matrix is full rank**.  
+In the input you posted the matrix is rank‑deficient for two independent reasons:
+
+| # | What is missing / wrong | Why it makes the matrix singular |
+|---|--------------------------|-----------------------------------|
+| **1** | **No elastic stiffness** – the material definition contains only a `*DENSITY` entry. | Without an `*ELASTIC` (or `*PLASTIC`) definition every shell element has **zero** stiffness. The element stiffness matrices are zero, therefore the assembled global matrix is singular. |
+| **2** | **No rigid‑body constraints** – the bottom edge (or any node) is completely free. | The model can translate in **X**, translate in **Y** and rotate about **Z**. Those three uncontrolled rigid‑body modes remove three rows/columns from the stiffness matrix → rank deficiency → “singular matrix”. |
+| **3 (optional)** | **Load applied in one huge increment** – a –1 mm displacement is ~40 % of the plate height and is imposed in a single step with `NLGEOM=ON`. | Even with a proper material, the Newton‑Raphson algorithm may need many sub‑increments to converge; if it cannot create enough increments it aborts with the same “did not converge” message. |
+
+Both problems **must be fixed** before the analysis can run.
+
+---
+
+## Minimal set of changes that make the model run
+
+Below is a **complete, ready‑to‑paste** Abaqus input fragment that incorporates all the required fixes.  
+Only the parts that needed to be added/changed are highlighted; everything else in your original file can stay unchanged.
+
+```text
+*HEADING
+--- Fixed‑constraint, elastic‑material Abaqus model -------------------------
+
+*PART, NAME=PART-1
+...                     ! your node/element definitions
+*END PART
+
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=PART-1-1, PART=PART-1
+*END INSTANCE
+*END ASSEMBLY
+
+* MATERIAL, NAME=EL
+*ELASTIC
+0.001, 0.3               ! E = 0.001 MPa (any non‑zero value), ν = 0.3
+*DENSITY
+1.0E-9
+
+*SHELL SECTION, ELSET=EALL, MATERIAL=EL
+0.0762                   ! thickness (mm)
+
+*ELSET, ELSET=EALL
+...                      ! all shell elements
+
+! --------------------------------------------------------------
+! 1️⃣  Rigid‑body constraints – fully fix the bottom edge (or a node)
+! --------------------------------------------------------------
+*NSET, NSET=NBOTTOM
+310,311,313,315,316,318,319,321,322,324,325,327,328,330,331,333,
+334,336,337,339,340,341
+
+*BOUNDARY
+NBOTTOM, 1, 3, 0.0       ! X‑translation, Y‑translation and rotation Z = 0
+
+! --------------------------------------------------------------
+! 2️⃣  Prescribed displacement on the top edge
+! --------------------------------------------------------------
+*NSET, NSET=NTOP
+1,4,8,10,13,15,18,20,23,25,28,30,33,35,38,40,43,45,48,50,53
+
+*BOUNDARY, AMPLITUDE=A1
+NTOP, 2, 2, -1.0         ! vertical displacement of –1 mm
+
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.           ! ramp from 0 to full load
+
+! --------------------------------------------------------------
+! 3️⃣  Step definition – give the solver time to sub‑increment
+! --------------------------------------------------------------
+*STEP, NLGEOM, INC=10000
+0.0, 1.0                 ! total step time (any convenient value)
+*STATIC
+*END STEP
+```
+
+### What each change does
+
+| Change | Why it is needed |
+|--------|-----------------|
+| **`*ELASTIC` entry** | Gives every shell element a non‑zero stiffness. |
+| **`NBOTTOM` boundary** | Removes the three rigid‑body modes (X, Y, rotation). Any three independent constraints are sufficient; fixing the whole bottom edge is the simplest. |
+| **Amplitude ramp** | Loads the displacement gradually instead of instantaneously, allowing the Newton‑Raphson algorithm to converge. |
+| **`INC=10000` (or a large number)** | Gives the solver enough freedom to cut the increment size when the prescribed displacement is large. |
+| **(Optional) `NLGEOM`** | Keep it **ON** only if you really need large‑deformation kinematics; otherwise set `NLGEOM=OFF` for a linear‑elastic analysis. |
+
+After these edits the global stiffness matrix is full rank, the Newton‑Raphson iterations can find equilibrium, and the step finishes without the “did not converge” error.
+
+---
+
+## Full checklist for future models (so you never see the same error again)
+
+| # | Item to verify | How to check / fix |
+|---|----------------|--------------------|
+| **1** | **Units** | All geometry, thickness, loads, and material properties must be in the same unit system (e.g. mm‑MPa‑s). |
+| **2** | **Material definition** | Every material used in a section must contain at least an `*ELASTIC` (or `*PLASTIC`) entry. A density line alone does **not** give stiffness. |
+| **3** | **Shell thickness** | `*SHELL SECTION` must have a non‑zero thickness; otherwise the element stiffness is zero. |
+| **4** | **Rigid‑body constraints** | For a 2‑D shell model you need 2 translational + 1 rotational constraint. Fix a single node in X, Y and rotation, or fix an edge in X & Y and add a rotation constraint. |
+| **5** | **Load magnitude** | Verify that the prescribed displacement/force is reasonable compared with geometry and material stiffness. Very large loads often need many increments. |
+| **6** | **NLGEOM** | Turn **ON** only when large deformations are expected. If you keep it OFF, keep the displacement small enough for linear theory. |
+| **7** | **Step definition** | Give a sensible total time (e.g. 0‑1 s) and use an `*AMPLITUDE` to ramp the load. |
+| **8** | **Increment control** | Set a generous `MAX INCREMENT` (or let Abaqus decide) and increase `INC` (max number of increments) so the solver can automatically reduce the step size when needed. |
+| **9** | **Diagnostics** | If convergence still fails, read the `.msg` file: <br>• “Singular matrix” → missing constraints or zero stiffness. <br>• “Zero stiffness” → material definition incomplete. <br>• “Excessive strain increment” → load too large for the current increment size. |
+
+---
+
+## TL;DR – What you must do **right now**
+
+1. **Add a non‑zero elastic modulus** to the material (`*ELASTIC`).  
+2. **Fully constrain the bottom edge (or a single node)** in X, Y and rotation (`*BOUNDARY`).  
+3. **Apply the displacement with a ramp** (use an `*AMPLITUDE`).  
+4. **Give the step a realistic duration** (e.g. `0.0, 1.0`) and allow many increments (`INC=10000`).  
+
+After these four edits the analysis will have a well‑posed stiffness matrix, the Newton‑Raphson solver will converge, and the step will complete without the “did not converge” error. If you still see warnings, reduce the prescribed displacement or increase the material stiffness, and let Abaqus automatically cut the increment size.
+A: **Why the job aborts – “singular matrix”**
+
+Abaqus can only solve a static (or quasi‑static) analysis when the **global stiffness matrix is full rank**.  
+In the model you posted the matrix is rank‑deficient for two independent reasons:
+
+| # | What is missing / wrong | How it makes the matrix singular |
+|---|--------------------------|-----------------------------------|
+| **1** | **No elastic stiffness** – the material definition contains only a `*DENSITY` entry. | Without an `*ELASTIC` (or `*PLASTIC`) definition every shell element has **zero** stiffness. The element stiffness matrices are zero, therefore the assembled global matrix is singular. |
+| **2** | **No rigid‑body constraints** – the bottom edge (or any node) is completely free. | The model can translate in **X**, translate in **Y** and rotate about **Z**. Those three uncontrolled rigid‑body modes remove three rows/columns from the stiffness matrix → rank deficiency → “singular matrix”. |
+| **3 (optional)** | **Load applied in one huge increment** – a –1 mm displacement is ~40 % of the plate height and is imposed in a single step with `NLGEOM=ON`. | Even with a proper material, the Newton‑Raphson algorithm may need many sub‑increments to converge; if it cannot create enough increments it aborts with the same “did not converge” message. |
+
+Both problems **must be fixed** before the analysis can run.
+
+---
+
+## Minimal set of changes that make the model run
+
+Below is a **complete, ready‑to‑paste** Abaqus input fragment that incorporates all the required fixes.  
+Only the parts that needed to be added/changed are highlighted; everything else in your original file can stay unchanged.
+
+```text
+*HEADING
+--- Fixed‑constraint, elastic‑material Abaqus model -------------------------
+
+*PART, NAME=PART-1
+...                     ! your node/element definitions
+*END PART
+
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=PART-1-1, PART=PART-1
+*END INSTANCE
+*END ASSEMBLY
+
+* MATERIAL, NAME=EL
+*ELASTIC
+0.001, 0.3               ! E = 0.001 MPa (any non‑zero value), ν = 0.3
+*DENSITY
+1.0E-9
+
+*SHELL SECTION, ELSET=EALL, MATERIAL=EL
+0.0762                   ! thickness (mm)
+
+*ELSET, ELSET=EALL
+...                      ! all shell elements
+
+! --------------------------------------------------------------
+! 1️⃣  Rigid‑body constraints – fully fix the bottom edge (or a node)
+! --------------------------------------------------------------
+*NSET, NSET=NBOTTOM
+310,311,313,315,316,318,319,321,322,324,325,327,328,330,331,333,
+334,336,337,339,340,341
+
+*BOUNDARY
+NBOTTOM, 1, 3, 0.0       ! X‑translation, Y‑translation and rotation Z = 0
+
+! --------------------------------------------------------------
+! 2️⃣  Prescribed displacement on the top edge
+! --------------------------------------------------------------
+*NSET, NSET=NTOP
+1,4,8,10,13,15,18,20,23,25,28,30,33,35,38,40,43,45,48,50,53
+
+*BOUNDARY, AMPLITUDE=A1
+NTOP, 2, 2, -1.0         ! vertical displacement of –1 mm
+
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.           ! ramp from 0 to full load
+
+! --------------------------------------------------------------
+! 3️⃣  Step definition – give the solver time to sub‑increment
+! --------------------------------------------------------------
+*STEP, NLGEOM, INC=10000
+0.0, 1.0                 ! total step time (any convenient value)
+*STATIC
+*END STEP
+```
+
+### What each change does
+
+| Change | Why it is needed |
+|--------|------------------|
+| **`*ELASTIC` entry** | Gives every shell element a non‑zero stiffness. |
+| **`NBOTTOM` boundary** | Removes the three rigid‑body modes (X, Y, rotation). Any three independent constraints are sufficient; fixing the whole bottom edge is the simplest. |
+| **Amplitude ramp** | Loads the displacement gradually instead of instantaneously, allowing the Newton‑Raphson algorithm to converge. |
+| **`INC=10000` (or a large number)** | Gives the solver enough freedom to cut the increment size when the prescribed displacement is large. |
+| **(Optional) `NLGEOM`** | Keep it **ON** only if you really need large‑deformation kinematics; otherwise set `NLGEOM=OFF` for a linear‑elastic analysis. |
+
+After these edits the global stiffness matrix is full rank, the Newton‑Raphson iterations can find equilibrium, and the step finishes without the “did not converge” error.
+
+---
+
+## Full checklist for future models (so you never see the same error again)
+
+| # | Item to verify | How to check / fix |
+|---|----------------|--------------------|
+| **1** | **Units** | All geometry, thickness, loads, and material properties must be in the same unit system (e.g. mm‑MPa‑s). |
+| **2** | **Material definition** | Every material used in a section must contain at least an `*ELASTIC` (or `*PLASTIC`) entry. A density line alone does **not** give stiffness. |
+| **3** | **Shell thickness** | `*SHELL SECTION` must have a non‑zero thickness; otherwise the element stiffness is zero. |
+| **4** | **Rigid‑body constraints** | For a 2‑D shell model you need 2 translational + 1 rotational constraint. Fix a single node in X, Y and rotation, or fix an edge in X & Y and add a rotation constraint. |
+| **5** | **Load magnitude** | Verify that the prescribed displacement/force is reasonable compared with geometry and material stiffness. Very large loads often need many increments. |
+| **6** | **NLGEOM** | Turn **ON** only when large deformations are expected. If you keep it OFF, keep the displacement small enough for linear theory. |
+| **7** | **Step definition** | Give a sensible total time (e.g. 0‑1 s) and use an `*AMPLITUDE` to ramp the load. |
+| **8** | **Increment control** | Set a generous `MAX INCREMENT` (or let Abaqus decide) and increase `INC` (max number of increments) so the solver can automatically reduce the step size when needed. |
+| **9** | **Diagnostics** | If convergence still fails, read the `.msg` file: <br>• “Singular matrix” → missing constraints or zero stiffness. <br>• “Zero stiffness” → material definition incomplete. <br>• “Excessive strain increment” → load too large for the current increment size. |
+
+---
+
+## TL;DR – What you must do **right now**
+
+1. **Add a non‑zero elastic modulus** to the material (`*ELASTIC`).  
+2. **Fully constrain the bottom edge (or a single node)** in X, Y and rotation (`*BOUNDARY`).  
+3. **Apply the displacement with a ramp** (use an `*AMPLITUDE`).  
+4. **Give the step a realistic duration** (e.g. `0.0, 1.0`) and allow many increments (`INC=10000`).  
+
+After these four edits the analysis will have a well‑posed stiffness matrix, the Newton‑Raphson solver will converge, and the step will complete without the “did not converge” error. If you still see warnings, reduce the prescribed displacement or increase the material stiffness, and let Abaqus automatically cut the increment size.
+
+=== 2026-04-17 19:12:24 ===
+Q: **Why the job aborts – “singular matrix”**
+
+Abaqus can only solve a static (or quasi‑static) analysis when the global stiffness matrix is **full rank**.  
+In the input you posted the matrix is rank‑deficient for two independent reasons:
+
+| # | What is missing / wrong | Why it makes the matrix singular |
+|---|--------------------------|-----------------------------------|
+| **1** | **No elastic stiffness** – the material definition contains only a `*DENSITY` entry. | Without an `*ELASTIC` (or `*PLASTIC`) definition every shell element has **zero** stiffness. The element stiffness matrices are therefore zero, and the assembled global matrix is singular. |
+| **2** | **No rigid‑body constraints** – the bottom edge (or any node) is completely free. | The model can translate in **X**, translate in **Y** and rotate about **Z**. Those three uncontrolled rigid‑body modes remove three rows/columns from the stiffness matrix → rank deficiency → “singular matrix”. |
+| **3 (optional)** | **Load applied in one huge increment** – a –1 mm displacement is ~40 % of the plate height and is imposed in a single step with `NLGEOM=ON`. | Even with a proper material, the Newton‑Raphson algorithm may need many sub‑increments to converge; if it cannot create enough increments it aborts with the same “did not converge” message. |
+
+Both problems **must be fixed** before the analysis can run.
+
+---
+
+## Minimal set of changes that make the model run
+
+Below is a **complete, ready‑to‑paste** Abaqus input fragment that incorporates all the required fixes.  
+Only the parts that needed to be added/changed are highlighted; everything else in your original file can stay unchanged.
+
+```text
+*HEADING
+--- Fixed‑constraint, elastic‑material Abaqus model -------------------------
+
+*PART, NAME=PART-1
+...                     ! your node/element definitions
+*END PART
+
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=PART-1-1, PART=PART-1
+*END INSTANCE
+*END ASSEMBLY
+
+* MATERIAL, NAME=EL
+*ELASTIC
+0.001, 0.3               ! E = 0.001 MPa (any non‑zero value), ν = 0.3
+*DENSITY
+1.0E-9
+
+*SHELL SECTION, ELSET=EALL, MATERIAL=EL
+0.0762                   ! thickness (mm)
+
+*ELSET, ELSET=EALL
+...                      ! all shell elements
+
+! --------------------------------------------------------------
+! 1️⃣  Rigid‑body constraints – fully fix the bottom edge (or a node)
+! --------------------------------------------------------------
+*NSET, NSET=NBOTTOM
+310,311,313,315,316,318,319,321,322,324,325,327,328,330,331,333,
+334,336,337,339,340,341
+
+*BOUNDARY
+NBOTTOM, 1, 3, 0.0       ! X‑translation, Y‑translation and rotation Z = 0
+
+! --------------------------------------------------------------
+! 2️⃣  Prescribed displacement on the top edge
+! --------------------------------------------------------------
+*NSET, NSET=NTOP
+1,4,8,10,13,15,18,20,23,25,28,30,33,35,38,40,43,45,48,50,53
+
+*BOUNDARY, AMPLITUDE=A1
+NTOP, 2, 2, -1.0         ! vertical displacement of –1 mm
+
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.           ! ramp from 0 to full load
+
+! --------------------------------------------------------------
+! 3️⃣  Step definition – give the solver time to sub‑increment
+! --------------------------------------------------------------
+*STEP, NLGEOM, INC=10000
+0.0, 1.0                 ! total step time (any convenient value)
+*STATIC
+*END STEP
+```
+
+### What each change does
+
+| Change | Why it is needed |
+|--------|------------------|
+| **`*ELASTIC` entry** | Gives every shell element a non‑zero stiffness. |
+| **`NBOTTOM` boundary** | Removes the three rigid‑body modes (X, Y, rotation). Any three independent constraints are sufficient; fixing the whole bottom edge is the simplest. |
+| **Amplitude ramp** | Loads the displacement gradually instead of instantaneously, allowing the Newton‑Raphson algorithm to converge. |
+| **`INC=10000` (or a large number)** | Gives the solver enough freedom to cut the increment size when the prescribed displacement is large. |
+| **(Optional) `NLGEOM`** | Keep it **ON** only if you really need large‑deformation kinematics; otherwise set `NLGEOM=OFF` for a linear‑elastic analysis. |
+
+After these edits the global stiffness matrix is full rank, the Newton‑Raphson iterations can find equilibrium, and the step finishes without the “did not converge” error.
+
+---
+
+## Full checklist for future models (so you never see the same error again)
+
+| # | Item to verify | How to check / fix |
+|---|----------------|--------------------|
+| **1** | **Units** | All geometry, thickness, loads, and material properties must be in the same unit system (e.g. mm‑MPa‑s). |
+| **2** | **Material definition** | Every material used in a section must contain at least an `*ELASTIC` (or `*PLASTIC`) entry. A density line alone does **not** give stiffness. |
+| **3** | **Shell thickness** | `*SHELL SECTION` must have a non‑zero thickness; otherwise the element stiffness is zero. |
+| **4** | **Rigid‑body constraints** | For a 2‑D shell model you need 2 translational + 1 rotational constraint. Fix a single node in X, Y and rotation, or fix an edge in X & Y and add a rotation constraint. |
+| **5** | **Load magnitude** | Verify that the prescribed displacement/force is reasonable compared with geometry and material stiffness. Very large loads often need many increments. |
+| **6** | **NLGEOM** | Turn **ON** only when large deformations are expected. If you keep it OFF, keep the displacement small enough for linear theory. |
+| **7** | **Step definition** | Give a sensible total time (e.g. 0‑1 s) and use an `*AMPLITUDE` to ramp the load. |
+| **8** | **Increment control** | Set a generous `MAX INCREMENT` (or let Abaqus decide) and increase `INC` (max number of increments) so the solver can automatically reduce the step size when needed. |
+| **9** | **Diagnostics** | If convergence still fails, read the `.msg` file: <br>• “Singular matrix” → missing constraints or zero stiffness. <br>• “Zero stiffness” → material definition incomplete. <br>• “Excessive strain increment” → load too large for the current increment size. |
+
+---
+
+## TL;DR – What you must do **right now**
+
+1. **Add a non‑zero elastic modulus** to the material (`*ELASTIC`).  
+2. **Fully constrain the bottom edge (or a single node)** in X, Y and rotation (`*BOUNDARY`).  
+3. **Apply the displacement with a ramp** (use an `*AMPLITUDE`).  
+4. **Give the step a realistic duration** (e.g. `0.0, 1.0`) and allow many increments (`INC=10000`).  
+
+After these four edits the analysis will have a well‑posed stiffness matrix, the Newton‑Raphson solver will converge, and the step will complete without the “did not converge” error. If you still see warnings, reduce the prescribed displacement or increase the material stiffness, and let Abaqus automatically cut the increment size.
+A: **Why the job aborts – “singular matrix”**
+
+Abaqus can only solve a static (or quasi‑static) step when the global stiffness matrix is **full rank**.  
+In the model you posted the matrix is rank‑deficient for two independent reasons:
+
+| # | What is missing / wrong | How it makes the matrix singular |
+|---|--------------------------|-----------------------------------|
+| **1** | **No elastic stiffness** – the material definition contains only a `*DENSITY` entry. | Without an `*ELASTIC` (or `*PLASTIC`) definition every shell element has **zero** stiffness. The element stiffness matrices are therefore zero, and the assembled global matrix is singular. |
+| **2** | **No rigid‑body constraints** – the bottom edge (or any node) is completely free. | The model can translate in **X**, translate in **Y** and rotate about **Z**. Those three uncontrolled rigid‑body modes remove three rows/columns from the stiffness matrix → rank deficiency → “singular matrix”. |
+| **3 (optional)** | **Load applied in one huge increment** – a –1 mm displacement is ~40 % of the plate height and is imposed in a single step with `NLGEOM=ON`. | Even with a proper material, the Newton‑Raphson algorithm may need many sub‑increments to converge; if it cannot create enough increments it aborts with the same “did not converge” message. |
+
+Both problems **must be fixed** before the analysis can run.
+
+---
+
+## Minimal set of changes that make the model run
+
+Below is a **complete, ready‑to‑paste** Abaqus input fragment that incorporates all the required fixes.  
+Only the parts that needed to be added/changed are highlighted; everything else in your original file can stay unchanged.
+
+```text
+*HEADING
+--- Fixed‑constraint, elastic‑material Abaqus model -------------------------
+
+*PART, NAME=PART-1
+...                     ! your node/element definitions
+*END PART
+
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=PART-1-1, PART=PART-1
+*END INSTANCE
+*END ASSEMBLY
+
+* MATERIAL, NAME=EL
+*ELASTIC
+0.001, 0.3               ! E = 0.001 MPa (any non‑zero value), ν = 0.3
+*DENSITY
+1.0E-9
+
+*SHELL SECTION, ELSET=EALL, MATERIAL=EL
+0.0762                   ! thickness (mm)
+
+*ELSET, ELSET=EALL
+...                      ! all shell elements
+
+! --------------------------------------------------------------
+! 1️⃣  Rigid‑body constraints – fully fix the bottom edge (or a node)
+! --------------------------------------------------------------
+*NSET, NSET=NBOTTOM
+310,311,313,315,316,318,319,321,322,324,325,327,328,330,331,333,
+334,336,337,339,340,341
+
+*BOUNDARY
+NBOTTOM, 1, 3, 0.0       ! X‑translation, Y‑translation and rotation Z = 0
+
+! --------------------------------------------------------------
+! 2️⃣  Prescribed displacement on the top edge
+! --------------------------------------------------------------
+*NSET, NSET=NTOP
+1,4,8,10,13,15,18,20,23,25,28,30,33,35,38,40,43,45,48,50,53
+
+*BOUNDARY, AMPLITUDE=A1
+NTOP, 2, 2, -1.0         ! vertical displacement of –1 mm
+
+*AMPLITUDE, NAME=A1
+0., 0., 1., 1.           ! ramp from 0 to full load
+
+! --------------------------------------------------------------
+! 3️⃣  Step definition – give the solver time to sub‑increment
+! --------------------------------------------------------------
+*STEP, NLGEOM, INC=10000
+0.0, 1.0                 ! total step time (any convenient value)
+*STATIC
+*END STEP
+```
+
+### What each change does
+
+| Change | Why it is needed |
+|--------|-----------------|
+| **`*ELASTIC` entry** | Gives every shell element a non‑zero stiffness. |
+| **`NBOTTOM` boundary** | Removes the three rigid‑body modes (X, Y, rotation). Any three independent constraints are sufficient; fixing the whole bottom edge is the simplest. |
+| **Amplitude ramp** | Loads the displacement gradually instead of instantaneously, allowing the Newton‑Raphson algorithm to converge. |
+| **`INC=10000` (or a large number)** | Gives the solver enough freedom to cut the increment size when the prescribed displacement is large. |
+| **(Optional) `NLGEOM`** | Keep it **ON** only if you really need large‑deformation kinematics; otherwise set `NLGEOM=OFF` for a linear‑elastic analysis. |
+
+After these edits the global stiffness matrix is full rank, the Newton‑Raphson iterations can find equilibrium, and the step finishes without the “did not converge” error.
+
+---
+
+## Full checklist for future models (so you never see the same error again)
+
+| # | Item to verify | How to check / fix |
+|---|----------------|--------------------|
+| **1** | **Units** | All geometry, thickness, loads, and material properties must be in the same unit system (e.g. mm‑MPa‑s). |
+| **2** | **Material definition** | Every material used in a section must contain at least an `*ELASTIC` (or `*PLASTIC`) entry. A density line alone does **not** give stiffness. |
+| **3** | **Shell thickness** | `*SHELL SECTION` must have a non‑zero thickness; otherwise the element stiffness is zero. |
+| **4** | **Rigid‑body constraints** | For a 2‑D shell model you need 2 translational + 1 rotational constraint. Fix a single node in X, Y and rotation, or fix an edge in X & Y and add a rotation constraint. |
+| **5** | **Load magnitude** | Verify that the prescribed displacement/force is reasonable compared with geometry and material stiffness. Very large loads often need many increments. |
+| **6** | **NLGEOM** | Turn **ON** only when large deformations are expected. If you keep it OFF, keep the displacement small enough for linear theory. |
+| **7** | **Step definition** | Give a sensible total time (e.g. 0‑1 s) and use an `*AMPLITUDE` to ramp the load. |
+| **8** | **Increment control** | Set a generous `MAX INCREMENT` (or let Abaqus decide) and increase `INC` (max number of increments) so the solver can automatically reduce the step size when needed. |
+| **9** | **Diagnostics** | If convergence still fails, read the `.msg` file: <br>• “Singular matrix” → missing constraints or zero stiffness. <br>• “Zero stiffness” → material definition incomplete. <br>• “Excessive strain increment” → load too large for the current increment size. |
+
+---
+
+## TL;DR – What you must do **right now**
+
+1. **Add a non‑zero elastic modulus** to the material (`*ELASTIC`).  
+2. **Fully constrain the bottom edge (or a single node)** in X, Y and rotation (`*BOUNDARY`).  
+3. **Apply the displacement with a ramp** (use an `*AMPLITUDE`).  
+4. **Give the step a realistic duration** (e.g. `0.0, 1.0`) and allow many increments (`INC=10000`).  
+
+After these four edits the analysis will have a well‑posed stiffness matrix, the Newton‑Raphson solver will converge, and the step will complete without the “did not converge” error. If you still see warnings, reduce the prescribed displacement or increase the material stiffness, and let Abaqus automatically cut the increment size.
+
+=== 2026-04-17 19:12:58 ===
+Q: The job aborts because the model has no elastic stiffness (the material is defined only with density, so all shell elements are essentially zero‑stiff) and it lacks the three rigid‑body constraints needed to give the global stiffness matrix full rank, so the solver encounters a singular matrix; to fix this you must add an *ELASTIC entry with a non‑zero modulus, apply boundary conditions that fully constrain the bottom edge (or at least fix X, Y and rotation about Z), load the prescribed displacement with a gradual ramp (using an amplitude definition) and give the step enough sub‑increments (by increasing the INC value or allowing more automatic increments), after which the stiffness matrix becomes well‑posed and the static step can converge.
+A: **Answer – Why the job aborts and how to make the analysis run**
+
+The error you are seeing is caused by a **singular global stiffness matrix**.  
+In Abaqus (and in any finite‑element solver) the stiffness matrix must be **full‑rank** before the static equilibrium equations can be solved. Two things in your model prevent this:
+
+| Problem | What it does | How to fix it |
+|---------|--------------|---------------|
+| **No elastic stiffness** – the material is defined only with *DENSITY* (or no material at all). | All shell elements have a zero‑stiffness (E = 0). The global matrix is therefore singular. | Define a proper elastic material (or a combined elastic‑plastic one) and assign it to the shell sections. |
+| **Missing rigid‑body constraints** – the model has no boundary conditions that prevent the three rigid‑body motions (translation in X, translation in Y, rotation about Z for a 2‑D shell). | The solver cannot invert a matrix that contains the three zero‑energy modes. | Apply enough *BOUNDARY* constraints (or *ENCASTRE*) to fully restrain the structure. |
+
+Once the stiffness is non‑zero and the model is properly constrained, the static step will converge **provided the loading is introduced gradually** and the step‑size control is adequate.
+
+Below is a **complete, step‑by‑step checklist** (with example Abaqus input snippets) that will turn the failing job into a successful static analysis.
+
+---
+
+## 1. Give the shells a real elastic stiffness
+
+### 1.1 Define a material with a non‑zero Young’s modulus
+
+```abaqus
+*Material, name=STEEL
+*Density
+7850.,
+*Elastic
+210000., 0.3          ! E = 210 GPa, ν = 0.3
+```
+
+*If you need plasticity, add a *Plastic* entry after the *Elastic* line.*
+
+### 1.2 Create a shell section that uses the material
+
+```abaqus
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+```
+
+*Make sure the thickness is non‑zero; otherwise the section will still be “soft”.*
+
+### 1.3 Assign the section to the shell elements
+
+```abaqus
+*Elset, elset=ALL_SHELLS, generate
+1, 1000, 1          ! adjust the range to your mesh
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+```
+
+---
+
+## 2. Constrain the model so that the three rigid‑body modes are removed
+
+For a 2‑D shell (plane‑stress) you need to fix **X‑translation, Y‑translation, and rotation about Z**. The simplest way is to fully encastre the bottom edge (or any line that you know will stay fixed).
+
+### 2.1 Identify the nodes on the bottom edge
+
+```abaqus
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1            ! example: nodes 1‑50 belong to the bottom edge
+```
+
+### 2.2 Apply the constraints
+
+```abaqus
+*Boundary
+BOT_EDGE, 1, 1, 0.0   ! U1 = 0  (X‑translation)
+BOT_EDGE, 2, 2, 0.0   ! U2 = 0  (Y‑translation)
+BOT_EDGE, 3, 3, 0.0   ! UR3 = 0 (rotation about Z)
+```
+
+*If you prefer a “pin” condition, you can leave the rotation free and only fix the two translations; just be sure the remaining rotation is restrained elsewhere (e.g., by a symmetry plane).*
+
+---
+
+## 3. Load the prescribed displacement with a **ramp** (amplitude)
+
+A sudden step‑change to the full displacement often makes the solver diverge, especially when the structure is stiff. Use an amplitude definition that linearly ramps the load from 0 to 1 over the step.
+
+### 3.1 Define the amplitude
+
+```abaqus
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+```
+
+### 3.2 Apply the displacement (or a prescribed motion) using the amplitude
+
+Assume you want to pull the top edge upward by 0.005 m.
+
+```abaqus
+*Boundary
+TOP_EDGE, 2, 2, 0.005, RAMP   ! U2 = 5 mm, applied with the ramp
+```
+
+*If you are using a *Displacement* load on a reference point, the same amplitude can be attached to the *Dload* entry.*
+
+---
+
+## 4. Give the static step enough sub‑increments
+
+Even with a ramp, the default increment size may be too large for the solver to converge. Adjust the step definition:
+
+```abaqus
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01, initialInc=0.001, maxInc=0.02, 
+      minInc=1e-6, maxNumInc=1000
+*Static
+```
+
+| Parameter | Recommended setting | Why |
+|-----------|--------------------|-----|
+| `initialInc` | 0.001 (or smaller) | Starts with a tiny step, ensuring the first equilibrium is solved. |
+| `maxInc` | 0.02 (or 10 % of total step) | Prevents the solver from taking too large a step later. |
+| `minInc` | 1e‑6 | Guarantees the solver can keep reducing the step if needed. |
+| `maxNumInc` | 1000 (or larger) | Allows enough increments to reach the final load. |
+| `nlgeom` | `NO` for linear analysis; `YES` if large deformations are expected. | Choose according to the physics. |
+
+If you still see convergence problems, you can:
+
+* Turn on automatic incrementation (`*Static, ...` without specifying `inc`).
+* Enable the *line search* (`*Control, lineSearch=YES`).
+* Reduce the *tolerance* (`*Control, solutionTechnique=FULL_NEWTON`).
+
+---
+
+## 5. Verify the model before running the full analysis
+
+1. **Check the material assignment** – In the Abaqus/CAE viewport, display *Section Assignment* to confirm every shell has the `STEEL` section.
+2. **Check the mesh** – Ensure element quality (aspect ratio, warpage) is acceptable; poor elements can also cause singularities.
+3. **Run a quick *Linear Perturbation* step** (static, `nlgeom=NO`, no loads) just to see if the solver can assemble and invert the stiffness matrix. If this step succeeds, the stiffness matrix is well‑posed.
+4. **Inspect the *Message* file** – Look for lines such as `*** WARNING: RIGID BODY MOTION DETECTED` or `*** ERROR: SINGULAR MATRIX`. If they disappear after the changes, you are good to go.
+
+---
+
+## 6. Full example input file (minimal but complete)
+
+```abaqus
+*Heading
+** Simple plate pulled upward – fixed bottom edge
+** -------------------------------------------------
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+** -------------------------------------------------
+** MATERIAL
+*Material, name=STEEL
+*Density
+7850.,
+*Elastic
+210000., 0.3
+** SECTION
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+** MESH (example – 10×10 quad mesh)
+*Node
+1, 0., 0., 0.
+2, 0.1, 0., 0.
+... (rest of nodes)
+*Element, type=S4R, elset=ALL_SHELLS
+1, 1, 2, 12, 11
+... (rest of elements)
+** BOUNDARY NODES
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1
+*Nset, nset=TOP_EDGE, generate
+951, 1000, 1
+** BOUNDARY CONDITIONS
+*Boundary
+BOT_EDGE, 1, 1, 0.0
+BOT_EDGE, 2, 2, 0.0
+BOT_EDGE, 3, 3, 0.0
+TOP_EDGE, 2, 2, 0.005, RAMP
+** AMPLITUDE
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+** STEP
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01, initialInc=0.001, maxInc=0.02,
+      minInc=1e-6, maxNumInc=1000
+*Static
+*End Step
+```
+
+*Replace the node/element blocks with the actual mesh generated by your pre‑processor.*
+
+---
+
+## 7. Recap – What you must do
+
+1. **Add a non‑zero elastic modulus** (or a full material definition) to the shell section.  
+2. **Assign the section** to every shell element and give the shells a finite thickness.  
+3. **Fully constrain the model** (X, Y, and rotation about Z) – e.g., encastre the bottom edge.  
+4. **Apply the prescribed displacement as a ramp** using an *Amplitude* definition.  
+5. **Set the static step’s increment controls** (small initial increment, reasonable max/min, enough maximum increments).  
+6. **Run a quick sanity check** (linear perturbation) to confirm the stiffness matrix is now invertible.  
+
+After these changes the global stiffness matrix becomes full‑rank, the solver can invert it, and the static step will converge without aborting.  
+
+If you still encounter convergence warnings, revisit the mesh quality, verify that no other degrees of freedom are left uncontrolled, and consider enabling *NLGEOM* or a line‑search algorithm for highly non‑linear behavior.  
+
+--- 
+
+**That’s the complete solution.** Let me know if you need help adapting any of the snippets to your specific model (e.g., different element type, 3‑D solid, or a more complex loading history).
+
+=== 2026-04-17 19:13:48 ===
+Q: **Why the job aborts**
+
+Abaqus (and any FE solver) can solve a static step only when the **global stiffness matrix is non‑singular** (full‑rank).  
+In the model you posted the matrix is singular for two independent reasons:
+
+| # | What is missing / wrong | Effect on the stiffness matrix |
+|---|--------------------------|--------------------------------|
+| 1 | **No elastic stiffness** – the material is defined only with `*DENSITY` (or not defined at all). | All shell elements have \(E=0\). Their element stiffness is zero, so the assembled global matrix contains three zero‑energy rows/columns → singular. |
+| 2 | **Missing rigid‑body constraints** – there are no boundary conditions that prevent the three rigid‑body motions of a 2‑D shell (translation in X, translation in Y, rotation about Z). | The solver cannot invert a matrix that still contains these zero‑energy modes, so the equilibrium equations fail and the step aborts with “singular matrix”. |
+
+Once the model has a non‑zero elastic stiffness and is fully constrained, the static step will converge **provided the load is introduced gradually and the step‑size control is adequate**.
+
+---
+
+## How to make the analysis run
+
+Below is a step‑by‑step checklist (with example Abaqus input snippets) that turns the failing job into a successful static analysis.
+
+### 1. Give the shells a real elastic stiffness
+
+```abaqus
+*Material, name=STEEL
+*Density
+7850.,
+*Elastic
+210000., 0.3          ! E = 210 GPa, ν = 0.3 (any non‑zero E will do)
+```
+
+Create a shell section that uses this material and a finite thickness:
+
+```abaqus
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+```
+
+Assign the section to every shell element (or use the *Section Assignment* tool in CAE).  
+*If the thickness is zero the section is still “soft”, so be sure it is > 0.*
+
+### 2. Constrain the model (remove the three rigid‑body modes)
+
+Identify a set of nodes that will stay fixed – e.g. the bottom edge:
+
+```abaqus
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1               ! adjust the range to your mesh
+```
+
+Apply the three constraints (X‑translation, Y‑translation, rotation about Z):
+
+```abaqus
+*Boundary
+BOT_EDGE, 1, 1, 0.0    ! U1 = 0
+BOT_EDGE, 2, 2, 0.0    ! U2 = 0
+BOT_EDGE, 3, 3, 0.0    ! UR3 = 0
+```
+
+(If you prefer a pin, fix only the two translations and restrain the rotation elsewhere.)
+
+### 3. Load the prescribed displacement with a ramp
+
+Define a linear ramp amplitude:
+
+```abaqus
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+```
+
+Apply the displacement (or a prescribed motion) to the loaded edge using that amplitude:
+
+```abaqus
+*Boundary
+TOP_EDGE, 2, 2, 0.005, RAMP   ! pull the top edge upward by 5 mm
+```
+
+A sudden step‑change to the full value often makes the solver diverge; the ramp lets the solver progress gradually.
+
+### 4. Give the static step enough sub‑increments
+
+Even with a ramp, the default increment size may be too large. Use a step definition with controlled increments, e.g.:
+
+```abaqus
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01,
+      initialInc=0.001, maxInc=0.02, minInc=1e-6, maxNumInc=1000
+*Static
+```
+
+* `initialInc` – start with a very small step so the first equilibrium is solved.  
+* `maxInc` – limit the largest step the solver may take (typically ≤ 10 % of the total step).  
+* `minInc` – allow the solver to keep reducing the step if convergence is difficult.  
+* `maxNumInc` – give enough room for the solver to reach the final load.  
+
+If you still see convergence warnings, you can let Abaqus choose the increments automatically (`*Static` without the `inc` option) or enable a line‑search (`*Control, lineSearch=YES`).
+
+### 5. Verify before the full run
+
+1. **Check material/section assignment** – all shells must show the `STEEL` section.  
+2. **Run a quick linear perturbation step** (static, `nlgeom=NO`, no loads). If this step succeeds, the stiffness matrix is now invertible.  
+3. **Inspect the *.msg* file** – any “RIGID BODY MOTION DETECTED” or “SINGULAR MATRIX” warnings should disappear after the changes.
+
+---
+
+## Recap – What you must do
+
+| Action | Why it matters |
+|--------|----------------|
+| **Define a material with a non‑zero Young’s modulus** (`*Elastic` entry). | Gives the shell elements a finite stiffness (E ≠ 0). |
+| **Assign the shell section (with thickness) to all shell elements.** | Zero thickness also leads to a soft matrix. |
+| **Fully constrain the model** (X, Y, and rotation about Z) – e.g., encastre the bottom edge. | Removes the three rigid‑body modes, making the global matrix full‑rank. |
+| **Apply the prescribed displacement as a ramp** (use an *Amplitude*). | Prevents a sudden load jump that can cause divergence. |
+| **Set appropriate increment controls** (small initial increment, reasonable max/min, enough maximum increments). | Gives the solver the ability to take sufficiently small steps to converge. |
+| **Run a sanity‑check linear step** to confirm the stiffness matrix can be assembled and inverted. | Guarantees the model is now well‑posed before the full load is applied. |
+
+After implementing these steps the global stiffness matrix becomes full‑rank, the equilibrium equations can be solved, and the static analysis will run to completion without aborting.  
+
+If you encounter any further convergence warnings, revisit mesh quality, verify that no other degrees of freedom are left uncontrolled, and consider enabling `NLGEOM=YES` or a line‑search for highly non‑linear behavior.
+A: **Why the job aborts**
+
+Abaqus (and any finite‑element solver) can solve a static step only when the **global stiffness matrix is non‑singular**.  
+In the model you posted the matrix is singular for two independent reasons:
+
+| # | What is missing / wrong | Effect on the stiffness matrix |
+|---|--------------------------|--------------------------------|
+| 1 | **No elastic stiffness** – the material is defined only with `*DENSITY` (or not defined at all). | All shell elements have \(E = 0\). Their element stiffness is zero, so the assembled global matrix contains rows/columns with zero energy → singular. |
+| 2 | **Missing rigid‑body constraints** – there are no boundary conditions that prevent the three rigid‑body motions of a 2‑D shell (translation in X, translation in Y, rotation about Z). | The solver cannot invert a matrix that still contains these zero‑energy modes, so the equilibrium equations fail and the step aborts with “singular matrix”. |
+
+---
+
+## How to make the analysis run – step‑by‑step checklist
+
+Below is a **complete, ready‑to‑copy** set of Abaqus input snippets together with the rationale for each line.  
+Apply them in the order shown; after the last step the job will finish without aborting.
+
+### 1. Give the shells a real elastic stiffness  
+
+```abaqus
+*Material, name=STEEL
+*Density
+7850.,                     ! kg/m³ (any value is fine)
+*Elastic
+210000., 0.3               ! E = 210 GPa, ν = 0.3  (E must be > 0)
+```
+
+Create a shell section that uses this material and a **non‑zero thickness**:
+
+```abaqus
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+```
+
+*Assign the section to every shell element* (or use the CAE “Section Assignment” tool).  
+If the thickness is zero the section is still “soft”, so be sure it is > 0.
+
+---
+
+### 2. Constrain the model (remove the three rigid‑body modes)
+
+Pick a set of nodes that will stay fixed – e.g. the bottom edge of the mesh:
+
+```abaqus
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1          ! adjust the range to match your mesh
+```
+
+Apply the three constraints (U1, U2, UR3 = 0):
+
+```abaqus
+*Boundary
+BOT_EDGE, 1, 1, 0.0   ! X‑translation fixed
+BOT_EDGE, 2, 2, 0.0   ! Y‑translation fixed
+BOT_EDGE, 3, 3, 0.0   ! Rotation about Z fixed
+```
+
+*If you prefer a pin, you can fix only the two translations and restrain the rotation elsewhere.*
+
+---
+
+### 3. Load the prescribed displacement with a **ramp** (gradual load application)
+
+Define a linear ramp amplitude:
+
+```abaqus
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+```
+
+Apply the displacement (or prescribed motion) to the loaded edge using that amplitude:
+
+```abaqus
+*Boundary
+TOP_EDGE, 2, 2, 0.005, RAMP   ! pull the top edge upward by 5 mm
+```
+
+A sudden step‑change to the full value often makes the solver diverge; the ramp lets the solver progress gradually.
+
+---
+
+### 4. Give the static step enough (and well‑controlled) sub‑increments  
+
+Even with a ramp, the default increment size may be too large. Use a step definition with explicit increment controls:
+
+```abaqus
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01,
+      initialInc=0.001, maxInc=0.02, minInc=1e-6, maxNumInc=1000
+*Static
+```
+
+| Parameter | Recommended value | Reason |
+|-----------|-------------------|--------|
+| `initialInc` | 0.001 (or smaller) | Start with a very small step so the first equilibrium is solved. |
+| `maxInc`     | 0.02 (≈ 10 % of total) | Prevent the solver from taking too large a step later. |
+| `minInc`     | 1e‑6 | Allow the solver to keep reducing the step if convergence is difficult. |
+| `maxNumInc`  | 1000 (or larger) | Give the solver enough room to reach the final load. |
+
+If you still see convergence warnings you can let Abaqus choose the increments automatically (`*Static` without the `inc` option) or enable a line‑search:
+
+```abaqus
+*Control, lineSearch=YES
+```
+
+---
+
+### 5. Verify the model before the full run  
+
+1. **Check material/section assignment** – all shells must show the `STEEL` section.  
+2. **Run a quick linear perturbation step** (static, `nlgeom=NO`, no loads).  
+   *If this step succeeds, the stiffness matrix is now invertible.*  
+3. **Inspect the *.msg* file** – any “RIGID BODY MOTION DETECTED” or “SINGULAR MATRIX” warnings should have disappeared.  
+
+If the linear step fails, go back to steps 1–2 and make sure every element has a non‑zero `E` and that the model is fully constrained.
+
+---
+
+## Recap – What you must do
+
+| Action | Why it matters |
+|--------|----------------|
+| **Define a material with a non‑zero Young’s modulus** (`*Elastic`). | Gives the shell elements a finite stiffness (E ≠ 0). |
+| **Assign a shell section with a positive thickness** to all shell elements. | Zero thickness also yields a soft matrix. |
+| **Fully constrain the model** (U1, U2, UR3). | Removes the three rigid‑body modes, making the global matrix full‑rank. |
+| **Apply the prescribed displacement as a ramp** (use an *Amplitude*). | Prevents a sudden load jump that can cause divergence. |
+| **Set appropriate increment controls** (small initial increment, reasonable max/min, enough maximum increments). | Gives the solver the ability to take sufficiently small steps to converge. |
+| **Run a sanity‑check linear step** to confirm the stiffness matrix can be assembled and inverted. | Guarantees the model is now well‑posed before the full load is applied. |
+
+After implementing these steps the global stiffness matrix becomes full‑rank, the equilibrium equations can be solved, and the static analysis will run to completion without aborting.  
+
+If you encounter any further convergence warnings, revisit mesh quality, verify that no other degrees of freedom are left uncontrolled, and consider enabling `NLGEOM=YES` or a line‑search for highly non‑linear behavior.
+
+=== 2026-04-17 19:14:32 ===
+Q: **Why the job aborts**
+
+Abaqus can solve a static step only when the **global stiffness matrix is non‑singular** (full‑rank).  
+In the input you posted the matrix is singular for two independent reasons:
+
+| # | What is missing / wrong | Effect on the stiffness matrix |
+|---|--------------------------|--------------------------------|
+| 1 | **No elastic stiffness** – the material is defined only with `*DENSITY` (or not defined at all). | All shell elements have \(E=0\). Their element stiffness is zero, so the assembled global matrix contains rows/columns with zero energy → singular. |
+| 2 | **No rigid‑body constraints** – there are no boundary conditions that prevent the three rigid‑body motions of a 2‑D shell (translation in X, translation in Y, rotation about Z). | The solver cannot invert a matrix that still contains these zero‑energy modes, so the equilibrium equations fail and the step aborts with “singular matrix”. |
+
+Once the model has a non‑zero elastic stiffness and is fully constrained, the static step will converge **provided the load is introduced gradually and the step‑size control is adequate**.
+
+---
+
+## How to make the analysis run – step‑by‑step checklist
+
+Below is a complete, ready‑to‑copy set of Abaqus input snippets together with the rationale for each line. Apply them in the order shown; after the last step the job will finish without aborting.
+
+### 1. Give the shells a real elastic stiffness  
+
+```abaqus
+*Material, name=STEEL
+*Density
+7850.,                     ! (any value is fine)
+*Elastic
+210000., 0.3               ! E > 0, ν = 0.3   (any non‑zero E will do)
+```
+
+Create a shell section that uses this material and a **non‑zero thickness**:
+
+```abaqus
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+```
+
+*Assign the section to every shell element* (or use the CAE “Section Assignment” tool).  
+If the thickness is zero the section is still “soft”, so be sure it is > 0.
+
+### 2. Constrain the model (remove the three rigid‑body modes)
+
+Pick a set of nodes that will stay fixed – e.g. the bottom edge of the mesh:
+
+```abaqus
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1          ! adjust the range to match your mesh
+```
+
+Apply the three constraints (U1, U2, UR3 = 0):
+
+```abaqus
+*Boundary
+BOT_EDGE, 1, 1, 0.0   ! X‑translation fixed
+BOT_EDGE, 2, 2, 0.0   ! Y‑translation fixed
+BOT_EDGE, 3, 3, 0.0   ! Rotation about Z fixed
+```
+
+*(If you prefer a pin, you can fix only the two translations and restrain the rotation elsewhere.)*
+
+### 3. Load the prescribed displacement with a **ramp** (gradual load application)
+
+Define a linear ramp amplitude:
+
+```abaqus
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+```
+
+Apply the displacement (or prescribed motion) to the loaded edge using that amplitude:
+
+```abaqus
+*Boundary
+TOP_EDGE, 2, 2, 0.005, RAMP   ! pull the top edge upward by 5 mm
+```
+
+A sudden step‑change to the full value often makes the solver diverge; the ramp lets the solver progress gradually.
+
+### 4. Give the static step enough (and well‑controlled) sub‑increments  
+
+Even with a ramp, the default increment size may be too large. Use a step definition with explicit increment controls:
+
+```abaqus
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01,
+      initialInc=0.001, maxInc=0.02, minInc=1e-6, maxNumInc=1000
+*Static
+```
+
+| Parameter   | Recommended value | Reason |
+|-------------|-------------------|--------|
+| `initialInc`| 0.001 (or smaller) | Start with a very small step so the first equilibrium is solved. |
+| `maxInc`    | 0.02 (≈ 10 % of total) | Prevent the solver from taking too large a step later. |
+| `minInc`    | 1e‑6               | Allow the solver to keep reducing the step if convergence is difficult. |
+| `maxNumInc` | 1000 (or larger)   | Give the solver enough room to reach the final load. |
+
+If convergence warnings persist, you can let Abaqus choose the increments automatically (`*Static` without the `inc` option) or enable a line‑search:
+
+```abaqus
+*Control, lineSearch=YES
+```
+
+### 5. Verify the model before the full run  
+
+1. **Check material/section assignment** – all shells must show the `STEEL` section.  
+2. **Run a quick linear perturbation step** (static, `nlgeom=NO`, no loads).  
+   *If this step succeeds, the stiffness matrix is now invertible.*  
+3. **Inspect the *.msg* file** – any “RIGID BODY MOTION DETECTED” or “SINGULAR MATRIX” warnings should have disappeared.  
+
+If the linear step fails, return to steps 1–2 and make sure every element has a non‑zero `E` and that the model is fully constrained.
+
+---
+
+## Recap – What you must do
+
+| Action | Why it matters |
+|--------|----------------|
+| **Define a material with a non‑zero Young’s modulus** (`*Elastic`). | Gives the shell elements a finite stiffness (E ≠ 0). |
+| **Assign a shell section with a positive thickness** to all shell elements. | Zero thickness also yields a soft matrix. |
+| **Fully constrain the model** (U1, U2, UR3). | Removes the three rigid‑body modes, making the global matrix full‑rank. |
+| **Apply the prescribed displacement as a ramp** (use an *Amplitude*). | Prevents a sudden load jump that can cause divergence. |
+| **Set appropriate increment controls** (small initial increment, reasonable max/min, enough maximum increments). | Gives the solver the ability to take sufficiently small steps to converge. |
+| **Run a sanity‑check linear step** to confirm the stiffness matrix can be assembled and inverted. | Guarantees the model is now well‑posed before the full load is applied. |
+
+After implementing these steps the global stiffness matrix becomes full‑rank, the equilibrium equations can be solved, and the static analysis will run to completion without aborting.  
+
+If you encounter any further convergence warnings, revisit mesh quality, verify that no other degrees of freedom are left uncontrolled, and consider enabling `NLGEOM=YES` or a line‑search for highly non‑linear behavior.
+A: **Why the job aborts**
+
+Abaqus can solve a static step only when the global stiffness matrix is **non‑singular** (full‑rank).  
+In the input you posted the matrix is singular for two independent reasons:
+
+| # | What is missing / wrong | Effect on the stiffness matrix |
+|---|--------------------------|--------------------------------|
+| 1 | **No elastic stiffness** – the material is defined only with `*DENSITY` (or not defined at all). | All shell elements have \(E = 0\). Their element stiffness is zero, so the assembled global matrix contains rows/columns with zero energy → singular. |
+| 2 | **No rigid‑body constraints** – there are no boundary conditions that prevent the three rigid‑body motions of a 2‑D shell (translation in X, translation in Y, rotation about Z). | The solver cannot invert a matrix that still contains these zero‑energy modes, so the equilibrium equations fail and the step aborts with “singular matrix”. |
+
+Once the model has a non‑zero elastic stiffness **and** is fully constrained, the static step will converge (provided the load is introduced gradually and the increment control is adequate).
+
+---
+
+## How to make the analysis run – step‑by‑step checklist
+
+Below is a ready‑to‑copy set of Abaqus input snippets together with the rationale for each line. Apply them in the order shown; after the last step the job will finish without aborting.
+
+### 1. Give the shells a real elastic stiffness  
+
+```abaqus
+*Material, name=STEEL
+*Density
+7850.,                     ! any realistic density
+*Elastic
+210000., 0.3               ! E > 0, ν = 0.3   (any non‑zero E will do)
+```
+
+Create a shell section that uses this material **and a non‑zero thickness**:
+
+```abaqus
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+```
+
+*Assign the section to every shell element* (or use the CAE “Section Assignment” tool).  
+If the thickness is zero the section is still “soft”, so be sure it is > 0.
+
+---
+
+### 2. Constrain the model (remove the three rigid‑body modes)
+
+Pick a set of nodes that will stay fixed – e.g. the bottom edge of the mesh:
+
+```abaqus
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1          ! adjust the range to match your mesh
+```
+
+Apply the three constraints (U1, U2, UR3 = 0):
+
+```abaqus
+*Boundary
+BOT_EDGE, 1, 1, 0.0   ! X‑translation fixed
+BOT_EDGE, 2, 2, 0.0   ! Y‑translation fixed
+BOT_EDGE, 3, 3, 0.0   ! Rotation about Z fixed
+```
+
+*(If you prefer a pin, you can fix only the two translations and restrain the rotation elsewhere.)*
+
+---
+
+### 3. Load the prescribed displacement with a **ramp** (gradual load application)
+
+Define a linear ramp amplitude:
+
+```abaqus
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+```
+
+Apply the displacement (or prescribed motion) to the loaded edge using that amplitude:
+
+```abaqus
+*Boundary
+TOP_EDGE, 2, 2, 0.005, RAMP   ! pull the top edge upward by 5 mm
+```
+
+A sudden step‑change to the full value often makes the solver diverge; the ramp lets the solver progress gradually.
+
+---
+
+### 4. Give the static step enough (and well‑controlled) sub‑increments  
+
+Even with a ramp, the default increment size may be too large. Use a step definition with explicit increment controls:
+
+```abaqus
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01,
+      initialInc=0.001, maxInc=0.02, minInc=1e-6, maxNumInc=1000
+*Static
+```
+
+| Parameter   | Recommended value | Reason |
+|-------------|-------------------|--------|
+| `initialInc`| 0.001 (or smaller) | Start with a very small step so the first equilibrium is solved. |
+| `maxInc`    | 0.02 (≈ 10 % of total) | Prevent the solver from taking too large a step later. |
+| `minInc`    | 1e‑6               | Allow the solver to keep reducing the step if convergence is difficult. |
+| `maxNumInc` | 1000 (or larger)   | Give the solver enough room to reach the final load. |
+
+If convergence warnings persist, you can let Abaqus choose the increments automatically (`*Static` without the `inc` option) or enable a line‑search:
+
+```abaqus
+*Control, lineSearch=YES
+```
+
+---
+
+### 5. Verify the model before the full run  
+
+1. **Check material/section assignment** – all shells must show the `STEEL` section.  
+2. **Run a quick linear perturbation step** (static, `nlgeom=NO`, no loads).  
+   *If this step succeeds, the stiffness matrix is now invertible.*  
+3. **Inspect the *.msg* file** – any “RIGID BODY MOTION DETECTED” or “SINGULAR MATRIX” warnings should have disappeared.  
+
+If the linear step fails, return to steps 1–2 and make sure every element has a non‑zero `E` and that the model is fully constrained.
+
+---
+
+## Recap – What you must do
+
+| Action | Why it matters |
+|--------|----------------|
+| **Define a material with a non‑zero Young’s modulus** (`*Elastic`). | Gives the shell elements a finite stiffness (E ≠ 0). |
+| **Assign a shell section with a positive thickness** to all shell elements. | Zero thickness also yields a soft matrix. |
+| **Fully constrain the model** (U1, U2, UR3). | Removes the three rigid‑body modes, making the global matrix full‑rank. |
+| **Apply the prescribed displacement as a ramp** (use an *Amplitude*). | Prevents a sudden load jump that can cause divergence. |
+| **Set appropriate increment controls** (small initial increment, reasonable max/min, enough maximum increments). | Gives the solver the ability to take sufficiently small steps to converge. |
+| **Run a sanity‑check linear step** to confirm the stiffness matrix can be assembled and inverted. | Guarantees the model is now well‑posed before the full load is applied. |
+
+After implementing these steps the global stiffness matrix becomes full‑rank, the equilibrium equations can be solved, and the static analysis will run to completion without aborting.
+
+If you encounter any further convergence warnings, revisit mesh quality, verify that no other degrees of freedom are left uncontrolled, and consider enabling `NLGEOM=YES` or a line‑search for highly non‑linear behavior.
+
+=== 2026-04-17 19:15:18 ===
+Q: **Why the job aborts**
+
+Abaqus can solve a static step only when the global stiffness matrix is **non‑singular** (full‑rank).  
+In the input you posted the matrix is singular for two independent reasons:
+
+| # | What is missing / wrong | Effect on the stiffness matrix |
+|---|--------------------------|--------------------------------|
+| 1 | **No elastic stiffness** – the material is defined only with `*DENSITY` (or not defined at all). | All shell elements have \(E=0\). Their element stiffness is zero, so the assembled global matrix contains rows/columns with zero energy → singular. |
+| 2 | **No rigid‑body constraints** – there are no boundary conditions that prevent the three rigid‑body motions of a 2‑D shell (translation in X, translation in Y, rotation about Z). | The solver cannot invert a matrix that still contains these zero‑energy modes, so the equilibrium equations fail and the step aborts with “singular matrix”. |
+
+When the model has a non‑zero elastic stiffness **and** is fully constrained, the static step will converge (provided the load is introduced gradually and the increment control is adequate).
+
+---
+
+## How to make the analysis run – step‑by‑step checklist
+
+Below is a ready‑to‑copy set of Abaqus input snippets together with a short rationale for each line. Apply them in the order shown; after the last step the job will finish without aborting.
+
+### 1. Give the shells a real elastic stiffness  
+
+```abaqus
+*Material, name=STEEL
+*Density
+7850.,                     ! any realistic density
+*Elastic
+210000., 0.3               ! E > 0, ν = 0.3   (any non‑zero E will do)
+```
+
+Create a shell section that uses this material **and a non‑zero thickness**:
+
+```abaqus
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+```
+
+*Assign the section to every shell element* (or use the CAE “Section Assignment” tool).  
+If the thickness is zero the section is still “soft”, so be sure it is > 0.
+
+### 2. Constrain the model (remove the three rigid‑body modes)
+
+Pick a set of nodes that will stay fixed – e.g. the bottom edge of the mesh:
+
+```abaqus
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1          ! adjust the range to match your mesh
+```
+
+Apply the three constraints (U1, U2, UR3 = 0):
+
+```abaqus
+*Boundary
+BOT_EDGE, 1, 1, 0.0   ! X‑translation fixed
+BOT_EDGE, 2, 2, 0.0   ! Y‑translation fixed
+BOT_EDGE, 3, 3, 0.0   ! Rotation about Z fixed
+```
+
+*(If you prefer a pin, you can fix only the two translations and restrain the rotation elsewhere.)*
+
+### 3. Load the prescribed displacement with a **ramp** (gradual load application)
+
+Define a linear ramp amplitude:
+
+```abaqus
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+```
+
+Apply the displacement (or prescribed motion) to the loaded edge using that amplitude:
+
+```abaqus
+*Boundary
+TOP_EDGE, 2, 2, 0.005, RAMP   ! pull the top edge upward by 5 mm
+```
+
+A sudden step‑change to the full value often makes the solver diverge; the ramp lets the solver progress gradually.
+
+### 4. Give the static step enough (and well‑controlled) sub‑increments  
+
+Even with a ramp, the default increment size may be too large. Use a step definition with explicit increment controls:
+
+```abaqus
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01,
+      initialInc=0.001, maxInc=0.02, minInc=1e-6, maxNumInc=1000
+*Static
+```
+
+| Parameter   | Recommended value | Reason |
+|-------------|-------------------|--------|
+| `initialInc`| 0.001 (or smaller) | Start with a very small step so the first equilibrium is solved. |
+| `maxInc`    | 0.02 (≈ 10 % of total) | Prevent the solver from taking too large a step later. |
+| `minInc`    | 1e‑6               | Allow the solver to keep reducing the step if convergence is difficult. |
+| `maxNumInc` | 1000 (or larger)   | Give the solver enough room to reach the final load. |
+
+If convergence warnings persist, you can let Abaqus choose the increments automatically (`*Static` without the `inc` option) or enable a line‑search:
+
+```abaqus
+*Control, lineSearch=YES
+```
+
+### 5. Verify the model before the full run  
+
+1. **Check material/section assignment** – all shells must show the `STEEL` section.  
+2. **Run a quick linear perturbation step** (static, `nlgeom=NO`, no loads).  
+   *If this step succeeds, the stiffness matrix is now invertible.*  
+3. **Inspect the *.msg* file** – any “RIGID BODY MOTION DETECTED” or “SINGULAR MATRIX” warnings should have disappeared.  
+
+If the linear step fails, return to steps 1–2 and make sure every element has a non‑zero `E` and that the model is fully constrained.
+
+---
+
+## Recap – What you must do
+
+| Action | Why it matters |
+|--------|----------------|
+| **Define a material with a non‑zero Young’s modulus** (`*Elastic`). | Gives the shell elements a finite stiffness (E ≠ 0). |
+| **Assign a shell section with a positive thickness** to all shell elements. | Zero thickness also yields a soft matrix. |
+| **Fully constrain the model** (U1, U2, UR3). | Removes the three rigid‑body modes, making the global matrix full‑rank. |
+| **Apply the prescribed displacement as a ramp** (use an *Amplitude*). | Prevents a sudden load jump that can cause divergence. |
+| **Set appropriate increment controls** (small initial increment, reasonable max/min, enough maximum increments). | Gives the solver the ability to take sufficiently small steps to converge. |
+| **Run a sanity‑check linear step** to confirm the stiffness matrix can be assembled and inverted. | Guarantees the model is now well‑posed before the full load is applied. |
+
+After implementing these steps the global stiffness matrix becomes full‑rank, the equilibrium equations can be solved, and the static analysis will run to completion without aborting.
+
+If you encounter any further convergence warnings, revisit mesh quality, verify that no other degrees of freedom are left uncontrolled, and consider enabling `NLGEOM=YES` or a line‑search for highly non‑linear behavior.
+A: **Why the job aborts**
+
+Abaqus can solve a static step only when the global stiffness matrix is **non‑singular** (full‑rank).  
+In the model you posted the matrix is singular for two independent reasons:
+
+| # | What is missing / wrong | Effect on the stiffness matrix |
+|---|--------------------------|--------------------------------|
+| 1 | **No elastic stiffness** – the material is defined only with `*DENSITY` (or not defined at all). | All shell elements have \(E = 0\). Their element stiffness is zero, so the assembled global matrix contains rows/columns with zero energy → singular. |
+| 2 | **No rigid‑body constraints** – there are no boundary conditions that prevent the three rigid‑body motions of a 2‑D shell (translation in X, translation in Y, rotation about Z). | The solver cannot invert a matrix that still contains these zero‑energy modes, so the equilibrium equations fail and the step aborts with “singular matrix”. |
+
+When the model has a **non‑zero elastic stiffness** **and** is **fully constrained**, the static step will converge (provided the load is introduced gradually and the increment control is adequate).
+
+---
+
+## How to make the analysis run – step‑by‑step checklist
+
+Below is a ready‑to‑copy set of Abaqus input snippets together with a short rationale for each line. Apply them in the order shown; after the last step the job will finish without aborting.
+
+### 1. Give the shells a real elastic stiffness  
+
+```abaqus
+*Material, name=STEEL
+*Density
+7850.,                     ! any realistic density
+*Elastic
+210000., 0.3               ! E > 0, ν = 0.3   (any non‑zero E will do)
+```
+
+### 2. Create a shell section with a **positive thickness** and assign it to every shell element  
+
+```abaqus
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+```
+
+*If you already have a section definition, just make sure the thickness is > 0 and that the section is attached to the element set `ALL_SHELLS` (or the appropriate set).*
+
+### 3. Constrain the model (remove the three rigid‑body modes)
+
+Pick a set of nodes that will stay fixed – e.g. the bottom edge of the mesh:
+
+```abaqus
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1          ! adjust the range to match your mesh
+```
+
+Apply the three constraints (U1, U2, UR3 = 0):
+
+```abaqus
+*Boundary
+BOT_EDGE, 1, 1, 0.0   ! X‑translation fixed
+BOT_EDGE, 2, 2, 0.0   ! Y‑translation fixed
+BOT_EDGE, 3, 3, 0.0   ! Rotation about Z fixed
+```
+
+*(If you prefer a pin, you can fix only the two translations and restrain the rotation elsewhere.)*
+
+### 4. Load the prescribed displacement with a **ramp** (gradual load application)
+
+Define a linear ramp amplitude:
+
+```abaqus
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+```
+
+Apply the displacement (or prescribed motion) to the loaded edge using that amplitude:
+
+```abaqus
+*Boundary
+TOP_EDGE, 2, 2, 0.005, RAMP   ! pull the top edge upward by 5 mm
+```
+
+A sudden step‑change to the full value often makes the solver diverge; the ramp lets the solver progress gradually.
+
+### 5. Give the static step enough (and well‑controlled) sub‑increments  
+
+Even with a ramp, the default increment size may be too large. Use a step definition with explicit increment controls:
+
+```abaqus
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01,
+      initialInc=0.001, maxInc=0.02, minInc=1e-6, maxNumInc=1000
+*Static
+```
+
+| Parameter   | Recommended value | Reason |
+|-------------|-------------------|--------|
+| `initialInc`| 0.001 (or smaller) | Start with a very small step so the first equilibrium is solved. |
+| `maxInc`    | 0.02 (≈ 10 % of total) | Prevent the solver from taking too large a step later. |
+| `minInc`    | 1e‑6               | Allow the solver to keep reducing the step if convergence is difficult. |
+| `maxNumInc` | 1000 (or larger)   | Give the solver enough room to reach the final load. |
+
+If convergence warnings persist, you can let Abaqus choose the increments automatically (`*Static` without the `inc` option) or enable a line‑search:
+
+```abaqus
+*Control, lineSearch=YES
+```
+
+### 6. Verify the model before the full run  
+
+1. **Check material/section assignment** – all shells must show the `STEEL` section.  
+2. **Run a quick linear perturbation step** (static, `nlgeom=NO`, no loads).  
+   *If this step succeeds, the stiffness matrix is now invertible.*  
+3. **Inspect the *.msg* file** – any “RIGID BODY MOTION DETECTED” or “SINGULAR MATRIX” warnings should have disappeared.  
+
+If the linear step fails, return to steps 1–2 and make sure every element has a non‑zero `E` and that the model is fully constrained.
+
+---
+
+## Recap – What you must do
+
+| Action | Why it matters |
+|--------|----------------|
+| **Define a material with a non‑zero Young’s modulus** (`*Elastic`). | Gives the shell elements a finite stiffness (E ≠ 0). |
+| **Assign a shell section with a positive thickness** to all shell elements. | Zero thickness also yields a soft matrix. |
+| **Fully constrain the model** (U1, U2, UR3). | Removes the three rigid‑body modes, making the global matrix full‑rank. |
+| **Apply the prescribed displacement as a ramp** (use an *Amplitude*). | Prevents a sudden load jump that can cause divergence. |
+| **Set appropriate increment controls** (small initial increment, reasonable max/min, enough maximum increments). | Gives the solver the ability to take sufficiently small steps to converge. |
+| **Run a sanity‑check linear step** to confirm the stiffness matrix can be assembled and inverted. | Guarantees the model is now well‑posed before the full load is applied. |
+
+After implementing these steps the global stiffness matrix becomes full‑rank, the equilibrium equations can be solved, and the static analysis will run to completion without aborting.
+
+If you encounter any further convergence warnings, revisit mesh quality, verify that no other degrees of freedom are left uncontrolled, and consider enabling `NLGEOM=YES` or a line‑search for highly non‑linear behavior.
+
+=== 2026-04-17 19:16:05 ===
+Q: **导致作业中止的根本原因**  
+Abaqus 在求解静力学步时必须能够对全局刚度矩阵进行求逆。  
+在你的模型中，矩阵出现 **奇异（singular）** 的主要原因有两点：
+
+| 序号 | 缺失或错误的设置 | 对刚度矩阵的影响 |
+|------|-------------------|-------------------|
+| 1 | **没有弹性刚度**（只给了 `*DENSITY`，或根本没有材料定义） | 所有壳单元的弹性模量 \(E=0\)，单元刚度为 0，导致整体刚度矩阵出现全零行/列 → 奇异 |
+| 2 | **缺少刚体约束**（没有固定或铰支） | 2‑D 壳体仍然拥有平移（X、Y）和绕 Z 轴的转动三自由度的刚体运动，矩阵中仍保留零能模态，求逆失败 → 计算中止 |
+
+只要 **为壳体赋予非零弹性刚度** 并 **完全约束刚体自由度**，再配合适当的载荷施加方式和时间步控制，静力分析即可收敛。
+
+---
+
+## 一、完整的操作清单（可直接拷贝到 *.inp* 中）
+
+### 1️⃣ 定义具有弹性刚度的材料（示例：钢）
+
+```abaqus
+*Material, name=STEEL
+*Density
+7850.,                     ! 密度（可选）
+*Elastic
+210000., 0.3               ! E = 210 GPa，ν = 0.3（任意正的 E 即可）
+```
+
+> **要点**：`*Elastic` 必须出现，且弹性模量 \(E\) 不能为 0。
+
+---
+
+### 2️⃣ 创建并分配厚度为正值的壳截面
+
+```abaqus
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+```
+
+- `elset=ALL_SHELLS` 为包含所有壳单元的元素集合（若已有集合，请改为对应名称）。  
+- **厚度必须大于 0**，否则仍然是“软”单元。
+
+---
+
+### 3️⃣ 约束模型，消除刚体自由度
+
+#### 3.1 选取固定节点集合（示例：底边）
+
+```abaqus
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1          ! 根据实际网格修改起止节点号
+```
+
+#### 3.2 施加三自由度的固定约束（U1、U2、UR3）
+
+```abaqus
+*Boundary
+BOT_EDGE, 1, 1, 0.0   ! X 方向位移 = 0
+BOT_EDGE, 2, 2, 0.0   ! Y 方向位移 = 0
+BOT_EDGE, 3, 3, 0.0   ! 绕 Z 轴转动 = 0
+```
+
+> **如果只想做铰支**，可以只固定 1、2 自由度，随后在其他位置约束转动。
+
+---
+
+### 4️⃣ 采用 **Ramp**（斜坡）方式施加位移载荷，避免一次性加载导致不收敛
+
+#### 4.1 定义线性幅值
+
+```abaqus
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+```
+
+#### 4.2 将位移（或速度）施加到受载边并关联幅值
+
+```abaqus
+*Boundary
+TOP_EDGE, 2, 2, 0.005, RAMP   ! 例：Y 方向上抬 5 mm
+```
+
+> **RAMP** 让载荷从 0 逐渐增长到目标值，极大提升收敛性。
+
+---
+
+### 5️⃣ 为静力步设置合适的子步增量
+
+```abaqus
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01,
+      initialInc=0.001, maxInc=0.02, minInc=1e-6, maxNumInc=1000
+*Static
+```
+
+| 参数 | 推荐取值 | 作用 |
+|------|----------|------|
+| `initialInc` | 0.001（或更小） | 第一次求解使用极小增量，确保系统能在几何非线性出现前取得平衡 |
+| `maxInc`     | 0.02（≈10% 总位移） | 防止增量过大导致求解失败 |
+| `minInc`     | 1e‑6 | 当收敛困难时，求解器会自动减小增量 |
+| `maxNumInc`  | 1000（或更大） | 允许足够的子步数完成整个载荷过程 |
+
+> 若仍出现 “cannot converge” 警告，可改为不指定 `inc`（让 Abaqus 自动控制）或加入 **线搜索**：
+
+```abaqus
+*Control, lineSearch=YES
+```
+
+---
+
+### 6️⃣ 作业前的快速检查（强烈建议）
+
+1. **材料/截面检查**：确认所有壳单元均已关联 `STEEL` 截面且厚度 > 0。  
+2. **线性预分析**：在同一模型中仅创建一个不含载荷的 `*Static` 步，运行一次。若此步成功完成，则说明刚度矩阵已是非奇异的。  
+3. **查看 *.msg* 文件**：确保不再出现 “RIGID BODY MOTION DETECTED” 或 “SINGULAR MATRIX” 信息。
+
+如果预分析仍报错，请回到步骤 1‑3，检查是否有遗漏的材料属性或未约束的节点。
+
+---
+
+## 📌 核心要点回顾
+
+| 必做事项 | 目的 |
+|----------|------|
+| **定义 `*Elastic`（非零 E）** | 为壳单元提供真实刚度 |
+| **给壳截面设正厚度并分配** | 消除“软”单元导致的零刚度 |
+| **完整约束（U1、U2、UR3）** | 消除刚体自由度，使刚度矩阵满秩 |
+| **使用 Ramp（幅值）施加载荷** | 防止一次性加载导致不收敛 |
+| **合理设置增量（initialInc、maxInc、minInc、maxNumInc）** | 让求解器在需要时自动减小步长 |
+| **先跑一次线性步验证刚度矩阵** | 确认模型已具备可求逆的刚度矩阵 |
+
+完成上述全部设置后，**全局刚度矩阵将不再奇异**，求解器能够顺利完成静力分析，作业不再中止。
+
+---
+
+### 进一步的调试技巧（如仍出现收敛问题）
+
+| 方法 | 适用情形 |
+|------|----------|
+| **细化网格**（尤其在应力集中区） | 高梯度导致局部刚度矩阵不良 |
+| **开启几何非线性 `nlgeom=YES`** | 大位移/大变形情况下 |
+| **使用 `*Damping`（粘性阻尼）** | 动态显式或显式静力步收敛困难时 |
+| **在关键位置添加额外约束或对称条件** | 防止模型出现不受约束的自由运动 |
+| **检查接触/耦合定义** | 接触对的刚度矩阵若为零会导致相同错误 |
+
+只要确保 **材料刚度、截面厚度、刚体约束** 三者齐备，并配合 **渐进载荷** 与 **合适的时间步控制**，你的壳体静力分析就能顺利完成。祝你建模顺利！
+A: **简要结论**  
+Abaqus 在静力学步中报 “**singular matrix / rigid body motion detected**” 的根本原因只有两点：
+
+1. **壳单元没有弹性刚度**（材料未定义或只给了 `*DENSITY`，导致 \(E=0\)）。  
+2. **模型缺少刚体约束**（没有固定或铰支），使整体仍保留 2‑D 刚体自由度（X、Y 平移 + Z 轴转动）。
+
+只要 **为壳体赋予非零弹性模量并给出正厚度**，**彻底约束刚体自由度**，再配合 **渐进载荷** 与 **合理的子步增量**，全局刚度矩阵就会满秩，求解器能够顺利求逆，作业不再中止。
+
+下面给出 **完整、可直接拷贝到 *.inp* 的操作清单**，以及 **调试要点**，帮助你一次性解决该类奇异矩阵错误。
+
+---
+
+## 1️⃣ 材料定义（必须包含 `*Elastic`，且 \(E>0\)）
+
+```abaqus
+*Material, name=STEEL
+*Density
+7850.,                     ! 可选
+*Elastic
+210000., 0.3               ! E = 210 GPa，ν = 0.3（任意正的 E 即可）
+```
+
+> **要点**：`*Elastic` 必须出现，弹性模量不能为 0。若只写 `*Density`，所有壳单元刚度为 0，矩阵必然奇异。
+
+---
+
+## 2️⃣ 壳截面（正厚度）并分配给所有壳单元
+
+```abaqus
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+```
+
+- `elset=ALL_SHELLS` 为包含全部壳单元的集合（如果已有集合，请改为对应名称）。  
+- **厚度必须大于 0**，否则仍是“软”单元，刚度矩阵会出现零行/列。
+
+---
+
+## 3️⃣ 刚体约束（消除 3 个刚体自由度）
+
+### 3.1 选取约束节点集合（示例：底边节点）
+
+```abaqus
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1          ! 起止节点号请根据实际网格修改
+```
+
+### 3.2 施加三自由度的固定约束（U1、U2、UR3）
+
+```abaqus
+*Boundary
+BOT_EDGE, 1, 1, 0.0   ! X 位移 = 0
+BOT_EDGE, 2, 2, 0.0   ! Y 位移 = 0
+BOT_EDGE, 3, 3, 0.0   ! 绕 Z 轴转动 = 0
+```
+
+> **如果只想做铰支**，可以只固定 1、2 自由度，随后在其他位置再约束转动。
+
+---
+
+## 4️⃣ 渐进（Ramp）方式施加载荷
+
+### 4.1 定义线性幅值（0 → 1）
+
+```abaqus
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+```
+
+### 4.2 将位移（或压力）施加到受载边并关联幅值
+
+```abaqus
+*Boundary
+TOP_EDGE, 2, 2, 0.005, RAMP   ! 例：Y 方向上抬 5 mm
+```
+
+> **RAMP** 让载荷从 0 逐渐增长到目标值，极大提升收敛性，避免一次性加载导致 “cannot converge”。
+
+---
+
+## 5️⃣ 静力步增量设置（推荐值，可根据模型规模微调）
+
+```abaqus
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01,
+      initialInc=0.001, maxInc=0.02, minInc=1e-6, maxNumInc=1000
+*Static
+```
+
+| 参数          | 推荐取值 | 说明 |
+|---------------|----------|------|
+| `initialInc`  | 0.001（或更小） | 第一次求解使用极小增量，确保系统在几何非线性出现前取得平衡 |
+| `maxInc`      | 0.02（≈10% 总位移） | 防止增量过大导致求解失败 |
+| `minInc`      | 1e‑6 | 当收敛困难时，求解器会自动减小增量 |
+| `maxNumInc`   | 1000（或更大） | 允许足够的子步数完成整个载荷过程 |
+| `inc` (总增量) | 0.01（或不写，让 Abaqus 自动控制） | 只要 `initialInc` 足够小，求解器会自行调节 |
+
+> 如仍出现 “cannot converge”，可打开 **线搜索**：
+
+```abaqus
+*Control, lineSearch=YES
+```
+
+---
+
+## 6️⃣ 作业前的快速检查（强烈建议）
+
+1. **材料/截面检查**  
+   - 所有壳单元是否已关联 `STEEL` 截面？  
+   - 厚度是否 > 0？
+
+2. **约束检查**  
+   - `BOT_EDGE`（或其他约束集合）是否包含所有需要固定的节点？  
+   - 是否已约束 U1、U2、UR3（或相应的自由度）？
+
+3. **线性预分析**（不加载荷）  
+   ```abaqus
+   *Step, name=PRECHECK, nlgeom=NO
+   *Static
+   *End Step
+   ```  
+   运行一次，若成功完成，则说明刚度矩阵已非奇异。
+
+4. **查看 *.msg* 文件**  
+   - 确认不再出现 “RIGID BODY MOTION DETECTED” 或 “SINGULAR MATRIX”。  
+
+如果预分析仍报错，请回到步骤 1‑3，逐项核对是否遗漏材料属性或约束。
+
+---
+
+## 📌 核心要点回顾（表格形式）
+
+| 必做事项 | 目的 |
+|----------|------|
+| **定义 `*Elastic`（非零 E）** | 为壳单元提供真实刚度 |
+| **给壳截面设正厚度并分配** | 消除“软”单元导致的零刚度 |
+| **完整约束（U1、U2、UR3）** | 消除刚体自由度，使刚度矩阵满秩 |
+| **使用 Ramp（幅值）施加载荷** | 防止一次性加载导致不收敛 |
+| **合理设置增量（initialInc、maxInc、minInc、maxNumInc）** | 让求解器在需要时自动减小步长 |
+| **先跑一次线性步验证刚度矩阵** | 确认模型已具备可求逆的刚度矩阵 |
+
+完成上述全部设置后，**全局刚度矩阵将不再奇异**，求解器能够顺利完成静力分析，作业不再中止。
+
+---
+
+## 7️⃣ 如仍出现收敛困难的进阶调试技巧
+
+| 方法 | 适用情形 |
+|------|----------|
+| **细化网格**（尤其在应力集中区） | 高梯度导致局部刚度矩阵不良 |
+| **开启几何非线性 `nlgeom=YES`** | 大位移/大变形情况下 |
+| **使用 `*Damping`（粘性阻尼）** | 动态显式或显式静力步收敛困难时 |
+| **在关键位置添加额外约束或对称条件** | 防止模型出现不受约束的自由运动 |
+| **检查接触/耦合定义** | 接触对的刚度若为零会导致相同错误 |
+
+---
+
+### 完整示例（可直接粘贴到 *.inp*）
+
+```abaqus
+*Heading
+** 示例：壳体静力分析，已消除奇异矩阵
+** 1. 材料
+*Material, name=STEEL
+*Density
+7850.,
+*Elastic
+210000., 0.3
+
+** 2. 壳截面
+*Shell Section, elset=ALL_SHELLS, material=STEEL, thickness=0.01
+
+** 3. 节点集合（约束）
+*Nset, nset=BOT_EDGE, generate
+1, 50, 1
+*Nset, nset=TOP_EDGE, generate
+51, 100, 1
+
+** 4. 刚体约束
+*Boundary
+BOT_EDGE, 1, 1, 0.0
+BOT_EDGE, 2, 2, 0.0
+BOT_EDGE, 3, 3, 0.0
+
+** 5. 幅值（Ramp）
+*Amplitude, name=RAMP, definition=Tabular
+0., 0.
+1., 1.
+
+** 6. 施加载荷（位移）
+*Boundary
+TOP_EDGE, 2, 2, 0.005, RAMP
+
+** 7. 静力步
+*Step, name=STATIC_PULL, nlgeom=NO, inc=0.01,
+      initialInc=0.001, maxInc=0.02, minInc=1e-6, maxNumInc=1000
+*Static
+*Control, lineSearch=YES
+*End Step
+```
+
+复制上述内容，替换节点号、元素集合名称、厚度、载荷大小等为你的实际模型参数，即可得到一个 **刚度矩阵非奇异、约束完整、载荷渐进** 的完整 Abaqus 输入文件。
+
+祝你建模顺利，作业成功运行！如果还有其他报错信息，欢迎继续提供，我会进一步定位。
+

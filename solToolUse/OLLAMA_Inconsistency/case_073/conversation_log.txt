@@ -1,0 +1,3781 @@
+=== 2026-04-17 15:03:37 ===
+Q: **What is really happening**
+
+The message  
+
+```
+ERROR: The user subroutine UEL has not been compiled for the current analysis type
+```  
+
+is Abaqus’ generic way of telling you that it cannot find a *valid* definition for a **load that is supposed to act on a surface**.  
+In the input you have
+
+```abaqus
+*DLOAD
+29,P2,-1000.
+30,P2,-1000.
+31,P2,-1000.
+32,P2,-1000.
+```
+
+and later
+
+```abaqus
+*DFLUX
+B1,BFNU
+```
+
+Both cards expect **a surface name** (or a surface definition) as the first field.  
+Instead you are giving element numbers (29‑32) and an element set name (B1).  
+Because Abaqus cannot find a surface with that name it falls back to the
+“user‑defined element” code path and finally reports that the UEL subroutine
+has not been compiled.
+
+The same problem exists for the *DFLUX* card – `BFNU` is not a surface; it is
+just a label that you have not defined anywhere.
+
+So the error is **not** caused by a missing user element; it is caused by an
+incorrect definition of the loads.
+
+---
+
+## How to fix it
+
+### 1. Decide what you really want to load
+
+| What you want to apply | Abaqus card you must use | What you have to supply |
+|------------------------|--------------------------|------------------------|
+| **Point (concentrated) force** on a node | `*CLOAD` (or `*CLOAD, OP=NEW`) | node‑set / node number + DOF + magnitude |
+| **Pressure (or traction) on a face** | `*DLOAD` | **surface** (element‑face) definition + load type + magnitude |
+| **Heat flux on a face** | `*DFLUX` | **surface** (element‑face) definition + magnitude (or predefined field) |
+| **Prescribed temperature on a node** | `*BOUNDARY` (DOF = 11) | node‑set + temperature value |
+
+### 2. Define the required surfaces
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered 1–6 (see the Abaqus
+manual).  For example, to create a surface on the **+X** face of all
+elements you could write
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1   ! S1 = face 1 (the +X face of a C3D20R element)
+```
+
+or, if you need a specific subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+Create a second surface for the heat flux (any face you like, e.g. the
+‑Y face `S2`):
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+### 3. Replace the incorrect *DLOAD and *DFLUX cards
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.   ! pressure P2 (negative = inward) on the defined surface
+```
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0           ! uniform heat flux of 1.0 (units: W/m²) on the defined surface
+```
+
+If you really want a **point load** on node 29, 30, 31, 32, use `*CLOAD`:
+
+```abaqus
+*CLOAD
+29, 1, -1000.   ! DOF 1 = X‑translation, magnitude -1000 N
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+(Replace `1` by the appropriate DOF number if the load is in Y or Z.)
+
+### 4. Clean up the boundary conditions
+
+You already fix the temperature of the node set `CN7` with
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.   ! temperature = 0 °C (DOF = 11)
+```
+
+The line
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+in the *BOUNDARY section is ambiguous – it tries to fix the first two
+degrees of freedom of nodes 1 and 2, but you have not defined a node set for
+them.  Either delete those two lines or replace them with a proper node set,
+e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.   ! fix X‑translation of all nodes (if that is what you want)
+NALL, 2, 2, 0.   ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove the two
+lines.
+
+### 5. Full minimal corrected step (only the part that changed)
+
+Below is a **minimal** version of the step that will run without the UEL
+error.  All other cards (material, section, initial conditions, etc.) are
+kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+### 6. Verify the model
+
+1. **Run a short test** (e.g. one increment) and check the *Abaqus/standard*
+   output file for the line `*** THE ANALYSIS HAS CONVERGED`.  
+2. **Check the .dat file** for the temperature and displacement results at the
+   nodes you are interested in (`*NODE PRINT`).  
+3. If you need a **different face** for the pressure or heat flux, simply change
+   the surface definition (`S1`, `S2`, …) accordingly.
+
+---
+
+## TL;DR – What you must do
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and 30‑32) | 29‑32 are element numbers, not a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `*BOUNDARY 1,1,2` (and similar) | No node set is given – Abaqus cannot apply the constraint. | Either delete the line or replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| `*DLOAD` used for point loads | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the *DLOAD/*DFLUX cards with proper surface definitions (or
+switch to *CLOAD for point forces) the analysis will start and the “UEL not
+compiled” error disappears.  
+
+If you still see the error after making these changes, double‑check that the
+surface names you use in the load cards exactly match the names defined by the
+`*SURFACE` command (case‑sensitive).  
+
+Good luck, and feel free to post a follow‑up if you run into any other
+messages!
+A: **What is really happening?**  
+
+Abaqus prints  
+
+```
+ERROR: The user subroutine UEL has not been compiled for the current analysis type
+```  
+
+when it cannot find a *valid* definition for a **load that must act on a surface**.  
+In the posted input the cards
+
+```abaqus
+*DLOAD
+29,P2,-1000.
+30,P2,-1000.
+31,P2,-1000.
+32,P2,-1000.
+
+*DFLUX
+B1,BFNU
+```
+
+do **not** refer to a surface.  
+
+* `29‑32` are element numbers (or element‑set numbers).  
+* `B1` is an element set.  
+* `BFNU` is just a label – it is never defined as a surface.
+
+Because Abaqus cannot locate a surface with those names it falls back to the
+“user‑element” code path and finally reports that the UEL routine has not been
+compiled. The problem is therefore **not a missing UEL**, it is an incorrect
+load definition.
+
+---
+
+## How to fix the model
+
+### 1. Decide what you really want to load  
+
+| Desired physical load | Abaqus card | What you must supply |
+|-----------------------|-------------|----------------------|
+| Point (concentrated) force on a node | `*CLOAD` (or `*CLOAD, OP=NEW`) | node‑set / node number, DOF, magnitude |
+| Pressure / traction on a face | `*DLOAD` | **surface** (element‑face) name, load type, magnitude |
+| Heat flux on a face | `*DFLUX` | **surface** (element‑face) name, magnitude |
+| Prescribed temperature on a node | `*BOUNDARY` (DOF = 11) | node‑set, temperature value |
+
+If you really need a **point load** on nodes 29‑32, use `*CLOAD`.  
+If you need a **pressure** or **heat flux** on a face, you must first create a
+surface definition.
+
+### 2. Create the required surfaces  
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered 1–6 (see the Abaqus
+manual).  Example – create a surface on the **+X** face of all elements:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1          ! S1 = face 1 (+X) of a C3D20R element
+```
+
+If you only want a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+Create a second surface for the heat flux (any face you like, e.g. the **‑Y**
+face `S2`):
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+### 3. Replace the wrong `*DLOAD` / `*DFLUX` cards  
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.      ! pressure P2 (negative = inward) on the defined surface
+```
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0              ! uniform heat flux of 1.0 W/m² on the defined surface
+```
+
+If you actually wanted a **point load** on nodes 29‑32, use:
+
+```abaqus
+*CLOAD
+29, 1, -1000.   ! DOF 1 = X‑translation (change 1 → 2 or 3 for Y/Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+### 4. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C (DOF = 11)
+```
+
+The two lines
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because no node set is given.  Either delete them or replace
+them with a proper node set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.   ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.   ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two
+lines.
+
+### 5. Minimal corrected step (only the part that changed)
+
+Below is a **minimal** version of the step that will run without the UEL
+error.  All other cards (material, section, initial conditions, etc.) are
+kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+### 6. Verify the model  
+
+1. **Run a short test** (e.g. one increment) and look for the line  
+   `*** THE ANALYSIS HAS CONVERGED` in the `.msg` file.  
+2. **Check the `.dat` file** for the printed temperatures and displacements
+   (`*NODE PRINT`).  
+3. If you need a **different face** for the pressure or heat flux, simply
+   change the surface definition (`S1`, `S2`, …) accordingly.
+
+---
+
+## TL;DR – What you must do
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and 30‑32) | 29‑32 are element numbers, not a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `*BOUNDARY 1,1,2` (and similar) | No node set is given – Abaqus cannot apply the constraint. | Delete the line **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| `*DLOAD` used for point loads | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface
+definitions (or switch to `*CLOAD` for point forces) the analysis will start
+and the “UEL not compiled” error disappears.  
+
+If the error persists, double‑check that the surface names used in the load
+cards **exactly match** the names defined by the `*SURFACE` command (case‑
+sensitive).  
+
+Good luck, and feel free to post a follow‑up if another message shows up!
+
+=== 2026-04-17 15:04:25 ===
+Q: **What the error really means**
+
+```
+ERROR: The user subroutine UEL has not been compiled for the current analysis type
+```
+
+is Abaqus’ generic way of saying *“I cannot find a valid definition for a load that is supposed to act on a surface, so I am falling back to the user‑element (UEL) code path and then complaining that no UEL has been compiled.”*  
+
+In the posted input the two cards that cause the problem are
+
+```abaqus
+*DLOAD
+29,P2,-1000.
+30,P2,-1000.
+31,P2,-1000.
+32,P2,-1000.
+
+*DFLUX
+B1,BFNU
+```
+
+Both cards expect **a surface name** (or a surface definition) as the first
+field.  
+
+* `29‑32` are element numbers (or element‑set numbers).  
+* `B1` is an element set.  
+* `BFNU` is just a label – it is never defined as a surface.
+
+Because Abaqus cannot locate a surface with those names it tries the
+user‑element route and finally reports that the UEL subroutine has not been
+compiled. The problem is therefore **not a missing UEL**, it is an
+incorrect load definition.
+
+---
+
+## How to fix the model
+
+### 1. Decide what you really want to load  
+
+| Desired physical load | Abaqus card | What you must supply |
+|-----------------------|-------------|----------------------|
+| Point (concentrated) force on a node | `*CLOAD` (or `*CLOAD, OP=NEW`) | node number (or node set), DOF, magnitude |
+| Pressure / traction on a face | `*DLOAD` | **surface** (element‑face) name, load type, magnitude |
+| Heat flux on a face | `*DFLUX` | **surface** (element‑face) name, magnitude |
+| Prescribed temperature on a node | `*BOUNDARY` (DOF = 11) | node set, temperature value |
+
+If you really need a **point load** on nodes 29‑32, use `*CLOAD`.  
+If you need a **pressure** or **heat flux** on a face, you must first create a
+surface definition.
+
+### 2. Define the required surfaces  
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered 1–6 (see the Abaqus
+manual).  Example – create a surface on the **+X** face of all elements:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1          ! S1 = face 1 (+X) of a C3D20R element
+```
+
+If you only want a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+…
+32, S1
+```
+
+Create a second surface for the heat flux (any face you like, e.g. the **‑Y**
+face `S2`):
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+### 3. Replace the incorrect `*DLOAD` and `*DFLUX` cards  
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! pressure P2 (negative = inward) on the defined surface
+```
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m² on the defined surface
+```
+
+If you actually wanted a **point load** on nodes 29‑32, use:
+
+```abaqus
+*CLOAD
+29, 1, -1000.   ! DOF 1 = X‑translation (change 1 → 2 or 3 for Y/Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+### 4. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C (DOF = 11)
+```
+
+The two lines
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because no node set is supplied.  Either delete them or
+replace them with a proper node set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.   ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.   ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two
+lines.
+
+### 5. Minimal corrected step (only the part that changed)
+
+Below is a **minimal** version of the step that will run without the UEL
+error.  All other cards (material, section, initial conditions, etc.) are
+kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+### 6. Verify the model  
+
+1. Run a short test (e.g. one increment) and look for the line  
+   `*** THE ANALYSIS HAS CONVERGED` in the `.msg` file.  
+2. Check the `.dat` file for the printed temperatures and displacements
+   (`*NODE PRINT`).  
+3. If you need a different face for the pressure or heat flux, simply
+   change the surface definition (`S1`, `S2`, …) accordingly.
+
+---
+
+## TL;DR – What you must do
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and 30‑32) | 29‑32 are element numbers, not a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `*BOUNDARY 1,1,2` (and similar) | No node set is given – Abaqus cannot apply the constraint. | Delete the line **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| `*DLOAD` used for point loads | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface
+definitions (or switch to `*CLOAD` for point forces) the analysis will start
+and the “UEL not compiled” error disappears.  
+
+If the error persists, double‑check that the surface names used in the load
+cards **exactly match** the names defined by the `*SURFACE` command (case‑
+sensitive).  
+
+Good luck, and feel free to post a follow‑up if another message shows up!
+A: **Short answer**
+
+The message  
+
+```
+ERROR: The user subroutine UEL has not been compiled for the current analysis type
+```  
+
+does **not** mean that you have forgotten to compile a user‑element.  
+Abaqus is trying to treat the loads you have written as *user‑element* loads because it cannot find a **surface definition** that matches the first field of the `*DLOAD` and `*DFLUX` cards.  
+Since no UEL is linked, it aborts with the generic “UEL not compiled” error.
+
+The fix is simply to give Abaqus a **valid surface name** (or, if you really want a point load, use `*CLOAD`).  
+Once the surfaces are defined correctly the analysis will run without any UEL.
+
+Below is a step‑by‑step guide, a minimal corrected input fragment and a TL;DR table that you can copy‑paste into your model.
+
+---
+
+## 1. What the two offending cards really need
+
+| Card | First field | What Abaqus expects |
+|------|-------------|---------------------|
+| `*DLOAD` | **surface name** | a surface that has been created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE` for node‑based loads). |
+| `*DFLUX`| **surface name** | the same – a surface definition. |
+
+In your original file you wrote
+
+```abaqus
+*DLOAD
+29,P2,-1000.
+30,P2,-1000.
+31,P2,-1000.
+32,P2,-1000.
+
+*DFLUX
+B1,BFNU
+```
+
+* `29‑32` are element numbers (or element‑set numbers).  
+* `B1` is an element set.  
+* `BFNU` is just a label – it is **not** a surface.
+
+Because Abaqus cannot locate a surface with those names it falls back to the
+user‑element (UEL) code path and then complains that no UEL has been compiled.
+
+---
+
+## 2. Decide what you really want to load
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| **Pressure / traction** acting on a face of a solid | `*DLOAD` | `*DLOAD` **surface‑name**, **load‑type**, **magnitude** |
+| **Heat flux** on a face | `*DFLUX` | `*DFLUX` **surface‑name**, **magnitude** |
+| **Concentrated (point) force** on a node | `*CLOAD` | `*CLOAD` **node**, **DOF**, **value** |
+| **Prescribed temperature** on a node set | `*BOUNDARY` (DOF = 11) | `*BOUNDARY` **node‑set**, 11, 11, **T** |
+
+If you really need a **point load** on nodes 29‑32, replace the `*DLOAD` lines with a `*CLOAD` block (see the TL;DR table below).
+
+---
+
+## 3. Create the required surfaces
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the Abaqus manual).  
+Pick the face that you want to load and give the surface a name, e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only want a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You can give any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF` …) – just be sure to use the **exact same spelling** later.*
+
+---
+
+## 4. Replace the wrong load cards
+
+### 4.1 Pressure (or any traction)  
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+If you need a **different load type** (e.g. *P1* for pressure in the global
+direction, *P3* for traction components, etc.) just change the second field.
+
+### 4.2 Heat flux  
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied.  
+Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two
+lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the
+UEL error.  All other cards (material, section, initial conditions, etc.) are
+kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+If you prefer a point load instead of a pressure, replace the `*DLOAD` block
+with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT,
+NAME=SF_PRESS` line (the surface is no longer needed).
+
+---
+
+## 7. Verify that the problem is solved
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements
+   (`*NODE PRINT`).  
+3. If you still get an error, double‑check that the **surface name** used in
+   `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE`
+   (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, not a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface
+definitions (or switch to `*CLOAD` for point forces) the analysis will start
+and the “UEL not compiled” error disappears.
+
+---
+
+**That’s it!**  
+Apply the changes, run the model again, and you should obtain a successful
+steady‑state coupled temperature‑displacement solution. If another message
+appears, post the new error text and the surrounding input lines and we can
+help you troubleshoot further.
+
+=== 2026-04-17 15:05:22 ===
+Q: **Short answer** – The message  
+
+```
+ERROR: The user subroutine UEL has not been compiled for the current analysis type
+```  
+
+does **not** mean that you have forgotten to compile a user‑element.  
+Abaqus is trying to treat the loads you wrote on the `*DLOAD` and `*DFLUX` cards as *user‑element* loads because it cannot find a **surface definition** that matches the first field of those cards.  
+Since no UEL is linked, it aborts with the generic “UEL not compiled” error.
+
+The fix is simply to give Abaqus a **valid surface name** (or, if you really want a point load, use `*CLOAD`). Once the loads are written correctly the analysis will run without any UEL.
+
+Below is a step‑by‑step guide, a minimal corrected input fragment and a TL;DR table that you can copy‑paste into your model.
+
+---
+
+## 1. What the two offending cards really need
+
+| Card   | First field | What Abaqus expects |
+|--------|-------------|---------------------|
+| `*DLOAD` | **surface name** | a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| **surface name** | the same – a surface definition. |
+
+In your original file you wrote
+
+```abaqus
+*DLOAD
+29,P2,-1000.
+30,P2,-1000.
+31,P2,-1000.
+32,P2,-1000.
+
+*DFLUX
+B1,BFNU
+```
+
+* `29‑32` are element numbers (or element‑set numbers).  
+* `B1` is an element set.  
+* `BFNU` is just a label – it is **not** a surface.
+
+Because Abaqus cannot locate a surface with those names it falls back to the
+user‑element (UEL) route and then aborts with the generic “UEL not compiled”
+error.
+
+---
+
+## 2. Decide what you really want to load
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| **Pressure / traction** on a face of a solid | `*DLOAD` | `*DLOAD` **surface‑name**, **load‑type**, **magnitude** |
+| **Heat flux** on a face | `*DFLUX` | `*DFLUX` **surface‑name**, **magnitude** |
+| **Concentrated (point) force** on a node | `*CLOAD` | `*CLOAD` **node**, **DOF**, **value** |
+| **Prescribed temperature** on a node set | `*BOUNDARY` (DOF = 11) | `*BOUNDARY` **node‑set**, 11, 11, **T** |
+
+If you really need a **point load** on nodes 29‑32, replace the `*DLOAD` lines
+with a `*CLOAD` block (see TL;DR table below).
+
+---
+
+## 3. Create the required surfaces
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the
+Abaqus manual).  Pick the face you want to load and give the surface a name,
+e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only want a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+…
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You can use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF` …) – just be
+sure to use the **exact same spelling** later.*
+
+---
+
+## 4. Replace the wrong load cards
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+If you need a different load type (e.g. *P1* for pressure in the global
+direction, *P3* for traction components, etc.) just change the second field.
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied.  
+Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two
+lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the
+UEL error.  All other cards (material, section, initial conditions, etc.) are
+kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+If you prefer a point load instead of a pressure, replace the `*DLOAD` block
+with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT,
+NAME=SF_PRESS` line (the surface is no longer needed).
+
+---
+
+## 7. Verify that the problem is solved
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements
+   (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in
+   `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE`
+   (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, not a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface
+definitions (or switch to `*CLOAD` for point forces) the analysis will start
+and the “UEL not compiled” error disappears.
+
+---
+
+That’s all you need to do. Apply the changes, run the model again, and you
+should obtain a successful steady‑state coupled temperature‑displacement
+solution. If another message appears, post the new error text and the
+surrounding input lines and we can help you troubleshoot further.
+A: **Short answer** – The error  
+
+```
+ERROR: The user subroutine UEL has not been compiled for the current analysis type
+```  
+
+is **not** telling you that you forgot to compile a user‑element.  
+Abaqus is trying to treat the loads you wrote on the `*DLOAD` and `*DFLUX` cards as **user‑element loads** because it cannot find a **surface definition** whose name matches the first field of those cards.  
+When no UEL is linked it aborts with the generic “UEL not compiled” message.
+
+The cure is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`).  
+Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a **step‑by‑step guide**, a **minimal corrected input fragment**, and a **TL;DR table** that you can copy‑paste into your model.
+
+---
+
+## 1. What the two offending cards really need  
+
+| Card   | First field | What Abaqus expects |
+|--------|-------------|---------------------|
+| `*DLOAD` | **surface name** | a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| **surface name** | the same – a surface definition. |
+
+In your original file you wrote  
+
+```abaqus
+*DLOAD
+29,P2,-1000.
+30,P2,-1000.
+31,P2,-1000.
+32,P2,-1000.
+
+*DFLUX
+B1,BFNU
+```  
+
+* `29‑32` are element numbers (or an element‑set number).  
+* `B1` is an element set.  
+* `BFNU` is just a label – **not** a surface.
+
+Because Abaqus cannot locate a surface with those names it falls back to the
+user‑element (UEL) route and aborts with the generic “UEL not compiled”
+error.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| **Pressure / traction** on a face of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| **Heat flux** on a face | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| **Concentrated (point) force** on a node | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| **Prescribed temperature** on a node set | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a **point load** on nodes 29‑32, replace the `*DLOAD` block
+with a `*CLOAD` block (see TL;DR table below).
+
+---
+
+## 3. Create the required surfaces  
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the
+Abaqus manual).  Pick the face you want to load and give the surface a name,
+e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements  
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only want a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+…
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You can use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF` …) – just be
+sure to use the **exact same spelling** later.*
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+If you need a different load type (e.g. `P1` for pressure in the global
+direction, `P3` for traction components, etc.) just change the second field.
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied.  
+Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two
+lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the
+UEL error.  All other cards (material, section, initial conditions, etc.) are
+kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+If you prefer a **point load** instead of a pressure, replace the `*DLOAD`
+block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE,
+TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements
+   (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in
+   `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE`
+   (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, not a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface
+definitions (or switch to `*CLOAD` for point forces) the analysis will start
+and the “UEL not compiled” error disappears.
+
+---
+
+That’s all you need to do. Apply the changes, run the model again, and you
+should obtain a successful steady‑state coupled temperature‑displacement
+solution. If another message appears, post the new error text and the
+surrounding input lines and we can help you troubleshoot further.
+
+=== 2026-04-17 15:06:20 ===
+Q: **Short answer – the “UEL has not been compiled” message is not telling you that you forgot to compile a user‑element.**  
+Abaqus tries to treat the loads you wrote on the `*DLOAD` and `*DFLUX` cards as **user‑element loads** because it cannot find a **surface** whose name matches the first field of those cards. When no UEL is linked the program aborts with the generic *UEL not compiled* error.
+
+The cure is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`). Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a step‑by‑step guide, a minimal corrected input fragment, and a TL;DR table that you can copy‑paste into your model.
+
+---
+
+## 1. What the two offending cards really need  
+
+| Card   | First field | What Abaqus expects |
+|--------|-------------|---------------------|
+| `*DLOAD` | **surface name** | a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| **surface name** | the same – a surface definition. |
+
+In your original file you wrote  
+
+```abaqus
+*DLOAD
+29,P2,-1000.
+30,P2,-1000.
+31,P2,-1000.
+32,P2,-1000.
+
+*DFLUX
+B1,BFNU
+```  
+
+* `29‑32` are element numbers (or an element‑set number).  
+* `B1` is an element set.  
+* `BFNU` is just a label – **not** a surface.
+
+Because Abaqus cannot locate a surface with those names it falls back to the
+user‑element (UEL) route and aborts with the generic “UEL not compiled”
+error.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| **Pressure / traction** on a face of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| **Heat flux** on a face | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| **Concentrated (point) force** on a node | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| **Prescribed temperature** on a node set | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a **point load** on nodes 29‑32, replace the `*DLOAD` block
+with a `*CLOAD` block (see TL;DR table below).
+
+---
+
+## 3. Create the required surfaces  
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the
+Abaqus manual).  Pick the face you want to load and give the surface a name,
+e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements  
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only want a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+…
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You can use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF` …) – just be
+sure to use the **exact same spelling** later.*
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+If you need a different load type (e.g. `P1` for pressure in the global
+direction, `P3` for traction components) just change the second field.
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied.  
+Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two
+lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the
+UEL error.  All other cards (material, section, initial conditions, etc.) are
+kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+If you prefer a **point load** instead of a pressure, replace the `*DLOAD`
+block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE,
+TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements
+   (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in
+   `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE`
+   (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, not a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface
+definitions (or switch to `*CLOAD` for point forces) the analysis will start
+and the “UEL not compiled” error disappears.
+
+---
+
+That’s all you need to do. Apply the changes, run the model again, and you
+should obtain a successful steady‑state coupled temperature‑displacement
+solution. If another message appears, post the new error text and the
+surrounding input lines and we can help you troubleshoot further.
+A: **Short answer** – The “**UEL has not been compiled**” error is not telling you that you forgot to compile a user‑element.  
+Abaqus thinks the loads you wrote on the `*DLOAD` and `*DFLUX` cards are **user‑element loads** because it cannot find a **surface** whose name matches the first field of those cards.  
+When no UEL is linked the program aborts with the generic *UEL‑not‑compiled* message.
+
+The cure is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`).  
+Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a **step‑by‑step guide**, a **minimal corrected input fragment**, and a **TL;DR table** that you can copy‑paste into your model.
+
+---
+
+## 1. What the two offending cards really need  
+
+| Card   | First field | What Abaqus expects |
+|--------|-------------|---------------------|
+| `*DLOAD` | **surface name** | a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| **surface name** | the same – a surface definition. |
+
+In your original file you wrote  
+
+```abaqus
+*DLOAD
+29,P2,-1000.
+30,P2,-1000.
+31,P2,-1000.
+32,P2,-1000.
+
+*DFLUX
+B1,BFNU
+```  
+
+* `29‑32` are element numbers (or an element‑set number).  
+* `B1` is an element set.  
+* `BFNU` is just a label – **not** a surface.
+
+Because Abaqus cannot locate a surface with those names it falls back to the
+user‑element (UEL) route and aborts with the generic “UEL not compiled”
+error.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| **Pressure / traction** on a face of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| **Heat flux** on a face | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| **Concentrated (point) force** on a node | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| **Prescribed temperature** on a node set | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a **point load** on nodes 29‑32, replace the `*DLOAD` block
+with a `*CLOAD` block (see TL;DR table below).
+
+---
+
+## 3. Create the required surfaces  
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the
+Abaqus manual).  Pick the face you want to load and give the surface a name,
+e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements  
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only want a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+…
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You can use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF` …) – just be
+sure to use the **exact same spelling** later.*
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+If you need a different load type (e.g. `P1` for pressure in the global
+direction, `P3` for traction components) just change the second field.
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied.  
+Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two
+lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the
+UEL error.  All other cards (material, section, initial conditions, etc.) are
+kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+If you prefer a **point load** instead of a pressure, replace the `*DLOAD`
+block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE,
+TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements
+   (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in
+   `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE`
+   (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface
+definitions (or switch to `*CLOAD` for point forces) the analysis will start
+and the “UEL not compiled” error disappears.
+
+---
+
+That’s all you need to do. Apply the changes, run the model again, and you
+should obtain a successful steady‑state coupled temperature‑displacement
+solution. If another message appears, post the new error text and the
+surrounding input lines and we can help you troubleshoot further.
+
+=== 2026-04-17 15:07:18 ===
+Q: **Short answer** – The “**UEL has not been compiled**” message is **not** telling you that you forgot to compile a user element.  
+Abaqus thinks the loads you wrote on the `*DLOAD` and `*DFLUX` cards are **user‑element loads** because the first field of those cards (e.g. `29`, `B1`) is not the name of a defined surface. When Abaqus cannot find a surface it falls back to the user‑element (UEL) routine, and because no UEL is linked the program aborts with the generic *UEL‑not‑compiled* error.
+
+The cure is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`).  
+Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a **step‑by‑step guide**, a **minimal corrected input fragment**, and a **TL;DR table** that you can copy‑paste into your model.
+
+---------------------------------------------------------------------
+
+## 1. What the two offending cards really need  
+
+| Card   | First field | What Abaqus expects |
+|--------|-------------|---------------------|
+| `*DLOAD` | **surface name** | a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| **surface name** | the same – a surface definition. |
+
+In your original file you wrote  
+
+```abaqus
+*DLOAD
+29,P2,-1000.
+30,P2,-1000.
+31,P2,-1000.
+32,P2,-1000.
+
+*DFLUX
+B1,BFNU
+```  
+
+* `29‑32` are element numbers (or an element‑set number).  
+* `B1` is an element set.  
+* `BFNU` is just a label – **not** a surface.
+
+Because Abaqus cannot locate a surface with those names it falls back to the
+user‑element (UEL) route and aborts with the generic “UEL not compiled”
+error.
+
+---------------------------------------------------------------------
+
+## 2. Decide what you really want to load  
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| **Pressure / traction** on a face of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| **Heat flux** on a face | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| **Concentrated (point) force** on a node | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| **Prescribed temperature** on a node set | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a **point load** on nodes 29‑32, replace the `*DLOAD` block
+with a `*CLOAD` block (see TL;DR table below).
+
+---------------------------------------------------------------------
+
+## 3. Create the required surfaces  
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the
+Abaqus manual).  Choose the face you want to load and give the surface a
+name, e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements  
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only want a subset of elements, list them explicitly, e.g.
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You may use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF`, …) – just be
+sure to use the **exact same spelling** later.*
+
+---------------------------------------------------------------------
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+(If you need a different pressure type, change the second field, e.g. `P1`,
+`P3`, ….)
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---------------------------------------------------------------------
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied.  
+Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two
+lines.
+
+---------------------------------------------------------------------
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the
+UEL error.  All other cards (material, section, initial conditions, etc.) are
+kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+If you prefer a **point load** instead of a pressure, replace the `*DLOAD`
+block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE,
+TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).
+
+---------------------------------------------------------------------
+
+## 7. Verify that the problem is solved  
+
+1. Run a short test (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. Check the `.dat` file for the printed temperatures and displacements
+   (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in
+   `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE`
+   (case‑sensitive, no extra blanks).
+
+---------------------------------------------------------------------
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface
+definitions (or switch to `*CLOAD` for point forces) the analysis will start
+and the “UEL not compiled” error disappears.
+
+---------------------------------------------------------------------
+
+That’s all you need to do. Apply the changes, run the model again, and you
+should obtain a successful steady‑state coupled temperature‑displacement
+solution. If another message appears, post the new error text and the
+surrounding input lines and we can help you troubleshoot further.
+A: **Short answer** – The “**UEL has not been compiled**” error is not telling you that you forgot to compile a user‑element routine.  
+Abaqus thinks the loads you wrote on the `*DLOAD` and `*DFLUX` cards are **user‑element loads** because the first field of those cards (e.g. `29`, `B1`) is **not a surface name**. When Abaqus cannot find a surface it falls back to the UEL routine, and because no UEL is linked the program aborts with the generic *UEL‑not‑compiled* message.
+
+The cure is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`). Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a **step‑by‑step guide**, a **minimal corrected input fragment**, and a **TL;DR table** that you can copy‑paste into your model.
+
+---
+
+## 1. Why the original cards are wrong  
+
+| Card | First field you used | What Abaqus expects |
+|------|---------------------|---------------------|
+| `*DLOAD` | `29` (or `30,31,32`) | **Surface name** – a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| `B1` (or `BFNU`) | **Surface name** – the same as above. |
+
+`29‑32` are element numbers (or an element‑set number) and `B1`/`BFNU` are not surface definitions. Because Abaqus cannot locate a surface with those identifiers it assumes you are trying to apply a **user‑element load** and therefore looks for a compiled UEL. No UEL is linked → “UEL not compiled”.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| Pressure / traction on a **face** of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| Heat flux on a **face** | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| Concentrated (point) force on a **node** | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| Prescribed temperature on a **node set** | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a point load on nodes 29‑32, replace the `*DLOAD` block with a `*CLOAD` block (see TL;DR table).
+
+---
+
+## 3. Create the required surfaces  
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the Abaqus manual). Choose the face you want to load and give the surface a name, e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements  
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only want a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You may use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF`, …) – just be sure to use the **exact same spelling** later.*
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+*(If you need a different pressure component, change the second field – `P1`, `P3`, …)*
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied. Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the UEL error. All other cards (material, section, initial conditions, etc.) are kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+*If you prefer a **point load** instead of a pressure, replace the `*DLOAD` block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).*
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE` (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface definitions (or switch to `*CLOAD` for point forces) the analysis will start and the “UEL not compiled” error disappears.
+
+---
+
+**That’s all you need to do.** Apply the changes, run the model again, and you should obtain a successful steady‑state coupled temperature‑displacement solution. If another message appears, post the new error text and the surrounding input lines and we can help you troubleshoot further.
+
+=== 2026-04-17 15:08:16 ===
+Q: **Short answer** – The “**UEL has not been compiled**” message is **not** telling you that a user‑element routine is missing.  
+Abaqus interprets the entries on your `*DLOAD` and `*DFLUX` cards as **user‑element loads** because the first field you gave (e.g. `29`, `30`, `B1`) is **not a surface name**. When Abaqus cannot find a surface it looks for a compiled UEL; none is linked, so the job aborts with the generic *UEL‑not‑compiled* error.
+
+The cure is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`). Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a **step‑by‑step guide**, a **minimal corrected input fragment**, and a **TL;DR table** that you can copy‑paste into your model.
+
+---
+
+## 1. Why the original cards are wrong  
+
+| Card | First field you used | What Abaqus expects |
+|------|----------------------|---------------------|
+| `*DLOAD` | `29` (or `30,31,32`) | **Surface name** – a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| `B1` (or `BFNU`) | **Surface name** – the same as above. |
+
+`29‑32` are element numbers (or an element‑set number) and `B1`/`BFNU` are not surface definitions. Because Abaqus cannot locate a surface with those identifiers it assumes you are trying to apply a **user‑element load** and therefore looks for a compiled UEL. No UEL is linked → “UEL not compiled”.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| Pressure / traction on a **face** of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| Heat flux on a **face** | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| Concentrated (point) force on a **node** | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| Prescribed temperature on a **node set** | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a point load on nodes 29‑32, replace the `*DLOAD` block with a `*CLOAD` block (see TL;DR table).
+
+---
+
+## 3. Create the required surfaces  
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the Abaqus manual). Choose the face you want to load and give the surface a name, e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements  
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only need a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You may use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF`, …) – just be sure to use the **exact same spelling** later.*
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+*(If you need a different pressure component, change the second field – `P1`, `P3`, …)*
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied. Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the UEL error. All other cards (material, section, initial conditions, etc.) are kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+*If you prefer a **point load** instead of a pressure, replace the `*DLOAD` block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).*
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE` (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface definitions (or switch to `*CLOAD` for point forces) the analysis will start and the “UEL not compiled” error disappears.
+
+---
+
+**That’s all you need to do.** Apply the changes, run the model again, and you should obtain a successful steady‑state coupled temperature‑displacement solution. If another message appears, post the new error text and the surrounding input lines and we can help you troubleshoot further.
+A: **Short answer** – The “**UEL has not been compiled**” error is not telling you that a user‑element routine is missing.  
+Abaqus thinks the loads you wrote on the `*DLOAD` and `*DFLUX` cards are **user‑element loads** because the first field you gave (e.g. `29`, `30`, `B1`) is **not a surface name**. When Abaqus cannot find a surface it looks for a compiled UEL; none is linked, so the job aborts with the generic *UEL‑not‑compiled* message.
+
+The cure is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`). Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a **step‑by‑step guide**, a **minimal corrected input fragment**, and a **TL;DR table** that you can copy‑paste into your model.
+
+---
+
+## 1. Why the original cards are wrong  
+
+| Card | First field you used | What Abaqus expects |
+|------|----------------------|---------------------|
+| `*DLOAD` | `29` (or `30,31,32`) | **Surface name** – a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| `B1` (or `BFNU`) | **Surface name** – the same as above. |
+
+`29‑32` are element numbers (or an element‑set number) and `B1`/`BFNU` are not surface definitions. Because Abaqus cannot locate a surface with those identifiers it assumes you are trying to apply a **user‑element load** and therefore looks for a compiled UEL. No UEL is linked → “UEL not compiled”.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| Pressure / traction on a **face** of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| Heat flux on a **face** | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| Concentrated (point) force on a **node** | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| Prescribed temperature on a **node set** | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a point load on nodes 29‑32, replace the `*DLOAD` block with a `*CLOAD` block (see TL;DR table).
+
+---
+
+## 3. Create the required surfaces  
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the Abaqus manual). Choose the face you want to load and give the surface a name, e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements  
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only need a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You may use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF`, …) – just be sure to use the **exact same spelling** later.*
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+*(If you need a different pressure component, change the second field – `P1`, `P3`, …)*
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied. Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the UEL error. All other cards (material, section, initial conditions, etc.) are kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+*If you prefer a **point load** instead of a pressure, replace the `*DLOAD` block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).*
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE` (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface definitions (or switch to `*CLOAD` for point forces) the analysis will start and the “UEL not compiled” error disappears.
+
+---
+
+**That’s all you need to do.** Apply the changes, run the model again, and you should obtain a successful steady‑state coupled temperature‑displacement solution. If another message appears, post the new error text and the surrounding input lines and we can help you troubleshoot further.
+
+=== 2026-04-17 15:09:12 ===
+Q: **Short answer** – The “**UEL has not been compiled**” message is not telling you that a user‑element routine is missing.  
+Abaqus interprets the loads you placed on the `*DLOAD` and `*DFLUX` cards as **user‑element loads** because the first field you gave (e.g. `29`, `30`, `B1`) is **not a surface name**. When Abaqus cannot find a surface with that identifier it looks for a compiled UEL; none is linked, so the job aborts with the generic *UEL‑not‑compiled* error.
+
+The cure is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`). Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a **step‑by‑step guide**, a **minimal corrected input fragment**, and a **TL;DR table** that you can copy‑paste into your model.
+
+---
+
+## 1. Why the original cards are wrong  
+
+| Card | First field you used | What Abaqus expects |
+|------|----------------------|---------------------|
+| `*DLOAD` | `29` (or `30,31,32`) | **Surface name** – a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| `B1` (or `BFNU`) | **Surface name** – the same as above. |
+
+`29‑32` are element numbers (or an element‑set number) and `B1`/`BFNU` are not surface definitions. Because Abaqus cannot locate a surface with those identifiers it assumes you are trying to apply a **user‑element load** and therefore looks for a compiled UEL. No UEL is linked → “UEL not compiled”.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| Pressure / traction on a **face** of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| Heat flux on a **face** | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| Concentrated (point) force on a **node** | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| Prescribed temperature on a **node set** | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a point load on nodes 29‑32, replace the `*DLOAD` block with a `*CLOAD` block (see TL;DR table).
+
+---
+
+## 3. Create the required surfaces  
+
+A surface is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the Abaqus manual). Choose the face you want to load and give the surface a name, e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements  
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only need a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You may use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF`, …) – just be sure to use the **exact same spelling** later.*
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+*(If you need a different pressure component, change the second field – `P1`, `P3`, …)*
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied. Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the UEL error. All other cards (material, section, initial conditions, etc.) are kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+*If you prefer a **point load** instead of a pressure, replace the `*DLOAD` block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).*
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE` (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface definitions (or switch to `*CLOAD` for point forces) the analysis will start and the “UEL not compiled” error disappears.
+
+---
+
+**That’s all you need to do.** Apply the changes, run the model again, and you should obtain a successful steady‑state coupled temperature‑displacement solution. If another message appears, post the new error text and the surrounding input lines and we can help you troubleshoot further.
+A: **Short answer** – The “**UEL has not been compiled**” error is not telling you that a user‑element routine is missing.  
+Abaqus thinks the loads you wrote on the `*DLOAD` and `*DFLUX` cards are **user‑element loads** because the first field you gave (e.g. `29`, `30`, `B1`) is **not a surface name**. When Abaqus cannot find a surface with that identifier it looks for a compiled UEL; none is linked, so the job aborts with the generic *UEL‑not‑compiled* message.
+
+The cure is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`). Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a **step‑by‑step guide**, a **minimal corrected input fragment**, and a **TL;DR table** that you can copy‑paste into your model.
+
+---
+
+## 1. Why the original cards are wrong  
+
+| Card | First field you used | What Abaqus expects |
+|------|----------------------|---------------------|
+| `*DLOAD` | `29` (or `30,31,32`) | **Surface name** – a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| `B1` (or `BFNU`) | **Surface name** – the same as above. |
+
+`29‑32` are element numbers (or an element‑set number) and `B1`/`BFNU` are not surface definitions. Because Abaqus cannot locate a surface with those identifiers it assumes you are trying to apply a **user‑element load** and therefore looks for a compiled UEL. No UEL is linked → “UEL not compiled”.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load you need | Abaqus card to use | How to write it |
+|------------------------|-------------------|-----------------|
+| Pressure / traction on a **face** of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| Heat flux on a **face** | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| Concentrated (point) force on a **node** | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| Prescribed temperature on a **node set** | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a point load on nodes 29‑32, replace the `*DLOAD` block with a `*CLOAD` block (see TL;DR table).
+
+---
+
+## 3. Create the required surfaces  
+
+A *surface* is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the Abaqus manual). Choose the face you want to load and give the surface a name, e.g. `SF_PRESS`.
+
+### Example – pressure on the **+X** face (face 1) of **all** elements  
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only need a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+…
+32, S1
+```
+
+### Example – heat flux on the **‑Y** face (face 2)
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+*You may use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF`, …) – just be sure to use the **exact same spelling** later.*
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+*(If you need a different pressure component, change the second field – `P1`, `P3`, …)*
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied. Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+Below is a **complete, minimal** version of the step that will run without the UEL error. All other cards (material, section, initial conditions, etc.) are kept exactly as you wrote them.
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+*If you prefer a **point load** instead of a pressure, replace the `*DLOAD` block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).*
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE` (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface definitions (or switch to `*CLOAD` for point forces) the analysis will start and the “UEL not compiled” error disappears.
+
+---
+
+**That’s all you need to do.** Apply the changes, run the model again, and you should obtain a successful steady‑state coupled temperature‑displacement solution. If another message appears, post the new error text and the surrounding input lines and we can help you troubleshoot further.
+
+=== 2026-04-17 15:10:07 ===
+Q: **Short answer –** the “**UEL has not been compiled**” message is not telling you that a user‑element routine is missing.  
+Abaqus interprets the entries on the `*DLOAD` and `*DFLUX` cards as **user‑element loads** because the first field you gave (e.g. `29`, `30`, `B1`) is **not a surface name**. When Abaqus cannot find a surface with that identifier it looks for a compiled UEL; none is linked, so the job aborts with the generic *UEL‑not‑compiled* error.
+
+The fix is to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`). Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a step‑by‑step guide, a minimal corrected input fragment, and a TL;DR table you can copy‑paste into your model.
+
+---
+
+## 1. Why the original cards are wrong  
+
+| Card | What you wrote | What Abaqus expects |
+|------|----------------|---------------------|
+| `*DLOAD` | `29` (or `30,31,32`) | **Surface name** – a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| `B1` (or `BFNU`) | **Surface name** – the same as above. |
+
+`29‑32` are element numbers (or an element‑set number) and `B1`/`BFNU` are not surface definitions. Because Abaqus cannot locate a surface with those identifiers it assumes you are trying to apply a **user‑element load** and therefore looks for a compiled UEL. No UEL is linked → “UEL not compiled”.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load | Abaqus card | Syntax |
+|---------------|-------------|--------|
+| Pressure / traction on a **face** of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| Heat flux on a **face** | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| Concentrated (point) force on a **node** | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| Prescribed temperature on a **node set** | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a point load on nodes 29‑32, replace the `*DLOAD` block with a `*CLOAD` block (see TL;DR table).
+
+---
+
+## 3. Create the required surfaces  
+
+A *surface* is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the Abaqus manual). Choose the face you want to load and give the surface a name, e.g. `SF_PRESS`.
+
+**Example – pressure on the +X face (face 1) of all elements**
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1          ! “EALL” = all elements in the model
+```
+
+If you only need a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+**Example – heat flux on the –Y face (face 2)**
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+You may use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF`, …) – just be sure to use the **exact same spelling** later.
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+*(If you need a different pressure component, change the second field – `P1`, `P3`, …)*
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied. Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+*If you prefer a **point load** instead of a pressure, replace the `*DLOAD` block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).*
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. Run a short test (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. Check the `.dat` file for the printed temperatures and displacements (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE` (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface definitions (or switch to `*CLOAD` for point forces) the analysis will start and the “UEL not compiled” error disappears.
+
+---
+
+**That’s all you need to do.** Apply the changes, run the model again, and you should obtain a successful steady‑state coupled temperature‑displacement solution. If another message appears, post the new error text and the surrounding input lines and we can help you troubleshoot further.
+A: **Short answer** – The “**UEL has not been compiled**” error is not telling you that a user‑element routine is missing.  
+Abaqus thinks the entries on the `*DLOAD` and `*DFLUX` cards are **user‑element loads** because the first field you gave (e.g. `29`, `30`, `B1`) is **not a surface name**. When Abaqus cannot find a surface with that identifier it looks for a compiled UEL; none is linked, so the job aborts with the generic *UEL‑not‑compiled* message.
+
+The fix is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`). Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a **step‑by‑step guide**, a **minimal corrected input fragment**, and a **TL;DR table** you can copy‑paste into your model.
+
+---
+
+## 1. Why the original cards are wrong  
+
+| Card | What you wrote | What Abaqus expects |
+|------|----------------|---------------------|
+| `*DLOAD` | `29` (or `30,31,32`) | **Surface name** – a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| `B1` (or `BFNU`) | **Surface name** – the same as above. |
+
+`29‑32` are element numbers (or an element‑set number) and `B1`/`BFNU` are not surface definitions. Because Abaqus cannot locate a surface with those identifiers it assumes you are trying to apply a **user‑element load** and therefore looks for a compiled UEL. No UEL is linked → “UEL not compiled”.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load | Abaqus card | Typical syntax |
+|---------------|-------------|----------------|
+| Pressure / traction on a **face** of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| Heat flux on a **face** | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| Concentrated (point) force on a **node** | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| Prescribed temperature on a **node set** | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a point load on nodes 29‑32, replace the `*DLOAD` block with a `*CLOAD` block (see TL;DR table).
+
+---
+
+## 3. Create the required surfaces  
+
+A *surface* is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the Abaqus manual). Choose the face you want to load and give the surface a name, e.g. `SF_PRESS`.
+
+**Example – pressure on the +X face (face 1) of *all* elements**
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! “EALL” = all elements in the model
+```
+
+If you only need a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+**Example – heat flux on the –Y face (face 2)**
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+You may use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF`, …) – just be sure to use the **exact same spelling** later.
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+*(If you need a different pressure component, change the second field – `P1`, `P3`, …)*
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied. Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+*If you prefer a **point load** instead of a pressure, replace the `*DLOAD` block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).*
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. Run a short test (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. Check the `.dat` file for the printed temperatures and displacements (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE` (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface definitions (or switch to `*CLOAD` for point forces) the analysis will start and the “UEL not compiled” error disappears.
+
+---
+
+**That’s all you need to do.** Apply the changes, run the model again, and you should obtain a successful steady‑state coupled temperature‑displacement solution. If another message appears, post the new error text and the surrounding input lines and we can help you troubleshoot further.
+
+=== 2026-04-17 15:11:03 ===
+Q: **Short answer** – The “**UEL has not been compiled**” message is not telling you that a user‑element routine is missing.  
+Abaqus interprets the entries on the `*DLOAD` and `*DFLUX` cards as **user‑element loads** because the first field you gave (e.g. `29`, `30`, `B1`) is **not a surface name**. When Abaqus cannot find a surface with that identifier it looks for a compiled UEL; none is linked, so the job aborts with the generic *UEL‑not‑compiled* error.
+
+The fix is simply to give Abaqus a **valid surface name** (or, if you really need a point load, use `*CLOAD`). Once the loads are written correctly the analysis will run without any UEL‑related error.
+
+Below is a step‑by‑step guide, a minimal corrected input fragment, and a TL;DR table you can copy‑paste into your model.
+
+---
+
+## 1. Why the original cards are wrong  
+
+| Card | What you wrote | What Abaqus expects |
+|------|----------------|---------------------|
+| `*DLOAD` | `29` (or `30,31,32`) | **Surface name** – a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| `B1` (or `BFNU`) | **Surface name** – the same as above. |
+
+`29‑32` are element numbers (or an element‑set number) and `B1`/`BFNU` are not surface definitions. Because Abaqus cannot locate a surface with those identifiers it assumes you are trying to apply a **user‑element load** and therefore looks for a compiled UEL. No UEL is linked → “UEL not compiled”.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load | Abaqus card | Typical syntax |
+|---------------|-------------|----------------|
+| Pressure / traction on a **face** of a solid | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| Heat flux on a **face** | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| Concentrated (point) force on a **node** | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| Prescribed temperature on a **node set** | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a point load on nodes 29‑32, replace the `*DLOAD` block with a `*CLOAD` block (see TL;DR table).
+
+---
+
+## 3. Create the required surfaces  
+
+A *surface* is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the Abaqus manual). Choose the face you want to load and give the surface a name, e.g. `SF_PRESS`.
+
+**Example – pressure on the +X face (face 1) of all elements**
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1          ! “EALL” = all elements in the model
+```
+
+If you only need a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+**Example – heat flux on the –Y face (face 2)**
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+```
+
+You may use any name you like (`SF_PRESS`, `SF_FLUX`, `MY_SURF`, …) – just be sure to use the **exact same spelling** later.
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction)
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.          ! P2 = pressure, negative = inward
+```
+
+*(If you need a different pressure component, change the second field – `P1`, `P3`, …)*
+
+### 4.2 Heat flux
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0                  ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.      ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+You already prescribe the temperature on node set `CN7` correctly:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two lines that follow in your original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+are ambiguous because **no node set** is supplied. Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two lines.
+
+---
+
+## 6. Minimal corrected step (only the part that changed)
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+*DLOAD
+SF_PRESS, P2, -1000.
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+*If you prefer a **point load** instead of a pressure, replace the `*DLOAD` block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).*
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. Run a short test (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. Check the `.dat` file for the printed temperatures and displacements (`*NODE PRINT`).  
+
+3. If you still get an error, double‑check that the **surface name** used in `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE` (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface definitions (or switch to `*CLOAD` for point forces) the analysis will start and the “UEL not compiled” error disappears.
+
+---
+
+**That’s all you need to do.** Apply the changes, run the model again, and you should obtain a successful steady‑state coupled temperature‑displacement solution. If another message appears, post the new error text and the surrounding input lines and we can help you troubleshoot further.
+A: **Short answer** – The “**UEL has not been compiled**” error is not telling you that a user‑element routine is missing.  
+Abaqus thinks the numbers you placed on the `*DLOAD` (and the string on `*DFLUX`) are **user‑element load identifiers** because it cannot find a **surface** with that name. When it cannot locate a surface it falls back to looking for a compiled UEL, fails, and prints the generic *UEL‑not‑compiled* message.
+
+The cure is simple: give Abaqus a **real surface name** (or, if you really want a point load, use `*CLOAD`). Once the load cards refer to a valid surface the job runs without any UEL‑related error.
+
+Below is a **step‑by‑step checklist**, a **minimal corrected input fragment**, and a **TL;DR table** you can copy‑paste into your model.
+
+---
+
+## 1. What was wrong in the original cards  
+
+| Card | What you wrote | What Abaqus expects |
+|------|----------------|---------------------|
+| `*DLOAD` | `29, P2, -1000.` (and the three following lines) | **Surface name** – a surface created with `*SURFACE, TYPE=ELEMENT` (or `*SURFACE, TYPE=NODE`). |
+| `*DFLUX`| `B1, BFNU` | **Surface name** – same as above. |
+| `*BOUNDARY` | `1,1,2` and `2,2,2` (no node set) | A node set must be supplied, otherwise the line is ignored/illegal. |
+
+`29‑32` are element numbers (or an element‑set number) and `B1`/`BFNU` are not surface definitions. Because Abaqus cannot locate a surface with those identifiers it assumes you are trying to apply a **user‑element load** → looks for a compiled UEL → error.
+
+---
+
+## 2. Decide what you really want to load  
+
+| Physical load | Abaqus card | Typical syntax |
+|---------------|-------------|----------------|
+| **Pressure / traction on a face** | `*DLOAD` | `*DLOAD  surface‑name, P2, magnitude` |
+| **Heat flux on a face** | `*DFLUX` | `*DFLUX  surface‑name, magnitude` |
+| **Concentrated (point) force on a node** | `*CLOAD` | `*CLOAD  node, DOF, value` |
+| **Prescribed temperature on a node set** | `*BOUNDARY` (DOF = 11) | `*BOUNDARY  node‑set, 11, 11, T` |
+
+If you really need a point load on nodes 29‑32, replace the `*DLOAD` block with a `*CLOAD` block (see TL;DR table).
+
+---
+
+## 3. Create the required surfaces  
+
+A *surface* is a collection of element faces.  
+For a 20‑node brick (`C3D20R`) the faces are numbered **S1 … S6** (see the Abaqus manual). Choose the face you want to load and give the surface a name, e.g. `SF_PRESS`.
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1          ! all elements, face S1 (the +X face, for example)
+```
+
+If you only need a subset of elements, list them explicitly:
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+1, S1
+2, S1
+...
+32, S1
+```
+
+Create a second surface for the heat flux (or any other face) :
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2          ! the –Y face, for example
+```
+
+You may call the surfaces anything you like – just use the **exact same spelling** later.
+
+---
+
+## 4. Replace the wrong load cards  
+
+### 4.1 Pressure (or any traction) on the face
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.      ! P2 = pressure, negative = inward
+```
+
+*(If you need a different component, change `P2` to `P1`, `P3`, …)*
+
+### 4.2 Heat flux on the opposite face
+
+```abaqus
+*DFLUX
+SF_FLUX, 1.0              ! uniform heat flux of 1.0 W/m²
+```
+
+### 4.3 (Optional) Point load on nodes 29‑32  
+
+```abaqus
+*CLOAD
+29, 1, -1000.     ! DOF 1 = X‑translation (use 2 for Y, 3 for Z)
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+---
+
+## 5. Clean up the `*BOUNDARY` section  
+
+Your temperature prescription on node set `CN7` is already correct:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+```
+
+The two ambiguous lines that followed in the original file
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+have **no node set** attached, so Abaqus cannot apply them. Either delete them or replace them with a proper set, e.g.
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.          ! fix X‑translation of all nodes (if that is intended)
+NALL, 2, 2, 0.          ! fix Y‑translation of all nodes
+```
+
+If you do **not** want to restrain the whole model, simply remove those two lines.
+
+---
+
+## 6. Minimal corrected input fragment (only the part that changed)
+
+```abaqus
+*STEP, NLGEOM
+*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE, DIRECT
+.1, 1.
+*CONTROLS, PARAMETERS=TIME INCREMENTATION
+6,16,9,32,20,4,,5,,,
+0.25,0.5,0.75,,,,1.5,,
+
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2
+
+*DLOAD
+SF_PRESS, P2, -1000.
+
+*BOUNDARY
+CN7, 11, 11, 0.          ! temperature = 0 °C on the symmetry plane
+
+*DFLUX
+SF_FLUX, 1.0             ! uniform heat flux (W/m²) on the opposite face
+
+*NODE PRINT, NSET=NALL, FREQUENCY=100
+NT
+*END STEP
+```
+
+*If you prefer a **point load** instead of a pressure, replace the `*DLOAD` block with the `*CLOAD` block shown in §4.3 and delete the `*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS` line (the surface is no longer needed).*
+
+---
+
+## 7. Verify that the problem is solved  
+
+1. **Run a short test** (e.g. one increment).  
+   In the `.msg` file you should see  
+
+   ```
+   *** THE ANALYSIS HAS CONVERGED
+   ```
+
+2. **Check the `.dat` file** for the printed temperatures and displacements (`*NODE PRINT`).  
+
+3. If another error appears, double‑check that the **surface name** used in `*DLOAD`/`*DFLUX` **exactly matches** the name defined by `*SURFACE` (case‑sensitive, no extra blanks).
+
+---
+
+## TL;DR – What you must change  
+
+| Wrong line (original) | Why it is wrong | Correct replacement |
+|-----------------------|----------------|---------------------|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | `29‑32` are element numbers, **not** a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  SURF_NAME, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set, not a surface. | Define a surface (`*SURFACE …`) and use `*DFLUX  SURF_NAME, magnitude`. |
+| `1,1,2` and `2,2,2` in the `*BOUNDARY` block | No node set is supplied, so Abaqus cannot apply the constraint. | Delete the lines **or** replace with a proper node set, e.g. `*BOUNDARY, NSET=CN7, 1,1,0.` |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value` if you really need a nodal force. |
+
+After you replace the `*DLOAD`/`*DFLUX` cards with proper surface definitions (or switch to `*CLOAD` for point forces) the analysis starts and the “UEL not compiled” error disappears.
+
+---
+
+**That’s all you need to do.** Apply the changes, run the model again, and you should obtain a successful steady‑state coupled temperature‑displacement solution. If a new message pops up, post the exact text and the surrounding input lines and we can help you troubleshoot further.
+
+=== 2026-04-17 15:11:45 ===
+Q: **Why the “UEL has not been compiled” message appears**
+
+`*DLOAD` and `*DFLUX` do **not** take element numbers (or a string such as *B1*) as arguments.  
+They expect the **name of a surface** that has been created with a `*SURFACE` card.  
+
+When Abaqus reads
+
+```abaqus
+*DLOAD
+29, P2, -1000.
+30, P2, -1000.
+31, P2, -1000.
+32, P2, -1000.
+```
+
+it cannot find a surface called **29**, **30**, **31** or **32**.  
+If a surface name is not found Abaqus assumes the load is a *user‑element* load and looks for a compiled UEL. Because no UEL is linked, the generic *“UEL has not been compiled”* error is printed.
+
+The same happens with
+
+```abaqus
+*DFLUX
+B1, BFNU
+```
+
+`B1` is not a surface name, so Abaqus again falls back to the UEL search and fails.
+
+---
+
+## What you have to change
+
+1. **Create a surface (or node set) that actually exists** and give it a name.  
+2. **Reference that name** in the `*DLOAD` / `*DFLUX` cards.  
+3. If you really want a *point* load on individual nodes, use `*CLOAD` instead of `*DLOAD`.
+
+### Example – pressure on a face and heat flux on another face
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! all elements, face S1 (e.g. +X face)
+
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2               ! all elements, face S2 (e.g. –Y face)
+
+*DLOAD
+SF_PRESS, P2, -1000.   ! pressure (negative = inward)
+
+*DFLUX
+SF_FLUX, 1.0           ! uniform heat flux (W/m²)
+```
+
+If you need a concentrated force on nodes 29‑32:
+
+```abaqus
+*CLOAD
+29, 1, -1000.
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+### Clean up the `*BOUNDARY` lines
+
+Your temperature prescription is fine:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.
+```
+
+The lines
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+have no node set attached, so delete them (or replace with a proper set such as `NALL, 1,1,0.`).
+
+---
+
+## TL;DR checklist
+
+| Wrong line | Problem | Fix |
+|------------|---------|-----|
+| `*DLOAD 29,P2,-1000.` (and the three following lines) | 29‑32 are element numbers, not a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  <surface‑name>, P2, -1000.` |
+| `*DFLUX B1,BFNU` | `BFNU` is not a surface; `B1` is an element set. | Define a surface and use `*DFLUX  <surface‑name>, <value>`. |
+| `1,1,2` and `2,2,2` in `*BOUNDARY` | No node set supplied. | Delete them or give a node set (e.g. `*BOUNDARY, NALL, 1,1,0.`). |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value`. |
+
+After replacing the load cards with valid surface names (or using `*CLOAD` for point forces) the job will run and the “UEL not compiled” error disappears.
+A: **Why Abaqus prints “UEL has not been compiled”**
+
+`*DLOAD` and `*DFLUX` **do not accept element numbers (or a node‑set name) as their first argument**.  
+The first field must be the **name of a surface** that has been created with a `*SURFACE` card.  
+
+When Abaqus reads a line such as  
+
+```abaqus
+*DLOAD
+29, P2, -1000.
+30, P2, -1000.
+31, P2, -1000.
+32, P2, -1000.
+```  
+
+it looks for a surface called **29**, **30**, **31**, or **32**. Because no such surface exists, Abaqus assumes that the load is a *user‑element* (UEL) load and tries to call a compiled UEL routine. Since no UEL has been linked, the generic error
+
+```
+*** ERROR: UEL has not been compiled ***
+```
+
+is issued.
+
+The same thing happens with  
+
+```abaqus
+*DFLUX
+B1, BFNU
+```  
+
+`B1` is an element set, not a surface name, so Abaqus again falls back to the UEL search and fails.
+
+---
+
+## How to fix the input
+
+### 1. Create the surfaces you really want to load
+
+```abaqus
+*SURFACE, TYPE=ELEMENT, NAME=SF_PRESS
+EALL, S1               ! all elements, face S1 (e.g. +X face)
+
+*SURFACE, TYPE=ELEMENT, NAME=SF_FLUX
+EALL, S2               ! all elements, face S2 (e.g. –Y face)
+```
+
+* `TYPE=ELEMENT` tells Abaqus that the surface is defined by element faces.  
+* `NAME` is the identifier you will later use in `*DLOAD` or `*DFLUX`.  
+* `EALL` (or a specific element set) selects the elements, `S1`, `S2`, … select the face of each element.
+
+### 2. Reference the surface names in the load cards
+
+```abaqus
+*DLOAD
+SF_PRESS, P2, -1000.      ! pressure (negative = inward)
+
+*DFLUX
+SF_FLUX, 1.0              ! uniform heat flux (W/m²)
+```
+
+Now Abaqus can find the surfaces and will **not** look for a UEL.
+
+### 3. If you really need point loads on individual nodes, use `*CLOAD`
+
+`*DLOAD` is for distributed loads on surfaces. For concentrated forces on nodes 29‑32 write:
+
+```abaqus
+*CLOAD
+29, 1, -1000.
+30, 1, -1000.
+31, 1, -1000.
+32, 1, -1000.
+```
+
+(“1” is the degree of freedom – usually the translation in the X‑direction.)
+
+### 4. Clean up the `*BOUNDARY` section
+
+Your temperature prescription is fine:
+
+```abaqus
+*BOUNDARY
+CN7, 11, 11, 0.
+```
+
+The two lines
+
+```abaqus
+1,1,2
+2,2,2
+```
+
+have no node‑set name attached, so they are ignored by Abaqus and only add confusion. Delete them or replace them with a proper set, e.g.:
+
+```abaqus
+*BOUNDARY
+NALL, 1, 1, 0.      ! fix temperature of all nodes, if that is what you intended
+```
+
+---
+
+## TL;DR checklist
+
+| What you wrote | Why it fails | What to do instead |
+|----------------|--------------|--------------------|
+| `*DLOAD 29, P2, -1000.` (and similar lines) | 29‑32 are element numbers, not a surface name. | Define a surface (`*SURFACE …`) and use `*DLOAD  <surface‑name>, P2, -1000.` |
+| `*DFLUX B1, BFNU` | `B1` is an element set, not a surface. | Define a surface and use `*DFLUX  <surface‑name>, <value>`. |
+| Using `*DLOAD` for a point load | Point loads belong to `*CLOAD`. | Use `*CLOAD  node, DOF, value`. |
+| `1,1,2` and `2,2,2` in `*BOUNDARY` | No node set supplied → meaningless lines. | Delete them or give a proper node set (e.g. `*BOUNDARY, NALL, 1,1,0.`). |
+| “UEL has not been compiled” error | Abaqus thinks the load is a user‑element load because it cannot find the referenced surface. | Provide a valid surface name (or use the correct load card). |
+
+After you replace the erroneous load lines with valid surface‑based loads (or with `*CLOAD` for nodal forces) and clean the `*BOUNDARY` section, the job will run normally and the “UEL not compiled” message disappears.
+

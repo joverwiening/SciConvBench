@@ -1,0 +1,110 @@
+def compute_defect_properties():
+    """
+    Compute various properties of a defect complex in GaN using pymatgen.
+
+    Returns
+    -------
+    dict
+        A dictionary containing the following keys:
+        - defect_complex_name (str): Name of the defect complex (O_N+V_Ga).
+        - supercell_structure_formula (str): Chemical formula of the supercell after introducing the O_N substitution and V_Ga vacancy.
+        - defect_complex_oxidation_state (int): Total oxidation state of the O_N+V_Ga complex (‑5).
+        - element_changes (dict): Net change in element counts caused by the O_N+V_Ga complex, e.g. {'O': 1, 'N': -1, 'Ga': -1}.
+        - defect_structure_formula (str): Formula of the defect structure (same as supercell_structure_formula for this implementation).
+        - defect_complex_with_interstitial_name (str): Name of the defect complex that also contains an H interstitial (O_N+V_Ga+H_i).
+        - supercell_structure_with_dummy_formula (str): Formula of the supercell after adding the H interstitial (O_N+V_Ga+H_i).
+        - defect_complex_equality (bool): True if the defect complex without interstitial (dc) and the one treated as containing an interstitial (dc2) are identical; False otherwise.
+        - defect_complex_inequality (bool): True if the two defect complexes are different; False otherwise.
+    """
+    import os
+    from pymatgen.core import Structure, Composition
+
+    # ------------------------------------------------------------------
+    # 1. Load the pristine GaN structure
+    # ------------------------------------------------------------------
+    file_path = os.path.abspath(".")
+    structure_file = os.path.join(file_path, "GaN.vasp")
+    pristine = Structure.from_file(structure_file)
+
+    # ------------------------------------------------------------------
+    # 2. Build defect complex dc (O_N substitution + Ga vacancy)
+    # ------------------------------------------------------------------
+    # a) O on N substitution: replace the first N site with O
+    dc = pristine.copy()
+    n_sites = [i for i, site in enumerate(dc) if site.species_string == "N"]
+    if not n_sites:
+        raise ValueError("No N site found in the structure for substitution.")
+    n_index = n_sites[0]
+    dc.replace(n_index, "O", tolerance=0.0)
+
+    # b) Ga vacancy: remove the first Ga site
+    ga_sites = [i for i, site in enumerate(dc) if site.species_string == "Ga"]
+    if not ga_sites:
+        raise ValueError("No Ga site found in the structure for vacancy.")
+    ga_index = ga_sites[0]
+    dc.remove_sites([ga_index])
+
+    # ------------------------------------------------------------------
+    # 3. Build defect complex dc2 (same as dc but also includes H interstitial)
+    # ------------------------------------------------------------------
+    dc2 = dc.copy()
+    # Add H interstitial at a fractional coordinate that is typically empty
+    # (0.5, 0.5, 0.5) is a common choice for a tetrahedral interstitial in wurtzite.
+    dc2.append("H", [0.5, 0.5, 0.5], coords_are_cartesian=False)
+
+    # ------------------------------------------------------------------
+    # 4. Compute required properties
+    # ------------------------------------------------------------------
+    # Names
+    defect_complex_name = "O_N+V_Ga"
+    defect_complex_with_interstitial_name = "O_N+V_Ga+H_i"
+
+    # Formulas
+    supercell_structure_formula = dc.composition.reduced_formula
+    defect_structure_formula = supercell_structure_formula  # same for this implementation
+    supercell_structure_with_dummy_formula = dc2.composition.reduced_formula
+
+    # Oxidation state (using the assumptions provided)
+    # O_N: -2, V_Ga: -3, H_i: +1
+    defect_complex_oxidation_state = -2 + -3  # O_N + V_Ga
+
+    # Element changes caused by O_N+V_Ga
+    # Start from pristine composition and subtract/add according to the defects
+    pristine_comp = pristine.composition
+    changes = {}
+    # O added, N removed, Ga removed
+    changes["O"] = dc.composition.get_atomic_fraction("O") * dc.composition.num_atoms - \
+                   pristine_comp.get_atomic_fraction("O") * pristine_comp.num_atoms
+    changes["N"] = dc.composition.get_atomic_fraction("N") * dc.composition.num_atoms - \
+                   pristine_comp.get_atomic_fraction("N") * pristine_comp.num_atoms
+    changes["Ga"] = dc.composition.get_atomic_fraction("Ga") * dc.composition.num_atoms - \
+                    pristine_comp.get_atomic_fraction("Ga") * pristine_comp.num_atoms
+    # Convert to integer counts (they should be -1, 0, or +1)
+    element_changes = {el: int(round(changes[el])) for el in changes if round(changes[el]) != 0}
+
+    # Equality / inequality between dc and dc2 (ignoring the H interstitial)
+    # We compare the compositions after removing H from dc2
+    dc2_without_H = dc2.copy()
+    h_sites = [i for i, site in enumerate(dc2_without_H) if site.species_string == "H"]
+    if h_sites:
+        dc2_without_H.remove_sites(h_sites)
+
+    defect_complex_equality = dc.matches(dc2_without_H)
+    defect_complex_inequality = not defect_complex_equality
+
+    # ------------------------------------------------------------------
+    # 5. Assemble results
+    # ------------------------------------------------------------------
+    results = {
+        "defect_complex_name": defect_complex_name,
+        "supercell_structure_formula": supercell_structure_formula,
+        "defect_complex_oxidation_state": defect_complex_oxidation_state,
+        "element_changes": element_changes,
+        "defect_structure_formula": defect_structure_formula,
+        "defect_complex_with_interstitial_name": defect_complex_with_interstitial_name,
+        "supercell_structure_with_dummy_formula": supercell_structure_with_dummy_formula,
+        "defect_complex_equality": defect_complex_equality,
+        "defect_complex_inequality": defect_complex_inequality,
+    }
+
+    return results

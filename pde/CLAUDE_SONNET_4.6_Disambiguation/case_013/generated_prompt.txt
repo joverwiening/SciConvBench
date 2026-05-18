@@ -1,0 +1,128 @@
+Solve the 1D viscous Burgers equation numerically and save the results.
+
+The PDE is u_t + u*u_x = 0.01*u_xx, equivalently written in conservative form as u_t + (0.5*u**2)_x = 0.01*u_xx.
+
+The spatial domain is x in [0,1) with periodic boundary conditions. The time domain is t in [0, 0.5].
+
+Use Nx=800 grid points with no duplicated endpoint. Set dx = 1.0/800. Set x_i = i*dx for i=0,1,...,799.
+
+Use dt=1e-4 and Nt=5000 time steps so that T=0.5 is reached exactly.
+
+Set nu=0.01.
+
+Apply the initial condition u(x,0) = sin(2*pi*x) at all grid points.
+
+At each time step, compute the convective flux using the Rusanov (local Lax-Friedrichs) scheme in conservative form.
+Define f(u) = 0.5*u**2.
+Compute the interface flux F_{i+1/2} = 0.5*(f(u_i) + f(u_{i+1})) - 0.5*alpha_{i+1/2}*(u_{i+1} - u_i), where alpha_{i+1/2} = max(|u_i|, |u_{i+1}|).
+Use periodic indexing so that index i+1 wraps around to index 0 when i = Nx-1, and index i-1 wraps around to index Nx-1 when i = 0.
+Compute the convective term as conv_i = (F_{i+1/2} - F_{i-1/2}) / dx for each grid point i.
+
+Treat diffusion implicitly using the 2nd-order central difference operator L where L*u gives (u_{i+1} - 2*u_i + u_{i-1}) / dx**2.
+Build L as a sparse Nx-by-Nx matrix with periodic boundary conditions: the diagonal entries are -2/dx**2, the off-diagonal entries at positions (i, i+1) and (i, i-1) are 1/dx**2, and the wrap-around entries at (0, Nx-1) and (Nx-1, 0) are 1/dx**2.
+
+At each time step, form the right-hand side rhs = u_n - dt*conv_term.
+Form the system matrix A = I - dt*nu*L, where I is the Nx-by-Nx identity matrix.
+Solve the linear system A*u_{n+1} = rhs using scipy.sparse.linalg.spsolve.
+Repeat for all Nt=5000 steps.
+
+After all time steps, compute and print min(u), max(u), and the discrete L2 norm defined as sqrt(sum(u**2)*dx).
+
+Save a file named "solution_agent_burgers_01.npz" containing the following arrays and scalars: x (1D array of length 800), u (1D array of length 800 containing u at T=0.5), T (scalar equal to 0.5), dx (scalar equal to 1.0/800), dt (scalar equal to 1e-4).
+
+Save a line plot of u(x, T=0.5) versus x as "solution_agent_burgers_01.png" with x on the horizontal axis and u on the vertical axis.
+
+Use Python with numpy, scipy.sparse, scipy.sparse.linalg, and matplotlib.
+
+```python
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+
+# Grid
+Nx = 800
+dx = 1.0 / Nx
+x = np.array([i * dx for i in range(Nx)])
+
+# Time
+dt = 1e-4
+Nt = 5000
+T = 0.5
+
+# Parameters
+nu = 0.01
+
+# Initial condition
+u = np.sin(2 * np.pi * x)
+
+# Build sparse diffusion matrix L with periodic BCs
+# L_ii = -2/dx^2, L_{i,i+1} = L_{i,i-1} = 1/dx^2, periodic wrap
+diag_main = -2.0 / dx**2 * np.ones(Nx)
+diag_off  =  1.0 / dx**2 * np.ones(Nx - 1)
+
+L = sp.diags([diag_off, diag_main, diag_off], offsets=[-1, 0, 1], shape=(Nx, Nx), format='lil')
+# Periodic wrap-around
+L[0, Nx-1] = 1.0 / dx**2
+L[Nx-1, 0] = 1.0 / dx**2
+L = L.tocsr()
+
+# Build system matrix A = I - dt*nu*L
+I = sp.eye(Nx, format='csr')
+A = I - dt * nu * L
+
+# Time integration
+for n in range(Nt):
+    # Compute convective flux using Rusanov scheme
+    # Periodic index arrays
+    ip1 = np.roll(np.arange(Nx), -1)  # i+1 indices
+    im1 = np.roll(np.arange(Nx),  1)  # i-1 indices
+
+    u_i   = u
+    u_ip1 = u[ip1]
+    u_im1 = u[im1]
+
+    f_i   = 0.5 * u_i**2
+    f_ip1 = 0.5 * u_ip1**2
+    f_im1 = 0.5 * u_im1**2
+
+    # F_{i+1/2}
+    alpha_ip = np.maximum(np.abs(u_i), np.abs(u_ip1))
+    F_ip = 0.5 * (f_i + f_ip1) - 0.5 * alpha_ip * (u_ip1 - u_i)
+
+    # F_{i-1/2}
+    alpha_im = np.maximum(np.abs(u_im1), np.abs(u_i))
+    F_im = 0.5 * (f_im1 + f_i) - 0.5 * alpha_im * (u_i - u_im1)
+
+    # Convective term
+    conv = (F_ip - F_im) / dx
+
+    # RHS
+    rhs = u - dt * conv
+
+    # Solve implicit system
+    u = spla.spsolve(A, rhs)
+
+# Diagnostics
+u_min = np.min(u)
+u_max = np.max(u)
+l2_norm = np.sqrt(np.sum(u**2) * dx)
+print(f"min(u)    = {u_min:.6e}")
+print(f"max(u)    = {u_max:.6e}")
+print(f"L2 norm   = {l2_norm:.6e}")
+
+# Save npz
+np.savez("solution_agent_burgers_01.npz", x=x, u=u, T=T, dx=dx, dt=dt)
+
+# Save plot
+plt.figure(figsize=(8, 4))
+plt.plot(x, u, linewidth=1.5)
+plt.xlabel("x")
+plt.ylabel("u(x, T=0.5)")
+plt.title("Viscous Burgers Equation Solution at T=0.5")
+plt.tight_layout()
+plt.savefig("solution_agent_burgers_01.png", dpi=150)
+plt.close()
+
+print("Files saved: solution_agent_burgers_01.npz, solution_agent_burgers_01.png")
+```

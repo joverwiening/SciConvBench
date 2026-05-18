@@ -1,0 +1,89 @@
+Solve the Allen-Cahn PDE numerically using the specifications below.
+
+The PDE is u_t = (0.01)^2 * u_xx + u - u**3.
+The spatial domain is x in [0,1) with periodic boundary conditions.
+The time domain is t in [0, 0.5].
+The parameter epsilon equals 0.01.
+The initial condition is u(x,0) = 0.1*cos(2*pi*x) + 0.05*sin(4*pi*x).
+
+Use a uniform periodic grid with Nx=800 points, no duplicated endpoint, dx=1.0/800, and x_i = i*dx for i=0..799.
+Use dt=0.0002 and take 2500 time steps to reach T=0.5.
+Use second-order central differences for u_xx with periodic boundary indexing (wrap-around at endpoints).
+Use the semi-implicit time scheme: (u^{n+1} - u^n)/dt = epsilon**2 * u_xx^{n+1} + u**n - (u**n)**3.
+Rearrange to form a linear system for u^{n+1} each step: (I - dt*epsilon**2*D_xx) * u^{n+1} = u**n + dt*(u**n - (u**n)**3).
+Assemble the matrix (I - dt*epsilon**2*D_xx) as a sparse circulant tridiagonal matrix reflecting periodic boundaries.
+Solve the linear system each time step using a sparse solver (e.g., scipy.sparse.linalg.spsolve).
+
+At T=0.5, compute u on the grid.
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2)*dx).
+Save a file named "solution_agent_allen_cahn_01.npz" containing arrays x (1D, length 800), u (1D, length 800), and scalar metadata T=0.5, dx=1.0/800, dt=0.0002.
+Save a line plot of u(x, T=0.5) as "solution_agent_allen_cahn_01.png" with x on the horizontal axis and u on the vertical axis.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+
+# ── parameters ────────────────────────────────────────────────────────────────
+epsilon = 0.01
+Nx      = 800
+dx      = 1.0 / Nx
+dt      = 0.0002
+Nt      = 2500          # 2500 * 0.0002 = 0.5
+T       = 0.5
+
+# ── grid ──────────────────────────────────────────────────────────────────────
+x = np.arange(Nx) * dx  # x_i = i*dx, i = 0..799  (periodic, no duplicate endpoint)
+
+# ── initial condition ─────────────────────────────────────────────────────────
+u = 0.1 * np.cos(2 * np.pi * x) + 0.05 * np.sin(4 * np.pi * x)
+
+# ── build sparse matrix  (I - dt*eps^2 * D_xx)  with periodic BCs ─────────────
+#    D_xx u_i = (u_{i-1} - 2*u_i + u_{i+1}) / dx^2
+coeff = dt * epsilon**2 / dx**2          # multiplier for off-diagonals
+
+# circulant tridiagonal: main diag = 1 + 2*coeff, off-diags = -coeff
+main_diag  = np.full(Nx,  1.0 + 2.0 * coeff)
+off_diag   = np.full(Nx, -coeff)
+
+# build in CSR format via diagonals; wrap-around handled by corners
+diagonals  = [main_diag, off_diag, off_diag, off_diag, off_diag]
+offsets    = [0, -1, 1, -(Nx-1), (Nx-1)]
+A = sp.diags(diagonals, offsets, shape=(Nx, Nx), format='csr')
+
+# ── time integration ──────────────────────────────────────────────────────────
+# (I - dt*eps^2*D_xx) u^{n+1} = u^n + dt*(u^n - (u^n)^3)
+for _ in range(Nt):
+    rhs = u + dt * (u - u**3)
+    u   = spla.spsolve(A, rhs)
+
+# ── diagnostics ───────────────────────────────────────────────────────────────
+u_min  = u.min()
+u_max  = u.max()
+l2norm = np.sqrt(np.sum(u**2) * dx)
+
+print(f"min(u)  = {u_min:.6f}")
+print(f"max(u)  = {u_max:.6f}")
+print(f"L2 norm = {l2norm:.6f}")
+
+# ── save .npz ─────────────────────────────────────────────────────────────────
+np.savez("solution_agent_allen_cahn_01.npz",
+         x=x, u=u,
+         T=np.float64(T),
+         dx=np.float64(dx),
+         dt=np.float64(dt))
+
+# ── save plot ─────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u, linewidth=1.0, color='steelblue')
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T=0.5)")
+ax.set_title("Allen-Cahn solution at T = 0.5")
+ax.set_xlim(0, 1)
+fig.tight_layout()
+fig.savefig("solution_agent_allen_cahn_01.png", dpi=150)
+plt.close(fig)
+
+print("Files saved: solution_agent_allen_cahn_01.npz, solution_agent_allen_cahn_01.png")
+```

@@ -1,0 +1,107 @@
+**Why the cards are rejected**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition **must be placed inside a step definition**.  
+When a `*STEP` block is opened without a step type (`*STATIC`, `*DYNAMIC`, …) Abaqus creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit) and it has to be **inside** the step block.  
+* `*BOUNDARY` can be used in a static or a dynamic step, but it also **must be inside** the step block.
+
+Because your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+Abaqus generates a default static step, so the two cards are outside any step (and the `*INITIAL CONDITIONS` card is illegal for a static step). Hence the parser reports *“card rejected”*.
+
+---
+
+## How to fix the input file
+
+### 1. Decide which analysis you need  
+
+| Desired physics                              | Step type to use                | How to apply the condition                              |
+|----------------------------------------------|--------------------------------|----------------------------------------------------------|
+| **Static pull‑out / static deflection**       | `*STATIC`                      | Use `*BOUNDARY` to prescribe the displacement.          |
+| **Dynamic analysis that starts from a shape**| `*DYNAMIC, IMPLICIT` (or EXPLICIT) | Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT`.           |
+
+### 2. Put the cards **inside** the appropriate step  
+
+Below are two ready‑to‑run fragments. Choose the one that matches the physics you want to simulate and replace the node‑set names (`CN7`, `LAST`) with the sets you have defined in the mesh.
+
+---
+
+#### a) **Static cantilever (most common)**  
+
+```abaqus
+*STEP
+*STATIC                         ! static analysis
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! clamped face: X,Y,Z = 0
+LAST, 3, 3, 0.5                 ! free face: 0.5 mm displacement in Z
+*END STEP
+```
+
+* `CN7` – node set containing the nodes on the fixed face.  
+* `LAST` – node set containing the nodes on the pulled face.  
+* `1,3` – apply the value to DOFs 1‑3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+
+If you also want the free end to stay fixed in X and Y, add inside the same `*STATIC` step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+#### b) **Dynamic analysis that starts from an initial displacement**  
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as needed)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+No `*BOUNDARY` cards are required unless you also want to apply loads during the dynamic step. The numbers after the node‑set are the **actual displacement components** (in the model’s length unit).
+
+---
+
+### 3. Quick checklist – what to modify in your original file
+
+| What you have                               | Why it fails                                            | What to replace it with                                   |
+|--------------------------------------------|----------------------------------------------------------|-----------------------------------------------------------|
+| `*STEP`<br>`*END STEP`                     | No step type → default static step                       | Add a step type (`*STATIC` or `*DYNAMIC,…`).             |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` (outside any step) | Allowed only in a dynamic step **and** must be inside a step block | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis. |
+| `*BOUNDARY` (outside any step)             | Abaqus expects the card inside a step                    | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step. |
+
+---
+
+## Final recommended input fragment (static case)
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0          ! clamp the fixed face
+LAST, 3, 3, 0.5         ! pull the free face 0.5 mm in Z
+*END STEP
+```
+
+*or* (dynamic case)
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate fragment (or adjust the displacement magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.

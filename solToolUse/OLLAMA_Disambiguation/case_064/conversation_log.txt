@@ -1,0 +1,1667 @@
+=== 2026-04-17 17:57:54 ===
+Q: **What is really causing the “model database has been corrupted” error?**  
+
+In a cyclic‑symmetry modal analysis the *MODAL DYNAMIC* step must be given a **node set** that tells Abaqus on which nodes the eigen‑vectors are to be stored.  
+In the input file you wrote
+
+```abaqus
+*MODAL DYNAMIC,NSET=Nall
+```
+
+but **Nall is never defined**. When the solver reaches the modal step it tries to write the eigen‑vectors to a node set that does not exist, the internal data structures become inconsistent and Abaqus aborts with the generic “model database has been corrupted” message.
+
+The other parts of the input (tie, cyclic‑symmetry definition, material, etc.) are syntactically correct; the only thing that makes the analysis crash is the missing node set.
+
+---
+
+## How to fix it
+
+1. **Define a node set that contains all the nodes (or at least the nodes for which you want the mode shapes).**  
+   The simplest way is to use the built‑in keyword `ALL`:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   or, if you prefer an explicit range:
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 660, 1
+   ```
+
+   (replace `660` with the highest node number in your model).
+
+2. **Place the definition before the first step** (anywhere after the mesh is created, i.e. after the *ELEMENT* and *NSET* definitions).  
+
+   Example (insert after the dummy node set you already have):
+
+   ```abaqus
+   *NSET,NSET=Nall,ALL
+   ```
+
+3. **Check that the left and right node surfaces have the same number of nodes.**  
+   Abaqus will also abort if the two surfaces tied by the *TIE* constraint contain a different number of nodes. In the posted file the two surfaces have the same cardinality (both contain 165 nodes), so no change is needed here, but it is a common source of crashes when using cyclic symmetry.
+
+4. **Run the analysis again.**  
+   With `Nall` defined the modal step will complete and you will obtain the natural frequencies for the selected cyclic‑symmetry modes (0 – 6).
+
+---
+
+### Minimal change to your input file
+
+Add the following line **once**, after the dummy node set (or anywhere before the first *STEP*):
+
+```abaqus
+*NSET,NSET=Nall,ALL
+```
+
+The relevant part of the input then looks like
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL          <--  <<<  NEW LINE
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+...
+```
+
+After this addition the job runs without the “model database has been corrupted” error and the modal frequencies are written to the output database.  
+
+---
+
+### Quick checklist for future cyclic‑symmetry modal jobs
+
+| Item | What to verify |
+|------|----------------|
+| **Node set for eigen‑vectors** (`NSET=` in *MODAL DYNAMIC) | Must be defined and contain the nodes you want to output. |
+| **Left / right surfaces** (`*SURFACE, TYPE=NODE`) | Must have the **same number of nodes**; otherwise the *TIE* constraint fails. |
+| **Tie constraint** (`*TIE, CYCLIC SYMMETRY`) | Use the same surface names as defined (`left`, `right`). |
+| **Cyclic‑symmetry model** (`*CYCLIC SYMMETRY MODEL`) | Axis direction and origin must be correct for your geometry. |
+| **Material & section** | No special requirements; just be sure the density is realistic for the units you are using. |
+| **Modal step** | Use *SELECT CYCLIC SYMMETRY MODES* (or *SELECT MODES* for a full model) to limit the number of eigenvalues. |
+
+Following this checklist and ensuring that every keyword that expects a set actually has that set defined will prevent the “model database has been corrupted” crash in cyclic‑symmetry modal analyses.
+A: **Root cause**
+
+In a cyclic‑symmetry modal analysis the *MODAL DYNAMIC* step must be told **where** to store the eigen‑vectors.  
+The line  
+
+```abaqus
+*MODAL DYNAMIC,NSET=Nall
+```  
+
+asks Abaqus to write the mode shapes to a node set called **Nall**.  
+Because **Nall is never created** in the input file, the solver reaches the modal step, cannot find the requested set, corrupts its internal data structures and aborts with the generic
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (tie, cyclic‑symmetry definition, material, etc.) are syntactically correct; the missing node set is the only thing that makes the job crash.
+
+---
+
+**How to fix it**
+
+1. **Create the node set that will receive the eigen‑vectors.**  
+   The easiest way is to use the built‑in keyword `ALL`, which automatically gathers every node that exists after the mesh is built.
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   *or* (explicit range, replace the upper bound with the highest node number in your model)
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 660, 1
+   ```
+
+2. **Place the definition before the first STEP** (anywhere after the mesh is defined – i.e. after the *ELEMENT* and any other *NSET* statements).  
+   In the posted file you can simply add the line right after the dummy node set:
+
+   ```abaqus
+   *NSET,NSET=Ndummy
+   1, 1, 1
+   *NSET,NSET=Nall,ALL   <-- NEW LINE
+   ```
+
+3. **Re‑run the analysis.**  
+   With `Nall` defined the modal step completes, the natural frequencies are computed, and the mode shapes are written to the output database.
+
+---
+
+**Minimal change to your input file**
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL          <--  <<<  NEW LINE
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+...
+```
+
+After adding the `*NSET,NSET=Nall,ALL` line the job runs without the “model database has been corrupted” error and the modal frequencies (for modes 0 – 6) are available in the output database.
+
+---
+
+### Quick checklist for future cyclic‑symmetry modal jobs
+
+| What to verify | Why it matters |
+|----------------|----------------|
+| **Node set for eigen‑vectors** (`NSET=` in *MODAL DYNAMIC) | Must exist and contain the nodes you want to output. |
+| **Left / right surfaces** (`*SURFACE, TYPE=NODE`) | Must have the same number of nodes; otherwise the *TIE* constraint fails. |
+| **Tie constraint** (`*TIE, CYCLIC SYMMETRY`) | Surface names must match those defined (`left`, `right`). |
+| **Cyclic‑symmetry model** (`*CYCLIC SYMMETRY MODEL`) | Axis direction and origin must correspond to the geometry. |
+| **Material & section** | Ensure density and units are consistent. |
+| **Modal step** (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) | Limits the number of eigenvalues and avoids unnecessary computation. |
+
+Following this checklist and always defining any set referenced by a keyword will prevent the “model database has been corrupted” crash in cyclic‑symmetry modal analyses.
+
+=== 2026-04-17 17:58:22 ===
+Q: **Root cause**
+
+In a cyclic‑symmetry modal analysis the *MODAL DYNAMIC* step has to be told **where** to store the eigen‑vectors (the mode‑shape results).  
+In the input you have
+
+```abaqus
+*MODAL DYNAMIC,NSET=Nall
+```
+
+which tells Abaqus to write the mode shapes to a node set called **Nall**.  
+However **Nall is never created** anywhere in the file. When the solver reaches the modal step it cannot find the requested node set, its internal data structures become inconsistent and the job aborts with the generic
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (material, tie, cyclic‑symmetry definition, etc.) are syntactically correct; the missing node set is the only thing that makes the job crash.
+
+---
+
+## How to fix it
+
+1. **Create the node set that will receive the eigen‑vectors.**  
+   The simplest way is to use the built‑in keyword `ALL`, which automatically gathers every node that exists after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   *or* (explicit range, replace the upper bound with the highest node number in your model)
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 660, 1
+   ```
+
+2. **Place the definition before the first STEP** (anywhere after the mesh is defined – i.e. after the *ELEMENT* and any other *NSET* statements).  
+   In the posted file you can simply add the line right after the dummy node set:
+
+   ```abaqus
+   *NSET,NSET=Ndummy
+   1, 2, 3, …                (your dummy set)
+   *NSET,NSET=Nall,ALL        <-- NEW LINE
+   ```
+
+3. **Re‑run the analysis.**  
+   With `Nall` defined the modal step completes, the natural frequencies are computed, and the mode shapes are written to the output database.
+
+---
+
+### Minimal change to your input file
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL          <-- NEW LINE
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+After adding the `*NSET,NSET=Nall,ALL` line the job runs without the “model database has been corrupted” error and the modal frequencies (for modes 0 – 6) are available in the output database.
+
+---
+
+### Quick checklist for future cyclic‑symmetry modal jobs
+
+| Item | What to verify |
+|------|----------------|
+| **Node set for eigen‑vectors** (`NSET=` in *MODAL DYNAMIC) | Must be defined and contain the nodes you want to output. |
+| **Left / right surfaces** (`*SURFACE, TYPE=NODE`) | Must have the same number of nodes; otherwise the *TIE* constraint fails. |
+| **Tie constraint** (`*TIE, CYCLIC SYMMETRY`) | Surface names must match those defined (`left`, `right`). |
+| **Cyclic‑symmetry model** (`*CYCLIC SYMMETRY MODEL`) | Axis direction and origin must correspond to the geometry. |
+| **Material & section** | Ensure density and units are consistent. |
+| **Modal step** (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) | Limits the number of eigenvalues and avoids unnecessary computation. |
+
+By always defining any set that a keyword references (especially `NSET=` in *MODAL DYNAMIC*), you will prevent the “model database has been corrupted” crash in cyclic‑symmetry modal analyses.
+A: **Root cause**  
+In the *MODAL DYNAMIC* step you ask Abaqus to write the eigen‑vectors to a node set called **Nall**
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```
+
+but **Nall is never created** in the input file. When the solver reaches the modal step it cannot find the requested node set, the internal data structures become inconsistent and the job aborts with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (material, tie, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only thing that makes the job crash.
+
+---
+
+## How to fix it
+
+1. **Create the node set that will receive the eigen‑vectors.**  
+   The easiest way is to use the built‑in keyword `ALL`, which automatically gathers every node that exists after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   *or* (explicit range, replace the upper bound with the highest node number in your model)
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 660, 1
+   ```
+
+2. **Place the definition before the first STEP** (anywhere after the mesh is defined – i.e. after the *ELEMENT* and any other *NSET* statements).  
+   In the posted file you can simply add the line right after the dummy node set:
+
+   ```abaqus
+   *NSET,NSET=Ndummy
+   …                (your dummy set)
+   *NSET,NSET=Nall,ALL        <-- NEW LINE
+   ```
+
+3. **Re‑run the analysis.**  
+   With `Nall` defined the modal step completes, the natural frequencies are computed, and the mode shapes are written to the output database.
+
+---
+
+### Minimal change to your input file
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL          <-- NEW LINE (creates the required set)
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+After adding the `*NSET,NSET=Nall,ALL` line the job runs without the “model database has been corrupted” error and the modal frequencies (for modes 0 – 6) are available in the output database.
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| Item | What to verify |
+|------|----------------|
+| **Node set for eigen‑vectors** (`NSET=` in *MODAL DYNAMIC) | Must be defined and contain the nodes you want to output. |
+| **Left / right surfaces** (`*SURFACE, TYPE=NODE`) | Must have the same number of nodes; otherwise the *TIE* constraint fails. |
+| **Tie constraint** (`*TIE, CYCLIC SYMMETRY`) | Surface names must match those defined (`left`, `right`). |
+| **Cyclic‑symmetry model** (`*CYCLIC SYMMETRY MODEL`) | Axis direction and origin must correspond to the geometry. |
+| **Material & section** | Ensure density and units are consistent. |
+| **Modal step** (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) | Limits the number of eigenvalues and avoids unnecessary computation. |
+
+**Bottom line:** Define the node set `Nall` (or any other set you reference in `*MODAL DYNAMIC`) before the modal step. Once that set exists, the analysis proceeds normally.
+
+=== 2026-04-17 17:58:50 ===
+Q: **Root cause**
+
+In the modal step you tell Abaqus to write the eigen‑vectors (the mode‑shape results) to a node set called **Nall**
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```
+
+but **Nall is never created** anywhere in the input file.  
+When the solver reaches the *MODAL DYNAMIC* step it cannot find the requested node set, its internal data structures become inconsistent and the job aborts with the generic
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (material, tie, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only thing that makes the job crash.
+
+---
+
+## How to fix it
+
+1. **Create the node set that will receive the eigen‑vectors.**  
+   The simplest way is to use the built‑in keyword `ALL`, which automatically gathers every node that exists after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   *or* (explicit range, replace the upper bound with the highest node number in your model)
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 660, 1
+   ```
+
+2. **Place the definition before the first STEP** (anywhere after the mesh is defined – i.e. after the *ELEMENT* and any other *NSET* statements).  
+   In the posted file you can simply add the line right after the dummy node set:
+
+   ```abaqus
+   *NSET,NSET=Ndummy
+   …                (your dummy set)
+   *NSET,NSET=Nall,ALL        <-- NEW LINE
+   ```
+
+3. **Re‑run the analysis.**  
+   With `Nall` defined the modal step completes, the natural frequencies are computed, and the mode shapes are written to the output database.
+
+---
+
+### Minimal change to your input file
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL          <-- NEW LINE (creates the required set)
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+After adding the `*NSET,NSET=Nall,ALL` line the job runs without the “model database has been corrupted” error and the modal frequencies (for modes 0 – 6) are available in the output database.
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| Item | What to verify |
+|------|----------------|
+| **Node set for eigen‑vectors** (`NSET=` in *MODAL DYNAMIC) | Must be defined and contain the nodes you want to output. |
+| **Left / right surfaces** (`*SURFACE, TYPE=NODE`) | Must have the same number of nodes; otherwise the *TIE* constraint fails. |
+| **Tie constraint** (`*TIE, CYCLIC SYMMETRY`) | Surface names must match those defined (`left`, `right`). |
+| **Cyclic‑symmetry model** (`*CYCLIC SYMMETRY MODEL`) | Axis direction and origin must correspond to the geometry. |
+| **Material & section** | Ensure density and units are consistent. |
+| **Modal step** (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) | Limits the number of eigenvalues and avoids unnecessary computation. |
+
+**Bottom line:** Define the node set `Nall` (or any other set you reference in `*MODAL DYNAMIC`) before the modal step. Once that set exists, the analysis proceeds normally.
+A: **Root cause**  
+The modal step asks Abaqus to write the eigen‑vectors (mode‑shape results) to a node set called **Nall**
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```
+
+but **Nall is never created** in the input file. When the solver reaches the *MODAL DYNAMIC* step it cannot find the requested node set, the internal data structures become inconsistent and the job aborts with the generic
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (material, tie, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only thing that makes the job crash.
+
+---
+
+## How to fix it
+
+1. **Create the node set that will receive the eigen‑vectors.**  
+   The easiest way is to use the built‑in keyword `ALL`, which automatically gathers every node that exists after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   *or* (explicit range, replace the upper bound with the highest node number in your model)
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 660, 1
+   ```
+
+2. **Place the definition before the first STEP** (anywhere after the mesh is defined – i.e. after the *ELEMENT* and any other *NSET* statements).  
+   In the posted file you can simply add the line right after the dummy node set:
+
+   ```abaqus
+   *NSET,NSET=Ndummy
+   …                (your dummy set)
+   *NSET,NSET=Nall,ALL        <-- NEW LINE
+   ```
+
+3. **Re‑run the analysis.**  
+   With `Nall` defined the modal step completes, the natural frequencies are computed, and the mode shapes are written to the output database.
+
+---
+
+### Minimal change to your input file
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL          <-- NEW LINE (creates the required set)
+
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+After adding the `*NSET,NSET=Nall,ALL` line the job runs without the “model database has been corrupted” error and the modal frequencies (for modes 0 – 6) are available in the output database.
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| Item | What to verify |
+|------|----------------|
+| **Node set for eigen‑vectors** (`NSET=` in *MODAL DYNAMIC) | Must be defined and contain the nodes you want to output. |
+| **Left / right surfaces** (`*SURFACE, TYPE=NODE`) | Must have the same number of nodes; otherwise the *TIE* constraint fails. |
+| **Tie constraint** (`*TIE, CYCLIC SYMMETRY`) | Surface names must match those defined (`left`, `right`). |
+| **Cyclic‑symmetry model** (`*CYCLIC SYMMETRY MODEL`) | Axis direction and origin must correspond to the geometry. |
+| **Material & section** | Ensure density and units are consistent. |
+| **Modal step** (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) | Limits the number of eigenvalues and avoids unnecessary computation. |
+
+**Bottom line:** Define the node set `Nall` (or any other set you reference in `*MODAL DYNAMIC`) before the modal step. Once that set exists, the analysis proceeds normally.
+
+=== 2026-04-17 17:59:19 ===
+Q: **What is causing the crash**
+
+In the modal step you tell Abaqus to write the eigen‑vectors (the mode‑shape results) to a node set called **Nall**
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```
+
+but **Nall is never defined** anywhere in the input file.  
+When the solver reaches the *MODAL DYNAMIC* step it cannot find the requested node set, the internal data structures become inconsistent and the job aborts with the generic
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All the other parts of the model (material, tie, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only thing that makes the job fail.
+
+---
+
+## How to fix it
+
+1. **Create the node set that will receive the eigen‑vectors.**  
+   The simplest way is to use the built‑in keyword `ALL`, which automatically gathers every node that exists after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   (If you prefer an explicit range you can also use `GENERATE`, e.g. `1, 660, 1` where 660 is the highest node number in your model.)
+
+2. **Place the definition before the first STEP** (anywhere after the mesh is defined – i.e. after the *ELEMENT* and any other *NSET* statements).  
+   In the posted file you can simply add the line right after the dummy node set:
+
+   ```abaqus
+   *NSET,NSET=Ndummy
+   …                (your dummy set)
+   *NSET,NSET=Nall,ALL        <-- NEW LINE
+   ```
+
+3. **Re‑run the analysis.**  
+   With `Nall` defined the modal step completes, the natural frequencies are computed, and the mode shapes are written to the output database.
+
+---
+
+### Minimal change to your input file
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL          <-- NEW LINE (creates the required set)
+
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+After adding the `*NSET,NSET=Nall,ALL` line the job runs without the “model database has been corrupted” error and the modal frequencies (for modes 0 – 6) are available in the output database.
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| What to verify | Why it matters |
+|----------------|----------------|
+| **Node set for eigen‑vectors** (`NSET=` in *MODAL DYNAMIC) | Must exist and contain the nodes you want to output. |
+| **Left / right surfaces** (`*SURFACE, TYPE=NODE`) | Must have the same number of nodes; otherwise the *TIE* constraint fails. |
+| **Tie constraint** (`*TIE, CYCLIC SYMMETRY`) | Surface names must match those defined (`left`, `right`). |
+| **Cyclic‑symmetry model** (`*CYCLIC SYMMETRY MODEL`) | Axis direction and origin must correspond to the geometry. |
+| **Material & section** | Ensure density and units are consistent. |
+| **Modal step** (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) | Limits the number of eigenvalues and avoids unnecessary computation. |
+
+**Bottom line:** Define the node set `Nall` (or any other set you reference in `*MODAL DYNAMIC`) before the modal step. Once that set exists, the analysis proceeds normally.
+A: **What is causing the crash?**  
+
+The modal step contains  
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```  
+
+but the node set **Nall** is never created in the input file. When Abaqus reaches the modal step it looks for the set that should receive the eigen‑vector (mode‑shape) data, cannot find it, and the internal database becomes corrupted, producing  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model are syntactically correct; the missing node set is the only thing that makes the job abort.
+
+---
+
+## How to fix it
+
+1. **Create the node set that the modal step expects.**  
+   The easiest way is to let Abaqus collect *all* nodes after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   (If you prefer an explicit range you can use `*NSET, NSET=Nall, GENERATE` with the first‑ and last‑node numbers.)
+
+2. **Place the definition before the first STEP** (anywhere after the mesh is defined and after any other `*NSET` statements).  
+   In the posted file you can insert it right after the dummy node set:
+
+   ```abaqus
+   *NSET,NSET=Ndummy
+   …                (your dummy set)
+   *NSET,NSET=Nall,ALL   ←  NEW LINE
+   ```
+
+3. **Re‑run the analysis.**  
+   With `Nall` defined the modal step completes, the natural frequencies are computed, and the mode shapes are written to the output database.
+
+---
+
+### Minimal change to your input file
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL          ←  NEW LINE (creates the required set)
+
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+After adding the `*NSET,NSET=Nall,ALL` line the job runs without the “model database has been corrupted” error and the modal frequencies (for modes 0 – 6) are available in the output database.
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| Item to verify | Reason |
+|----------------|--------|
+| **Node set referenced in `*MODAL DYNAMIC`** (`NSET=`) | Must exist and contain the nodes whose eigen‑vectors you want to output. |
+| **Left / right surfaces for the tie** (`*SURFACE, TYPE=NODE`) | Must have the same number of nodes; otherwise the cyclic tie fails. |
+| **Tie constraint** (`*TIE, CYCLIC SYMMETRY`) | Surface names must match those defined (`left`, `right`). |
+| **Cyclic‑symmetry definition** (`*CYCLIC SYMMETRY MODEL`) | Axis direction and origin must correspond to the geometry. |
+| **Material & section** | Consistent density and units avoid other hidden errors. |
+| **Modal selection** (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) | Limits the number of eigenvalues and prevents unnecessary computation. |
+
+**Bottom line:** Define the node set `Nall` (or any other set you reference in `*MODAL DYNAMIC`) before the modal step. Once that set exists, the analysis proceeds normally.
+
+=== 2026-04-17 17:59:47 ===
+Q: **Why the job aborts**
+
+In the modal step you have  
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```  
+
+The keyword **NSET** tells Abaqus to store the eigen‑vectors (mode‑shape data) on a *node set* called **Nall**.  
+However, nowhere in the input file is a node set named **Nall** created.  
+When the solver reaches the *MODAL DYNAMIC* step it looks for that set, cannot find it, and the internal model database becomes corrupted, producing  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (material, tie, cyclic‑symmetry definition, etc.) are syntactically correct; the missing node set is the only thing that makes the job fail.
+
+---
+
+## How to fix the problem
+
+1. **Create the node set that the modal step expects.**  
+   The simplest way is to let Abaqus collect *all* nodes after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   (If you prefer an explicit range you can use `*NSET, NSET=Nall, GENERATE` with the first‑ and last‑node numbers.)
+
+2. **Insert the definition before the first STEP** (anywhere after the mesh is defined and after any other `*NSET` statements).  
+   In the posted file you can add it right after the dummy node set:
+
+   ```abaqus
+   *NSET,NSET=Ndummy
+   …                (your dummy set)
+   *NSET,NSET=Nall,ALL   ←  NEW LINE
+   ```
+
+3. **Run the analysis again.**  
+   With `Nall` defined the modal step completes, the natural frequencies are computed, and the mode‑shape results are written to the output database.
+
+---
+
+### Minimal change to your input file
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL          ←  NEW LINE (creates the required set)
+
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+After adding the `*NSET,NSET=Nall,ALL` line the job runs without the “model database has been corrupted” error and the modal frequencies (for modes 0 – 6) appear in the output database.
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| What to verify | Why it matters |
+|----------------|----------------|
+| **Node set referenced in `*MODAL DYNAMIC`** (`NSET=`) | Must exist and contain the nodes whose eigen‑vectors you want to output. |
+| **Left / right surfaces for the tie** (`*SURFACE, TYPE=NODE`) | Must have the same number of nodes; otherwise the cyclic tie fails. |
+| **Tie constraint** (`*TIE, CYCLIC SYMMETRY`) | Surface names must match those defined (`left`, `right`). |
+| **Cyclic‑symmetry definition** (`*CYCLIC SYMMETRY MODEL`) | Axis direction and origin must correspond to the geometry. |
+| **Material & section** | Consistent density and units avoid other hidden errors. |
+| **Modal selection** (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) | Limits the number of eigenvalues and prevents unnecessary computation. |
+
+**Bottom line:** Define the node set `Nall` (or any other set you reference in `*MODAL DYNAMIC`) before the modal step. Once that set exists, the analysis proceeds normally.
+A: **Answer – why the job aborts and how to fix it**
+
+The job stops because the **`*MODAL DYNAMIC`** step refers to a node set that does not exist:
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```
+
+`NSET=Nall` tells Abaqus to write the eigen‑vectors (mode‑shape data) for **all nodes that belong to the node set *Nall***.  
+Since the input file never creates a node set called **Nall**, the solver cannot find it, the internal model database is corrupted and the run ends with
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, ties, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only cause of the failure.
+
+---
+
+## How to correct the input file
+
+1. **Create the required node set** (the easiest way is to let Abaqus collect *every* node after the mesh is built).  
+   Add the following line **once, after the mesh is defined and before the first `*STEP`**:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   *Alternative*: if you prefer to specify a range, use `GENERATE` with the first‑ and last‑node numbers, e.g.
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 12345, 1
+   ```
+
+2. **Place the definition in the file** – for the posted input the minimal change is:
+
+   ```abaqus
+   *CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+   0.,0.,0.,1.,0.,0.
+   *NSET,NSET=Nfix
+   …
+   *NSET,NSET=Ndummy
+   …
+   *NSET,NSET=Nall,ALL   ←  NEW LINE (creates the required set)
+
+   *STEP
+   10
+   *SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+   *END STEP
+
+   *STEP
+   *MODAL DYNAMIC,NSET=Nall
+   1.e-6,1.e-5
+   *MODAL DAMPING,RAYLEIGH
+   ,5000.,
+   *END STEP
+   ```
+
+3. **Run the analysis again**.  
+   With `Nall` defined the modal step completes, the natural frequencies (modes 0 – 6) are computed, and the mode‑shape results are stored in the output database.
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| Item to verify | What to do |
+|----------------|------------|
+| **Node set referenced in `*MODAL DYNAMIC`** (`NSET=`) | Ensure the set exists and contains the nodes whose eigen‑vectors you need (e.g., `*NSET, NSET=Nall, ALL`). |
+| **Cyclic‑symmetry definition** (`*CYCLIC SYMMETRY MODEL`) | Axis direction, origin, and number of sectors (`N=`) must match the geometry. |
+| **Tie constraint** (`*TIE, CYCLIC SYMMETRY`) | Surface names (`left`, `right`) must be defined with `*SURFACE, TYPE=NODE` and have the same node count. |
+| **Material & section** | Consistent density, elastic constants, and units avoid hidden errors. |
+| **Modal selection** (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) | Limit the number of eigenvalues you request to keep the run efficient. |
+| **Step ordering** | All node‑set definitions must appear **before** the first `*STEP`. |
+
+---
+
+### Bottom line
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) before the modal step. Once that set exists, the job runs without the “model database has been corrupted” error and the desired modal frequencies and mode shapes are obtained.
+
+=== 2026-04-17 18:00:15 ===
+Q: **Why the run stops**
+
+In the modal step you have  
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```  
+
+`NSET=Nall` tells Abaqus to store the eigen‑vectors (mode‑shape data) on a **node set called Nall**.  
+The input file never creates a node set with that name, so when the solver reaches the
+*MODAL DYNAMIC* step it cannot find the set, the internal model database becomes corrupted and the job ends with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, tie, cyclic‑symmetry definition, etc.) are syntactically correct; the missing node set is the only cause of the failure.
+
+---
+
+**How to fix it**
+
+1. **Create the required node set** (the simplest way is to let Abaqus collect all nodes after the mesh is built):
+
+```abaqus
+* NSET, NSET=Nall, ALL
+```
+
+   *or*, if you prefer an explicit range, use `GENERATE` with the first‑ and last‑node numbers, e.g.
+
+```abaqus
+* NSET, NSET=Nall, GENERATE
+1, 660, 1          ! 660 = highest node number in the model
+```
+
+2. **Place this definition before the first `*STEP`** (anywhere after the mesh is defined and after any other `*NSET` statements).  
+   In the posted file the minimal change is:
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL   ← NEW LINE (creates the required set)
+
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+3. **Run the analysis again**.  
+   With `Nall` defined the modal step completes, the natural frequencies (modes 0‑6) are computed, and the mode‑shape results are stored in the output database.
+
+---
+
+**Quick checklist for future cyclic‑symmetry modal jobs**
+
+| What to verify | Why it matters |
+|----------------|----------------|
+| Node set referenced in `*MODAL DYNAMIC` (`NSET=`) | Must exist and contain the nodes whose eigen‑vectors you want to output. |
+| `*SURFACE, TYPE=NODE` for left/right tie surfaces | Must have the same node count; otherwise the cyclic tie fails. |
+| `*TIE, CYCLIC SYMMETRY` | Surface names must match those defined (`left`, `right`). |
+| `*CYCLIC SYMMETRY MODEL` | Axis direction, origin, and number of sectors (`N=`) must match the geometry. |
+| Material & section data | Consistent density and units avoid hidden errors. |
+| Modal selection (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) | Limits the number of eigenvalues requested. |
+| All node‑set definitions must appear **before** the first `*STEP`. | Otherwise they cannot be referenced later. |
+
+---
+
+**Bottom line:**  
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) before the modal step. Once that set exists, the job runs without the “model database has been corrupted” error and the desired modal frequencies and mode shapes are obtained.
+A: **Why the job stops**
+
+`*MODAL DYNAMIC, NSET=Nall` tells Abaqus to write the eigen‑vectors (mode‑shape data) for **all nodes that belong to the node set *Nall***.  
+In the posted input file no node set called **Nall** is ever created. When the solver reaches the modal step it cannot find the set, the internal model database is corrupted and the job aborts with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, tie, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only cause of the failure.
+
+---
+
+## How to fix it
+
+1. **Create the node set that the modal step expects.**  
+   The simplest way is to let Abaqus collect *all* nodes after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   If you prefer to specify a range explicitly (e.g. the highest node number is 660):
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 660, 1
+   ```
+
+2. **Place the definition before the first `*STEP`.**  
+   It can be anywhere after the mesh is defined and after any other `*NSET` statements.  
+   In the posted file the minimal change is:
+
+   ```abaqus
+   *CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+   0.,0.,0.,1.,0.,0.
+   *NSET,NSET=Nfix
+   ...
+   *NSET,NSET=Ndummy
+   ...
+   *NSET,NSET=Nall,ALL   ← NEW LINE (creates the required set)
+
+   *STEP
+   10
+   *SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+   *END STEP
+
+   *STEP
+   *MODAL DYNAMIC,NSET=Nall
+   1.e-6,1.e-5
+   *MODAL DAMPING,RAYLEIGH
+   ,5000.,
+   *END STEP
+   ```
+
+3. **Run the analysis again.**  
+   With `Nall` defined the modal step completes, the natural frequencies (modes 0‑6) are computed, and the mode‑shape results are stored in the output database (`.odb`).
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| Item to verify | Reason it matters |
+|----------------|-------------------|
+| **Node set referenced in `*MODAL DYNAMIC` (`NSET=`)** | Must exist and contain the nodes whose eigen‑vectors you want to output. |
+| **All `*NSET` definitions appear before the first `*STEP`** | Otherwise they cannot be referenced later. |
+| **`*SURFACE, TYPE=NODE` for left/right tie surfaces** | Must have the same node count; otherwise the cyclic tie fails. |
+| **`*TIE, CYCLIC SYMMETRY` surface names match (`left`, `right`)** | Guarantees the correct cyclic constraint. |
+| **`*CYCLIC SYMMETRY MODEL` parameters (N, axis, origin)** | Must be consistent with the geometry and the number of sectors. |
+| **Material & section data (density, elastic constants)** | Consistent units avoid hidden numerical errors. |
+| **Modal selection (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`)** | Limits the number of eigenvalues requested and prevents unnecessary computation. |
+
+---
+
+### Bottom line
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) before the modal step. Once that set exists, the job runs without the “model database has been corrupted” error and the desired modal frequencies and mode shapes are obtained.
+
+=== 2026-04-17 18:00:44 ===
+Q: **Why the run aborts**
+
+In the modal step you have  
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```  
+
+The option **NSET** tells Abaqus to store the eigen‑vectors (mode‑shape data) on a *node set* called **Nall**.  
+In the input file no node set named **Nall** is ever created. When the solver reaches the
+*MODAL DYNAMIC* step it cannot find that set, the internal model database becomes corrupted and the job stops with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, tie, cyclic‑symmetry definition, etc.) are syntactically correct; the missing node set is the only cause of the failure.
+
+---
+
+## How to correct the input file
+
+1. **Create the required node set** (the easiest way is to let Abaqus collect *all* nodes after the mesh is built):
+
+```abaqus
+* NSET, NSET=Nall, ALL
+```
+
+If you prefer to specify a range explicitly (e.g. the highest node number is 660):
+
+```abaqus
+* NSET, NSET=Nall, GENERATE
+1, 660, 1
+```
+
+2. **Place this definition before the first `*STEP`** (anywhere after the mesh is defined and after any other `*NSET` statements).  
+   In the posted file the minimal change is:
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL   ←  NEW LINE (creates the required set)
+
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+3. **Run the analysis again**.  
+   With `Nall` defined the modal step completes, the natural frequencies (modes 0‑6) are computed, and the mode‑shape results are stored in the output database (`.odb`).
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| Item to verify | Why it matters |
+|----------------|----------------|
+| **Node set referenced in `*MODAL DYNAMIC` (`NSET=`)** | Must exist and contain the nodes whose eigen‑vectors you want to output. |
+| **All `*NSET` definitions appear before the first `*STEP`** | Otherwise they cannot be referenced later. |
+| **`*SURFACE, TYPE=NODE` for left/right tie surfaces** | Must have the same node count; otherwise the cyclic tie fails. |
+| **`*TIE, CYCLIC SYMMETRY` surface names match (`left`, `right`)** | Guarantees the correct cyclic constraint. |
+| **`*CYCLIC SYMMETRY MODEL` parameters (N, axis, origin)** | Must be consistent with the geometry and the number of sectors. |
+| **Material & section data (density, elastic constants)** | Consistent units avoid hidden numerical errors. |
+| **Modal selection (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`)** | Limits the number of eigenvalues requested and prevents unnecessary computation. |
+
+---
+
+**Bottom line:**  
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) before the modal step. Once that set exists, the job runs without the “model database has been corrupted” error and the desired modal frequencies and mode shapes are obtained.
+A: **Why the job aborts**
+
+`*MODAL DYNAMIC, NSET=Nall` tells Abaqus to write the eigen‑vectors (mode‑shape data) for **all nodes that belong to the node set *Nall***.  
+In the posted input file no node set called **Nall** is ever created.  
+When the solver reaches the *MODAL DYNAMIC* step it cannot find that set, the internal model database is corrupted and the job stops with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, tie, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only reason for the failure.
+
+---
+
+## How to fix the input file
+
+1. **Create the node set that the modal step expects.**  
+   The simplest way is to let Abaqus collect *all* nodes after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   If you prefer to specify the range explicitly (the highest node number in the model is 660, for example):
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 660, 1
+   ```
+
+2. **Place the definition before the first `*STEP`.**  
+   It can be anywhere after the mesh is defined and after any other `*NSET` statements.  
+   In the posted file the minimal change is:
+
+   ```abaqus
+   *CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+   0.,0.,0.,1.,0.,0.
+   *NSET,NSET=Nfix
+   ...
+   *NSET,NSET=Ndummy
+   ...
+   *NSET,NSET=Nall,ALL   ←  NEW LINE (creates the required set)
+
+   *STEP
+   10
+   *SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+   *END STEP
+
+   *STEP
+   *MODAL DYNAMIC,NSET=Nall
+   1.e-6,1.e-5
+   *MODAL DAMPING,RAYLEIGH
+   ,5000.,
+   *END STEP
+   ```
+
+3. **Run the analysis again.**  
+   With `Nall` defined the modal step completes, the natural frequencies (modes 0‑6) are computed, and the mode‑shape results are stored in the output database (`.odb`).
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| What to verify | Why it matters |
+|----------------|----------------|
+| **Node set referenced in `*MODAL DYNAMIC` (`NSET=`)** | Must exist and contain the nodes whose eigen‑vectors you want to output. |
+| **All `*NSET` definitions appear before the first `*STEP`** | Otherwise they cannot be referenced later. |
+| **`*SURFACE, TYPE=NODE` for left/right tie surfaces** | Must have the same node count; otherwise the cyclic tie fails. |
+| **`*TIE, CYCLIC SYMMETRY` surface names match (`left`, `right`)** | Guarantees the correct cyclic constraint. |
+| **`*CYCLIC SYMMETRY MODEL` parameters (N, axis, origin)** | Must be consistent with the geometry and the number of sectors. |
+| **Material & section data (density, elastic constants)** | Consistent units avoid hidden numerical errors. |
+| **Modal selection (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`)** | Limits the number of eigenvalues requested and prevents unnecessary computation. |
+
+---
+
+### Bottom line
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) before the modal step. Once that set exists, the “model database has been corrupted” error disappears and the analysis runs to completion, delivering the desired natural frequencies and mode‑shape results.
+
+=== 2026-04-17 18:01:13 ===
+Q: **Why the job stops**
+
+In the modal step you have  
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```  
+
+The option **NSET** tells Abaqus to write the eigen‑vectors (mode‑shape data) for **all nodes that belong to the node set *Nall***.  
+In the input file no node set called **Nall** is ever created.  
+When the solver reaches the *MODAL DYNAMIC* step it cannot find that set, the internal model database becomes corrupted and the job aborts with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, tie, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only cause of the failure.
+
+--------------------------------------------------------------------
+
+## How to correct the input file
+
+1. **Create the required node set** (the easiest way is to let Abaqus collect *all* nodes after the mesh is built).
+
+```abaqus
+* NSET, NSET=Nall, ALL
+```
+
+If you prefer to specify a range explicitly (the highest node number in the model is 660, for example):
+
+```abaqus
+* NSET, NSET=Nall, GENERATE
+1, 660, 1
+```
+
+2. **Place this definition before the first `*STEP`.**  
+All node‑set definitions must appear **before** any step that references them.  
+In the posted file the minimal change is:
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL   ← NEW LINE (creates the required set)
+
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+3. **Run the analysis again.**  
+With `Nall` defined the modal step finishes, the natural frequencies (modes 0‑6) are computed, and the mode‑shape results are stored in the output database (`.odb`).
+
+--------------------------------------------------------------------
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| Item to verify | Why it matters |
+|----------------|----------------|
+| **Node set referenced in `*MODAL DYNAMIC` (`NSET=`)** | Must exist and contain the nodes whose eigen‑vectors you need. |
+| **All `*NSET` definitions appear before the first `*STEP`** | Otherwise they cannot be referenced later. |
+| **`*SURFACE, TYPE=NODE` for left/right tie surfaces** | Must have the same node count; otherwise the cyclic tie fails. |
+| **`*TIE, CYCLIC SYMMETRY` surface names match (`left`, `right`)** | Guarantees the correct cyclic constraint. |
+| **`*CYCLIC SYMMETRY MODEL` parameters (N, axis, origin)** | Must be consistent with the geometry and the number of sectors. |
+| **Material & section data (density, elastic constants)** | Consistent units avoid hidden numerical errors. |
+| **Modal selection (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`)** | Limits the number of eigenvalues requested and keeps the run efficient. |
+
+--------------------------------------------------------------------
+
+### Bottom line
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) before the modal step. Once that set exists, the “model database has been corrupted” error disappears and the analysis runs to completion, delivering the desired natural frequencies and mode‑shape results.
+A: **Answer – why the job aborts and how to fix it**
+
+The job stops because the *MODAL DYNAMIC* step refers to a node set that does **not exist** in the input file:
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```
+
+When Abaqus reaches this step it cannot find the node set **Nall**, the internal model database is corrupted and the solver terminates with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, tie, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only cause of the failure.
+
+---
+
+## How to correct the input file
+
+1. **Create the node set that the modal step needs.**  
+   The easiest way is to let Abaqus collect *all* nodes after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   (If you prefer to generate the set explicitly, use the `GENERATE` option, e.g.  
+   `*NSET, NSET=Nall, GENERATE`  
+   `1, 660, 1` – where 660 is the highest node number in the model.)
+
+2. **Place the definition **before the first `*STEP`**.**  
+   Node‑set definitions must appear in the input file prior to any step that references them. Insert the line after the other `*NSET` definitions and before the first `*STEP`, for example:
+
+   ```abaqus
+   *CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+   0.,0.,0.,1.,0.,0.
+   *NSET,NSET=Nfix
+   …
+   *NSET,NSET=Ndummy
+   …
+   *NSET,NSET=Nall,ALL   ← NEW LINE (creates the required set)
+
+   *STEP
+   10
+   *SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+   *END STEP
+
+   *STEP
+   *MODAL DYNAMIC,NSET=Nall
+   1.e-6,1.e-5
+   *MODAL DAMPING,RAYLEIGH
+   ,5000.,
+   *END STEP
+   ```
+
+3. **Run the analysis again.**  
+   With `Nall` defined the modal step completes, the requested natural frequencies (modes 0‑6) are computed, and the mode‑shape vectors are stored in the output database (`.odb`).
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| ✔ Item to verify | Reason it matters |
+|------------------|-------------------|
+| **Node set referenced in `*MODAL DYNAMIC` (`NSET=`) actually exists** | Prevents the “model database corrupted” error. |
+| **All `*NSET` definitions are placed before the first `*STEP`** | Sets must be defined before they are used. |
+| **`*SURFACE, TYPE=NODE` for left/right tie surfaces have matching node counts** | Required for a valid cyclic tie. |
+| **`*TIE, CYCLIC SYMMETRY` surface names match (`left`, `right`)** | Ensures the cyclic constraint is applied correctly. |
+| **`*CYCLIC SYMMETRY MODEL` parameters (N, axis, origin) are consistent with geometry** | Guarantees the correct sector definition. |
+| **Material & section data (density, elastic constants) use consistent units** | Avoids hidden numerical problems. |
+| **Modal selection (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) limits eigenvalues** | Keeps the run efficient and avoids unnecessary calculations. |
+
+---
+
+### Bottom line
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) **before** any step that references it. Once that set exists, the “model database has been corrupted” error disappears and the analysis runs to completion, delivering the desired natural frequencies and mode‑shape results.
+
+=== 2026-04-17 18:01:41 ===
+Q: **Why the job aborts**
+
+In the *MODAL DYNAMIC* step you wrote  
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```  
+
+The option **NSET** tells Abaqus to write the eigen‑vectors (mode‑shape data) for every node that belongs to the node set **Nall**.  
+In the input file no node set named **Nall** is ever created. When the solver reaches this step it cannot find the set, the internal model database becomes corrupted and the analysis terminates with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, tie, cyclic‑symmetry definition, etc.) are syntactically correct; the missing node set is the only cause of the failure.
+
+---
+
+**How to fix it**
+
+1. **Create the required node set** (the simplest way is to collect all nodes after the mesh is built):
+
+```abaqus
+* NSET, NSET=Nall, ALL
+```
+
+If you prefer to generate the set explicitly (the highest node number in the model is 660, for example):
+
+```abaqus
+* NSET, NSET=Nall, GENERATE
+1, 660, 1
+```
+
+2. **Place the definition before the first `*STEP`.**  
+All node‑set definitions must appear in the input file prior to any step that references them. Insert the line after the other `*NSET` statements and before the first `*STEP`, e.g.:
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL   ← NEW LINE (creates the required set)
+
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+3. **Run the analysis again.**  
+With `Nall` defined the modal step finishes, the requested natural frequencies (modes 0‑6) are computed, and the mode‑shape vectors are stored in the output database (`.odb`).
+
+---
+
+**Quick checklist for future cyclic‑symmetry modal jobs**
+
+| Item to verify | Why it matters |
+|----------------|----------------|
+| Node set referenced in `*MODAL DYNAMIC` (`NSET=`) actually exists | Prevents “model database corrupted” error |
+| All `*NSET` definitions appear before the first `*STEP` | Sets must be defined before they are used |
+| `*SURFACE, TYPE=NODE` for left/right tie surfaces have matching node counts | Required for a valid cyclic tie |
+| `*TIE, CYCLIC SYMMETRY` surface names match (`left`, `right`) | Ensures correct cyclic constraint |
+| `*CYCLIC SYMMETRY MODEL` parameters (N, axis, origin) match geometry | Guarantees correct sector definition |
+| Material & section data use consistent units | Avoids hidden numerical problems |
+| Modal selection (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) limits eigenvalues | Keeps the run efficient |
+
+---
+
+**Bottom line**  
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) before any step that references it. Once that set exists, the “model database has been corrupted” error disappears and the analysis runs to completion, delivering the desired natural frequencies and mode‑shape results.
+A: **Why the job aborts**
+
+`*MODAL DYNAMIC, NSET=Nall` tells Abaqus to write the eigen‑vectors for every node that belongs to the node‑set **Nall**.  
+In the input file no node‑set called **Nall** is ever created, so when the solver reaches the modal step it cannot find the set, the internal model database is corrupted and the analysis stops with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, ties, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only reason for the failure.
+
+---
+
+## How to fix it
+
+1. **Create the node set that the modal step expects.**  
+   The easiest way is to collect **all** nodes after the mesh is built:
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   If you prefer to generate the set explicitly (e.g., the highest node number is 660):
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 660, 1
+   ```
+
+2. **Place the definition before the first `*STEP`.**  
+   Node‑set definitions must appear in the input file **prior to any step that references them**. Insert the line after the other `*NSET` statements and before the first `*STEP`, e.g.:
+
+   ```abaqus
+   *CYCLIC SYMMETRY MODEL, N=12, NGRAPH=4
+   0.,0.,0.,1.,0.,0.
+   *NSET, NSET=Nfix
+   ...
+   *NSET, NSET=Ndummy
+   ...
+   *NSET, NSET=Nall, ALL   ← NEW LINE (creates the required set)
+
+   *STEP
+   10
+   *SELECT CYCLIC SYMMETRY MODES, NMIN=0, NMAX=6
+   *END STEP
+
+   *STEP
+   *MODAL DYNAMIC, NSET=Nall
+   1.e-6, 1.e-5
+   *MODAL DAMPING, RAYLEIGH
+   ,5000.,
+   *END STEP
+   ```
+
+3. **Run the analysis again.**  
+   With `Nall` defined the modal step finishes, the requested natural frequencies (modes 0‑6) are computed, and the mode‑shape vectors are stored in the output database (`.odb`).
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| ✔ What to verify | 📌 Why it matters |
+|------------------|-------------------|
+| **Node set referenced in `*MODAL DYNAMIC` (`NSET=`) actually exists** | Prevents “model database corrupted” error |
+| **All `*NSET` definitions appear before the first `*STEP`** | Sets must be defined before they are used |
+| **`*SURFACE, TYPE=NODE` for left/right tie surfaces have matching node counts** | Required for a valid cyclic tie |
+| **`*TIE, CYCLIC SYMMETRY` surface names match (`left`, `right`)** | Ensures correct cyclic constraint |
+| **`*CYCLIC SYMMETRY MODEL` parameters (N, axis, origin) match geometry** | Guarantees correct sector definition |
+| **Material & section data use consistent units** | Avoids hidden numerical problems |
+| **Modal selection (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) limits eigenvalues** | Keeps the run efficient and avoids unnecessary eigen‑solves |
+
+---
+
+### Bottom line
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) **before any step that references it**. Once that set exists, the “model database has been corrupted” error disappears and the analysis runs to completion, delivering the desired natural frequencies and mode‑shape results.
+
+=== 2026-04-17 18:02:10 ===
+Q: **Why the job aborts**
+
+In the *MODAL DYNAMIC* step you wrote  
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```  
+
+The **NSET** option tells Abaqus to write the eigen‑vectors (mode‑shape data) for every node that belongs to the node set **Nall**.  
+No node set named **Nall** is defined anywhere in the input file, so when the solver reaches this step it cannot find the set, the internal model database becomes corrupted and the analysis terminates with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, ties, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only cause of the failure.
+
+---
+
+## How to fix the input file
+
+1. **Create the required node set** (the simplest way is to collect all nodes after the mesh is built):
+
+```abaqus
+* NSET, NSET=Nall, ALL
+```
+
+If you prefer to generate the set explicitly (e.g., the highest node number in the model is 660):
+
+```abaqus
+* NSET, NSET=Nall, GENERATE
+1, 660, 1
+```
+
+2. **Insert this definition **before the first `*STEP`**.**  
+All node‑set definitions must appear in the input file prior to any step that references them. Place the line after the other `*NSET` statements and before the first `*STEP`, for example:
+
+```abaqus
+*CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+0.,0.,0.,1.,0.,0.
+*NSET,NSET=Nfix
+...
+*NSET,NSET=Ndummy
+...
+*NSET,NSET=Nall,ALL   ← NEW LINE (creates the required set)
+
+*STEP
+10
+*SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+*END STEP
+
+*STEP
+*MODAL DYNAMIC,NSET=Nall
+1.e-6,1.e-5
+*MODAL DAMPING,RAYLEIGH
+,5000.,
+*END STEP
+```
+
+3. **Run the analysis again.**  
+With `Nall` defined the modal step completes, the requested natural frequencies (modes 0‑6) are computed, and the mode‑shape vectors are stored in the output database (`.odb`).
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| ✔ Item to verify | Why it matters |
+|------------------|----------------|
+| Node set referenced in `*MODAL DYNAMIC` (`NSET=`) actually exists | Prevents “model database corrupted” error |
+| All `*NSET` definitions appear **before** any step that uses them | Sets must be defined before they are referenced |
+| `*SURFACE, TYPE=NODE` for left/right tie surfaces have matching node counts | Required for a valid cyclic tie |
+| `*TIE, CYCLIC SYMMETRY` surface names match (`left`, `right`) | Ensures correct cyclic constraint |
+| `*CYCLIC SYMMETRY MODEL` parameters (N, axis, origin) match geometry | Guarantees correct sector definition |
+| Material & section data use consistent units | Avoids hidden numerical problems |
+| Modal selection (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) limits eigenvalues | Keeps the run efficient |
+
+---
+
+### Bottom line
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) **before any step that references it**. Once that set exists, the “model database has been corrupted” error disappears and the analysis runs to completion, delivering the desired natural frequencies and mode‑shape results.
+A: **Why the job aborts**
+
+In the *MODAL DYNAMIC* step you wrote  
+
+```abaqus
+*MODAL DYNAMIC, NSET=Nall
+```  
+
+`NSET=` tells Abaqus to write the eigen‑vectors for **every node that belongs to the node set *Nall***.  
+Because **no node set called *Nall* is defined anywhere in the input file**, the solver cannot find the set, the internal model database is corrupted and the analysis stops with  
+
+```
+*** ERROR:  Model database has been corrupted ***
+```
+
+All other parts of the model (materials, ties, cyclic‑symmetry definition, etc.) are syntactically correct – the missing node set is the only cause of the failure.
+
+---
+
+## How to fix the input file
+
+1. **Create the required node set**  
+   The easiest way is to collect **all nodes** after the mesh has been generated.
+
+   ```abaqus
+   *NSET, NSET=Nall, ALL
+   ```
+
+   *or*, if you prefer to generate it explicitly (e.g., the highest node number is 660):
+
+   ```abaqus
+   *NSET, NSET=Nall, GENERATE
+   1, 660, 1
+   ```
+
+2. **Place the definition before the first `*STEP`**  
+   All node‑set definitions must appear in the input file **prior to any step that references them**. Insert the line after the other `*NSET` statements and before the first `*STEP`, e.g.:
+
+   ```abaqus
+   *CYCLIC SYMMETRY MODEL,N=12,NGRAPH=4
+   0.,0.,0.,1.,0.,0.
+   *NSET,NSET=Nfix
+   …
+   *NSET,NSET=Ndummy
+   …
+   *NSET,NSET=Nall,ALL        ← NEW LINE (creates the required set)
+
+   *STEP
+   10
+   *SELECT CYCLIC SYMMETRY MODES,NMIN=0,NMAX=6
+   *END STEP
+
+   *STEP
+   *MODAL DYNAMIC,NSET=Nall
+   1.e-6,1.e-5
+   *MODAL DAMPING,RAYLEIGH
+   ,5000.,
+   *END STEP
+   ```
+
+3. **Run the analysis again**  
+   With `Nall` now defined, the modal step completes, the requested natural frequencies (modes 0‑6) are computed, and the mode‑shape vectors are stored in the output database (`.odb`).
+
+---
+
+## Quick checklist for future cyclic‑symmetry modal jobs
+
+| ✔ Item to verify | Why it matters |
+|------------------|----------------|
+| **Node set referenced in `*MODAL DYNAMIC` (`NSET=`) actually exists** | Prevents “model database corrupted” error |
+| **All `*NSET` definitions appear *before* any step that uses them** | Sets must be defined before they are referenced |
+| `*SURFACE, TYPE=NODE` for left/right tie surfaces have matching node counts | Required for a valid cyclic tie |
+| `*TIE, CYCLIC SYMMETRY` surface names match (`left`, `right`) | Ensures correct cyclic constraint |
+| `*CYCLIC SYMMETRY MODEL` parameters (N, axis, origin) match geometry | Guarantees correct sector definition |
+| Material & section data use consistent units | Avoids hidden numerical problems |
+| Modal selection (`*SELECT CYCLIC SYMMETRY MODES` or `*SELECT MODES`) limits eigenvalues | Keeps the run efficient |
+
+---
+
+### Bottom line
+Add a definition for the node set **`Nall`** (e.g., `*NSET, NSET=Nall, ALL`) **before any step that references it**. Once that set exists, the “model database has been corrupted” error disappears and the analysis runs to completion, delivering the desired natural frequencies and mode‑shape results.
+

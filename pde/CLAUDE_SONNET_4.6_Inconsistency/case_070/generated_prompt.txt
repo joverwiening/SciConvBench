@@ -1,0 +1,137 @@
+Solve the biharmonic PDE numerically using the operator-splitting approach described below.
+
+The PDE is the biharmonic equation: the fourth-order Laplacian of u equals f(x,y), where f(x,y) = 4*pi**4*sin(pi*x)*sin(pi*y).
+The spatial domain is (x,y) in [0,1] x [0,1].
+Use Nx=Ny=120 uniform intervals in each direction, giving Nx+1=121 grid points per direction including both endpoints.
+Set dx = dy = 1/120.
+Define grid points as x_i = i*dx for i=0..120 and y_j = j*dy for j=0..120.
+
+Split the biharmonic into two Poisson problems by introducing v = Laplacian(u).
+First, solve Laplacian(v) = f(x,y) with Dirichlet BC v=0 on all four boundaries.
+Second, solve Laplacian(u) = v with Dirichlet BC u=0 on all four boundaries.
+Ignore the Neumann condition since the simply-supported splitting with two Dirichlet Poisson solves is the specified method; the zero-flux Neumann condition is superseded by the operator-splitting specification.
+
+Discretize each Poisson problem using the standard 5-point finite difference Laplacian stencil on the interior grid points.
+For each Poisson solve, assemble a sparse linear system for the interior unknowns only (excluding boundary nodes, which are fixed at zero).
+Solve each sparse linear system using scipy.sparse.linalg.spsolve (sparse direct solver).
+
+After solving, assemble the full (Ny+1) x (Nx+1) grid arrays for u and v, with boundary values set to zero.
+
+Compute and print min(u), max(u), and the discrete L2 norm defined as sqrt(sum over all grid points of u[j,i]**2 * dx * dy).
+Compute the exact solution u_exact[j,i] = sin(pi*x_i)*sin(pi*y_j) on the same grid.
+Compute and print the max absolute error: max over all grid points of |u[j,i] - u_exact[j,i]|.
+Compute and print the discrete L2 error: sqrt(sum over all grid points of (u[j,i] - u_exact[j,i])**2 * dx * dy).
+
+Save the solution as "solution_agent_other_05_biharmonic.npz" containing: x as a 1D array of length 121, y as a 1D array of length 121, u as a 2D array of shape (121, 121) where u[j,i] = u(x_i, y_j), dx as a scalar, dy as a scalar.
+Save a heatmap or filled-contour plot of u(x,y) as "solution_agent_other_05_biharmonic.png" with labeled axes and a colorbar.
+
+Use Python with numpy, scipy, and matplotlib.
+
+```python
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+
+# Grid setup
+Nx = Ny = 120
+dx = dy = 1.0 / Nx
+x = np.linspace(0, 1, Nx + 1)  # shape (121,)
+y = np.linspace(0, 1, Ny + 1)  # shape (121,)
+X, Y = np.meshgrid(x, y)        # shape (121, 121), X[j,i]=x_i, Y[j,i]=y_j
+
+# Number of interior points
+Nxi = Nx - 1  # 119
+Nyi = Ny - 1  # 119
+N = Nxi * Nyi  # total interior unknowns
+
+# RHS: f(x,y) = 4*pi^4*sin(pi*x)*sin(pi*y) evaluated at interior points
+# Interior indices: i=1..Nx-1, j=1..Ny-1
+xi = x[1:Nx]   # shape (119,)
+yj = y[1:Ny]   # shape (119,)
+Xi, Yj = np.meshgrid(xi, yj)  # shape (119, 119)
+f_interior = 4 * np.pi**4 * np.sin(np.pi * Xi) * np.sin(np.pi * Yj)  # shape (119,119)
+
+# Flatten: row-major ordering, index = (j-1)*Nxi + (i-1)
+f_flat = f_interior.ravel()  # shape (N,)
+
+# Build 5-point Laplacian matrix for interior points
+# Laplacian stencil: (u[j,i-1] + u[j,i+1] + u[j-1,i] + u[j+1,i] - 4*u[j,i]) / dx^2
+# (dx=dy so factor is 1/dx^2)
+
+def build_laplacian(Nxi, Nyi, dx, dy):
+    N = Nxi * Nyi
+    diag_main = -2.0 / dx**2 - 2.0 / dy**2
+    diag_x = 1.0 / dx**2
+    diag_y = 1.0 / dy**2
+
+    main = np.full(N, diag_main)
+    off_x = np.full(N - 1, diag_x)
+    off_y = np.full(N - Nxi, diag_y)
+
+    # Remove connections across row boundaries for x-offdiagonals
+    # When i=Nxi (last interior x), next index wraps to new row: block boundary
+    for k in range(1, Nyi):
+        off_x[k * Nxi - 1] = 0.0  # boundary between row k-1 and row k
+
+    L = sp.diags(
+        [off_y, off_x, main, off_x, off_y],
+        [-Nxi, -1, 0, 1, Nxi],
+        shape=(N, N),
+        format='csr'
+    )
+    return L
+
+L = build_laplacian(Nxi, Nyi, dx, dy)
+
+# Step 1: Solve L*v_flat = f_flat  (Dirichlet v=0 on boundary, already encoded)
+v_flat = spla.spsolve(L, f_flat)
+
+# Step 2: Solve L*u_flat = v_flat
+u_flat = spla.spsolve(L, v_flat)
+
+# Assemble full grids (including boundary, which stays zero)
+u_full = np.zeros((Ny + 1, Nx + 1))
+u_full[1:Ny, 1:Nx] = u_flat.reshape(Nyi, Nxi)
+
+v_full = np.zeros((Ny + 1, Nx + 1))
+v_full[1:Ny, 1:Nx] = v_flat.reshape(Nyi, Nxi)
+
+# Exact solution
+u_exact = np.sin(np.pi * X) * np.sin(np.pi * Y)
+
+# Diagnostics
+u_min = np.min(u_full)
+u_max = np.max(u_full)
+l2_norm = np.sqrt(np.sum(u_full**2) * dx * dy)
+max_abs_err = np.max(np.abs(u_full - u_exact))
+l2_err = np.sqrt(np.sum((u_full - u_exact)**2) * dx * dy)
+
+print(f"min(u)       = {u_min:.6e}")
+print(f"max(u)       = {u_max:.6e}")
+print(f"L2 norm(u)   = {l2_norm:.6e}")
+print(f"Max abs error= {max_abs_err:.6e}")
+print(f"L2 error     = {l2_err:.6e}")
+
+# Save .npz
+np.savez(
+    "solution_agent_other_05_biharmonic.npz",
+    x=x,
+    y=y,
+    u=u_full,
+    dx=dx,
+    dy=dy
+)
+
+# Save plot
+fig, ax = plt.subplots(figsize=(6, 5))
+cp = ax.contourf(X, Y, u_full, levels=50, cmap='viridis')
+fig.colorbar(cp, ax=ax, label='u(x,y)')
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_title('Biharmonic solution u(x,y)')
+plt.tight_layout()
+plt.savefig("solution_agent_other_05_biharmonic.png", dpi=150)
+plt.close()
+print("Files saved: solution_agent_other_05_biharmonic.npz, solution_agent_other_05_biharmonic.png")
+```

@@ -1,0 +1,97 @@
+Solve the 1D KdV-type PDE u_t + (q**2)*u_xxx + u*u_x = 0 numerically on the periodic domain x in [0,1), t in [0,0.2].
+Use q = 0.1.
+Use initial condition u(x,0) = cos(2*pi*x).
+Apply periodic boundary conditions: u(0,t) = u(1,t) for all t.
+Use a half-open periodic grid with Nx points (no duplicated endpoint): dx = 1.0/Nx, x_i = i*dx for i = 0..Nx-1.
+Choose Nx = 256 as the number of spatial grid points.
+Discretize spatial derivatives using a pseudo-spectral (Fourier) method in x, computing u_x and u_xxx via FFT-based wavenumbers k = 2*pi*[0,1,...,Nx/2-1,-Nx/2,...,-1].
+For the nonlinear term u*u_x, compute u_x spectrally and multiply pointwise in physical space.
+Advance in time using the scipy.integrate.solve_ivp RK45 integrator with rtol=1e-8 and atol=1e-9, integrating from t=0 to T=0.2.
+Define the right-hand side as: rhs = -(q**2)*u_xxx_spectral - u*u_x_spectral, all computed in physical space after inverse FFT.
+At T=0.2, extract the solution array u of length Nx on the grid x.
+Print min(u), max(u), mean(u), and the discrete L2 norm sqrt(sum(u**2)*dx).
+Do not compute error against a reference solution since none is provided.
+Save a file "solution_molk_017.npz" containing: array x (1D, length Nx), array u (1D, length Nx), scalar T=0.2, scalar dx, scalar Nx, and scalar q=0.1.
+Save a line plot of u vs x at T=0.2 as "solution_molk_017.png" with axis labels x and u(x,T=0.2) and a title indicating T=0.2.
+Write all code in Python using numpy, scipy, and matplotlib.
+
+Here is the complete Python code:
+
+```python
+import numpy as np
+from scipy.integrate import solve_ivp
+import matplotlib.pyplot as plt
+
+# Parameters
+q = 0.1
+T = 0.2
+Nx = 256
+x = np.arange(Nx) * (1.0 / Nx)
+dx = 1.0 / Nx
+
+# Wavenumbers for spectral derivatives on [0,1) periodic domain
+k = 2 * np.pi * np.fft.fftfreq(Nx, d=dx / (2 * np.pi))
+# Equivalently: k = 2*pi*fftfreq(Nx)*Nx = 2*pi*[0,1,...,Nx/2-1,-Nx/2,...,-1]
+k = 2 * np.pi * np.fft.fftfreq(Nx, d=1.0 / Nx) / Nx
+# Correct computation:
+k = 2 * np.pi * np.array(
+    list(range(0, Nx // 2)) + list(range(-Nx // 2, 0))
+, dtype=float)
+
+# Initial condition
+u0 = np.cos(2 * np.pi * x)
+
+def rhs(t, u_flat):
+    u = u_flat
+    u_hat = np.fft.fft(u)
+    # First derivative: ik * u_hat
+    u_x = np.real(np.fft.ifft(1j * k * u_hat))
+    # Third derivative: (ik)^3 * u_hat = -i*k^3 * u_hat
+    u_xxx = np.real(np.fft.ifft((1j * k)**3 * u_hat))
+    dudt = -(q**2) * u_xxx - u * u_x
+    return dudt
+
+# Integrate
+sol = solve_ivp(
+    rhs,
+    [0, T],
+    u0,
+    method='RK45',
+    rtol=1e-8,
+    atol=1e-9,
+    dense_output=False
+)
+
+u_final = sol.y[:, -1]
+
+# Diagnostics
+print(f"min(u)  = {np.min(u_final):.6f}")
+print(f"max(u)  = {np.max(u_final):.6f}")
+print(f"mean(u) = {np.mean(u_final):.6f}")
+l2_norm = np.sqrt(np.sum(u_final**2) * dx)
+print(f"L2 norm = {l2_norm:.6f}")
+
+# Save npz
+np.savez(
+    "solution_molk_017.npz",
+    x=x,
+    u=u_final,
+    T=T,
+    dx=dx,
+    Nx=Nx,
+    q=q
+)
+print("Saved solution_molk_017.npz")
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u_final, linewidth=1.5)
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T=0.2)")
+ax.set_title(f"KdV-type solution at T={T}, q={q}, Nx={Nx}")
+ax.grid(True)
+plt.tight_layout()
+plt.savefig("solution_molk_017.png", dpi=150)
+plt.close()
+print("Saved solution_molk_017.png")
+```

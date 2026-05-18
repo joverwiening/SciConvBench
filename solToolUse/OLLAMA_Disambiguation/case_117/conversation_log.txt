@@ -1,0 +1,2529 @@
+=== 2026-04-17 23:55:40 ===
+Q: **In short – use a *BOUNDARY (or *DISPLACEMENT) command, not an *EQUATION, for a simple prescribed displacement.**  
+
+`*EQUATION` is the keyword for a **multi‑point constraint (MPC)** – i.e. a relation that ties the DOFs of two or more nodes together.  
+If you only want to prescribe a displacement (or a set of displacements) on a node or a node set, the proper Abaqus syntax is the *BOUNDARY option (or the *DISPLACEMENT sub‑option inside a *STEP).
+
+---
+
+## 1. What the *EQUATION you wrote actually does  
+
+```
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```
+
+* The first line (`2`) tells Abaqus that the equation has **two terms**.  
+* The second line gives the two terms:  
+
+  - Node 105, DOF 3, coefficient +1.0  
+  - Node 129, DOF 3, coefficient ‑1.0  
+
+The resulting constraint is  
+
+\[
+1\;U_{3}(105) \;-\; 1\;U_{3}(129) \;=\;0
+\]
+
+i.e. **U₃(105) = U₃(129)**.  
+That is a *tie* (or “equal‑displacement”) condition between the two nodes, **not** a prescribed displacement.
+
+If you really need that tie, the syntax is correct (the two terms may be written on separate lines, but a single line works as well).  
+
+---
+
+## 2. How to prescribe a displacement
+
+### a) Using *BOUNDARY (the most common way)
+
+```abaqus
+*BOUNDARY, NSET=FIX
+1, 1, 3, 0.0          ; fix node 1 in DOFs 1‑3 (U1=U2=U3=0)
+...
+105, 3, 3, 0.005      ; prescribe U3 = 0.005 at node 105
+```
+
+* **NSET** – the set of nodes on which the condition is applied.  
+* **DOF‑start, DOF‑end** – the degree(s) of freedom (1 = X‑translation, 2 = Y‑translation, 3 = Z‑translation, 4‑6 = rotations for 3‑D).  
+* **Value** – the magnitude of the prescribed displacement (positive or negative).  
+
+You can also apply the same value to a whole node set in one line:
+
+```abaqus
+*BOUNDARY, NSET=N1, DOF=3, VALUE=0.0
+```
+
+### b) Using *DISPLACEMENT inside a *STEP (alternative syntax)
+
+```abaqus
+*STEP
+*BOUNDARY
+N1, 3, 3, 0.0          ; same as above, but placed inside the step
+*END STEP
+```
+
+Both *BOUNDARY and *DISPLACEMENT are interpreted by Abaqus as **prescribed displacement** boundary conditions.
+
+---
+
+## 3. When to use *EQUATION (MPC) instead
+
+Use *EQUATION only when you need a **relationship** between two (or more) DOFs, e.g.:
+
+* Tying two nodes together (U₁ = U₂).  
+* Enforcing a linear combination of DOFs (e.g., U₁ + 2 U₂ = 5).  
+* Implementing a rigid body constraint that is not a simple “fixed” condition.
+
+If you only want to **set** a displacement value, *BOUNDARY is the correct and simpler choice.
+
+---
+
+## 4. Quick checklist – “Did I prescribe the BC correctly?”
+
+| What you want to do | Keyword to use | Typical line format |
+|---------------------|----------------|---------------------|
+| Fix a node (all 6 DOFs) | `*BOUNDARY` | `node, 1, 6, 0.0` |
+| Prescribe a single DOF (e.g., U₃ = 0.005) | `*BOUNDARY` | `node, 3, 3, 0.005` |
+| Tie two nodes together (U₃(105)=U₃(129)) | `*EQUATION` | `2`<br>`105,3,1.,129,3,-1.` |
+| Apply a rotation or a combination of DOFs | `*EQUATION` | as above, with the appropriate coefficients |
+| Apply a distributed load (pressure, body force) | `*DLOAD`, `*CLOAD`, `*CFLUX` | … |
+| Apply a point load (force) | `*CLOAD` | `node, DOF, magnitude` |
+
+---
+
+## 5. Example – fixing the left face and prescribing a vertical displacement at node 105
+
+```abaqus
+*NSET, NSET=FIX, GENERATE
+1, 97, 1          ; all nodes on the left face (example)
+
+*BOUNDARY, NSET=FIX
+1, 1, 6, 0.0      ; fix all 6 DOFs on the left face
+
+*BOUNDARY, NSET=N1
+105, 3, 3, 0.005  ; prescribe U3 = +5 mm at node 105
+```
+
+If you also need node 129 to move the same amount (i.e., the two nodes must stay together), you would add an *EQUATION:
+
+```abaqus
+*EQUATION
+2
+105, 3, 1.0,
+129, 3, -1.0
+```
+
+but **do not** combine this with a *BOUNDARY on the same DOF – that would over‑constrain the model.
+
+---
+
+### Bottom line
+
+- **Prescribed displacement → `*BOUNDARY` (or `*DISPLACEMENT` inside a step).**  
+- **Tie / linear relation between DOFs → `*EQUATION` (MPC).**  
+
+Use the keyword that matches the physical intent of the boundary condition.
+A: **Short answer**
+
+- **Prescribed displacement (or fixed DOF) → use `*BOUNDARY` (or the `*DISPLACEMENT` sub‑option inside a step).**  
+- **A relation that ties two or more DOFs together → use `*EQUATION` (a multi‑point constraint, MPC).**
+
+Your line  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+does **not** prescribe a displacement; it forces the Z‑translation of node 105 to be exactly the same as the Z‑translation of node 129 ( U3(105) = U3(129) ).  
+If you only want node 105 to move a given amount (e.g. +5 mm in the Z‑direction) you must replace the `*EQUATION` block with a `*BOUNDARY` (or `*DISPLACEMENT`) entry.
+
+---
+
+## 1. How to prescribe a displacement correctly
+
+### a) Using `*BOUNDARY` (the most common form)
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+- **NSET** – name of a node set that contains the node(s) you want to control.  
+- **first‑DOF, last‑DOF** – the degree(s) of freedom to which the value applies (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ).  
+- **value** – the prescribed displacement (positive or negative).  
+
+You can also write the same line without a node set:
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+### b) Using `*DISPLACEMENT` inside a step (alternative syntax)
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*BOUNDARY
+105, 3, 3, 0.005
+*END STEP
+```
+
+`*DISPLACEMENT` is just a synonym for `*BOUNDARY` when it appears inside a step; the effect is identical.
+
+### c) Fixing a whole face (or a group of nodes)
+
+```abaqus
+*NSET, NSET=LEFT_FACE, GENERATE
+1, 97, 1               ; example – nodes 1‑97 belong to the left face
+
+*BOUNDARY, NSET=LEFT_FACE
+1, 1, 6, 0.0           ; fix all 6 DOFs on that face
+```
+
+---
+
+## 2. When you *do* need `*EQUATION`
+
+| Situation | Why `*EQUATION` is required |
+|-----------|-----------------------------|
+| **Tie two nodes together** (U3(105)=U3(129)) | You want the two DOFs to stay equal, but you do **not** prescribe a numeric value. |
+| **Linear combination of DOFs** (U1 + 2 U2 = 5) | The constraint involves more than one DOF and a constant term. |
+| **Rigid‑body constraint that is not a simple “fixed” condition** | You need a relationship such as “the rotation of node A equals twice the translation of node B”. |
+
+The general form is  
+
+```
+*EQUATION
+nterms
+node1, dof1, coeff1, node2, dof2, coeff2, … , nodeN, dofN, coeffN, [constant]
+```
+
+* `nterms` = number of node‑DOF pairs (the “terms”).  
+* The optional **constant** appears after the last coefficient and represents the right‑hand side of the equation.
+
+**Example – tie two nodes in the Z‑direction**
+
+```abaqus
+*EQUATION
+2
+105, 3, 1.0,
+129, 3, -1.0
+```
+
+This is exactly the same as the line you wrote; it is correct **only** if the intention is to keep the two nodes together.
+
+---
+
+## 3. Common pitfalls & how to verify
+
+| Pitfall | Symptom | Fix |
+|---------|---------|-----|
+| Mixing `*BOUNDARY` and `*EQUATION` on the same DOF of the same node | Model over‑constrained → “singular matrix” or “over‑constrained” error. | Use **either** a prescribed value **or** an equation, never both on the same DOF. |
+| Forgetting the `NSET` argument when you intend to apply the BC to many nodes | Only the first node gets the BC, others remain free. | Either list each node explicitly or create a node set (`*NSET`) and reference it. |
+| Using the wrong DOF number (e.g., 3 for Z‑translation in a 2‑D model) | BC is ignored because that DOF does not exist. | Check the model dimensionality: 2‑D has DOFs 1‑2 (translations) and optionally 3 (out‑of‑plane rotation). |
+| Supplying a negative value when you meant a positive displacement (or vice‑versa) | Unexpected deformation direction. | Verify sign conventions: positive X = +X direction, positive Y = +Y, positive Z = +Z. |
+| Not placing the `*BOUNDARY` line inside the correct step | BC applied in the wrong load step or not at all. | Put the `*BOUNDARY` (or `*DISPLACEMENT`) line **inside** the step where the condition should be active, or use the global `*BOUNDARY` (outside any step) for a time‑independent condition. |
+
+You can check that the BC has been read correctly by:
+
+1. Opening the **Input File** (`.inp`) after you generate it from the GUI – the `*BOUNDARY` lines should be present exactly as you wrote them.  
+2. Running a **quick analysis** with `*STEP, NLGEOM=NO` and looking at the **Message** file (`.msg`). Abaqus prints a summary of the applied boundary conditions.  
+3. In the **Visualization** module, after the first increment, use **Tools → Query → Node** to read the displacement of the constrained node – it should match the prescribed value (or be zero if it is fixed).  
+
+---
+
+## 4. Minimal working example (complete input fragment)
+
+```abaqus
+*Heading
+** Simple cantilever beam – prescribe vertical displacement at tip
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+**  Nodes
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+3, 20., 0., 0.
+4, 30., 0., 0.
+5, 40., 0., 0.
+6, 50., 0., 0.   ; tip node
+
+** -------------------------------------------------
+**  Elements (just placeholders)
+*Element, type=B31
+1, 1, 2
+2, 2, 3
+3, 3, 4
+4, 4, 5
+5, 5, 6
+
+** -------------------------------------------------
+**  Node sets
+*NSET, NSET=FIXED, GENERATE
+1, 5, 1          ; nodes 1‑5 (left side) are fixed
+*END NSET
+
+*NSET, NSET=TIP
+6, 6, 1          ; tip node only
+
+** -------------------------------------------------
+**  Boundary conditions
+*BOUNDARY, NSET=FIXED
+1, 1, 6, 0.0      ; fix all 6 DOFs on the left side
+
+*BOUNDARY, NSET=TIP
+6, 3, 3, 0.005    ; prescribe U3 = +5 mm at the tip
+
+** -------------------------------------------------
+**  Step
+*Step, name=STEP-1, nlgeom=YES
+*Static
+0.1, 1., 1e-05, 1.
+*End Step
+```
+
+Running this model will give a cantilever beam whose tip moves **+5 mm** in the Z‑direction while the left end remains completely fixed. No `*EQUATION` line is needed.
+
+---
+
+## 5. Bottom line – what you should do
+
+1. **Delete the `*EQUATION` block** you wrote (unless you really need a tie).  
+2. Add a `*BOUNDARY` (or `*DISPLACEMENT`) line that references the node (or node set) and the DOF you want to control, together with the desired value.  
+3. Make sure the line is placed either globally (outside any step) for a time‑independent BC, or inside the appropriate step if the value should be applied only during that step.  
+
+That will give you the simple prescribed displacement you are after. If later you need to keep two nodes moving together, re‑introduce an `*EQUATION` **instead of** a `*BOUNDARY` for those DOFs.
+
+=== 2026-04-17 23:56:31 ===
+Q: **Short answer**
+
+- **Prescribed displacement (or a fixed DOF) → use `*BOUNDARY` (or the `*DISPLACEMENT` sub‑option inside a step).**  
+- **A relation that ties two or more DOFs together → use `*EQUATION` (a multi‑point constraint, MPC).**
+
+Your line  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+does **not** prescribe a displacement; it forces the Z‑translation of node 105 to be exactly the same as the Z‑translation of node 129 ( U₃(105) = U₃(129) ).  
+If you only want node 105 to move a given amount (e.g. +5 mm in the Z‑direction) you must replace the `*EQUATION` block with a `*BOUNDARY` (or `*DISPLACEMENT`) entry.
+
+---
+
+## 1. How to prescribe a displacement correctly  
+
+### a) Using `*BOUNDARY` (the most common form)
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+* **NSET** – name of a node set that contains the node(s) you want to control (or omit the NSET keyword and list the node number directly).  
+* **first‑DOF, last‑DOF** – the degree(s) of freedom to which the value applies (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ).  
+* **value** – the prescribed displacement (positive or negative).  
+
+You can also write the same line without a node set:
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+### b) Using `*DISPLACEMENT` inside a step (alternative syntax)
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*Static
+*BOUNDARY
+105, 3, 3, 0.005
+*END STEP
+```
+
+`*DISPLACEMENT` is just a synonym for `*BOUNDARY` when it appears inside a step; the effect is identical.
+
+### c) Fixing an entire face (or a group of nodes)
+
+```abaqus
+*NSET, NSET=FIX, GENERATE
+1, 97, 1               ; example – nodes 1‑97 belong to the left face
+*END NSET
+
+*BOUNDARY, NSET=FIX
+1, 1, 6, 0.0           ; fix all 6 DOFs on that face
+```
+
+---
+
+## 2. When you *do* need `*EQUATION`
+
+| Situation | Why `*EQUATION` is required |
+|-----------|-----------------------------|
+| **Tie two nodes together** (U₃(105)=U₃(129)) | You want the two DOFs to stay equal, but you do **not** prescribe a numeric value. |
+| **Linear combination of DOFs** (U₁ + 2 U₂ = 5) | The constraint involves more than one DOF and a constant term. |
+| **Rigid‑body constraint that is not a simple “fixed” condition** | You need a relationship such as “the rotation of node A equals twice the translation of node B”. |
+
+The general form is  
+
+```
+*EQUATION
+nterms
+node1, dof1, coeff1, node2, dof2, coeff2, … , nodeN, dofN, coeffN, [constant]
+```
+
+* `nterms` = number of node‑DOF pairs (the “terms”).  
+* The optional **constant** appears after the last coefficient and represents the right‑hand side of the equation.
+
+**Example – tie two nodes in the Z‑direction**
+
+```abaqus
+*EQUATION
+2
+105, 3, 1.0,
+129, 3, -1.0
+```
+
+This is exactly the same as the line you wrote; it is correct **only** if the intention is to keep the two nodes together.
+
+---
+
+## 3. Common pitfalls & how to verify
+
+| Pitfall | Symptom | Fix |
+|---------|---------|-----|
+| Mixing `*BOUNDARY` and `*EQUATION` on the same DOF of the same node | Model over‑constrained → “singular matrix” or “over‑constrained” error. | Use **either** a prescribed value **or** an equation, never both on the same DOF. |
+| Forgetting the `NSET` argument when you intend to apply the BC to many nodes | Only the first node gets the BC, others remain free. | Either list each node explicitly or create a node set (`*NSET`) and reference it. |
+| Using the wrong DOF number (e.g., 3 for Z‑translation in a 2‑D model) | BC is ignored because that DOF does not exist. | Check the model dimensionality: 2‑D has DOFs 1‑2 (translations) and optionally 3 (out‑of‑plane rotation). |
+| Supplying a negative value when you meant a positive displacement (or vice‑versa) | Unexpected deformation direction. | Verify sign conventions: positive X = +X direction, positive Y = +Y, positive Z = +Z. |
+| Not placing the `*BOUNDARY` line inside the correct step | BC applied in the wrong load step or not at all. | Put the `*BOUNDARY` (or `*DISPLACEMENT`) line **inside** the step where the condition should be active, or use the global `*BOUNDARY` (outside any step) for a time‑independent condition. |
+
+You can verify that the BC has been read correctly by:
+
+1. Opening the generated **.inp** file – the `*BOUNDARY` lines should appear exactly as you wrote them.  
+2. Running a quick analysis and checking the **Message** file (`.msg`); Abaqus prints a summary of the applied boundary conditions.  
+3. After the first increment, use **Tools → Query → Node** in the Visualization module to read the displacement of the constrained node – it should match the prescribed value (or be zero if it is fixed).  
+
+---
+
+## 4. Minimal working example (complete input fragment)
+
+```abaqus
+*Heading
+** Simple cantilever beam – prescribe vertical displacement at tip
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+**  Nodes
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+3, 20., 0., 0.
+4, 30., 0., 0.
+5, 40., 0., 0.
+6, 50., 0., 0.   ; tip node
+
+** -------------------------------------------------
+**  Elements (just placeholders)
+*Element, type=B31
+1, 1, 2
+2, 2, 3
+3, 3, 4
+4, 4, 5
+5, 5, 6
+
+** -------------------------------------------------
+**  Node sets
+*NSET, NSET=FIXED, GENERATE
+1, 5, 1          ; nodes 1‑5 (left side) are fixed
+*END NSET
+
+*NSET, NSET=TIP
+6, 6, 1          ; tip node only
+
+** -------------------------------------------------
+**  Boundary conditions
+*BOUNDARY, NSET=FIXED
+1, 1, 6, 0.0      ; fix all 6 DOFs on the left side
+
+*BOUNDARY, NSET=TIP
+6, 3, 3, 0.005    ; prescribe U3 = +5 mm at the tip
+
+** -------------------------------------------------
+**  Step
+*Step, name=STEP-1, nlgeom=YES
+*Static
+0.1, 1., 1e-05, 1.
+*End Step
+```
+
+Running this model will give a cantilever beam whose tip moves **+5 mm** in the Z‑direction while the left end remains completely fixed. No `*EQUATION` line is needed.
+
+---
+
+## 5. What you should do now
+
+1. **Remove** the `*EQUATION` block you added (unless you truly need a tie).  
+2. **Add** a `*BOUNDARY` (or `*DISPLACEMENT`) entry that references the node (or node set) and the DOF you want to control, together with the desired numeric value.  
+3. Place the `*BOUNDARY` line either globally (outside any step) for a time‑independent condition, or inside the appropriate step if the value should be applied only during that step.
+
+That will give you the simple prescribed displacement you are after. If later you need to keep two nodes moving together, re‑introduce an `*EQUATION` **instead of** a `*BOUNDARY` for those DOFs.
+A: **Short answer**
+
+| What you want to do | Abaqus keyword to use |
+|---------------------|-----------------------|
+| **Prescribe a single displacement (or fix a DOF)** | `*BOUNDARY`  (or the `*DISPLACEMENT` sub‑option inside a step) |
+| **Tie two or more DOFs together, or write a linear relation between them** | `*EQUATION` (multi‑point constraint, MPC) |
+
+Your current block  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+does **not** prescribe a displacement. It forces the Z‑translation of node 105 to be *exactly the same* as the Z‑translation of node 129 ( U₃(105)=U₃(129) ).  
+If the intention is simply “move node 105 +5 mm in Z”, replace the `*EQUATION` with a `*BOUNDARY` (or `*DISPLACEMENT`) entry.
+
+---
+
+## 1. How to prescribe a displacement correctly  
+
+### a) Using `*BOUNDARY` (the most common form)
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+* **NSET** – name of a node set that contains the node(s) you want to control (you can also omit the set and list the node number directly).  
+* **first‑DOF, last‑DOF** – the degree(s) of freedom to which the value applies (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ).  
+* **value** – the prescribed displacement (positive or negative).  
+
+The same line without a node set:
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+### b) Using `*DISPLACEMENT` inside a step (alternative syntax)
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*Static
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+`*DISPLACEMENT` is just a synonym for `*BOUNDARY` when it appears inside a step; the effect is identical.
+
+### c) Fixing an entire face (or a group of nodes)
+
+```abaqus
+*NSET, NSET=FIXED, GENERATE
+1, 97, 1               ; nodes 1‑97 belong to the left face
+*END NSET
+
+*BOUNDARY, NSET=FIXED
+1, 1, 6, 0.0           ; fix all 6 DOFs on that face
+```
+
+---
+
+## 2. When you *do* need `*EQUATION`
+
+| Situation | Why `*EQUATION` is required |
+|-----------|-----------------------------|
+| **Tie two nodes together** (e.g. U₃(105)=U₃(129)) | You want the two DOFs to stay equal, but you do **not** prescribe a numeric value. |
+| **Linear combination of DOFs** (e.g. U₁ + 2 U₂ = 5) | The constraint involves more than one DOF and a constant term. |
+| **Complex rigid‑body constraint** (e.g. rotation of node A = 2 × translation of node B) | A relationship that cannot be expressed with a simple `*BOUNDARY`. |
+
+**General syntax**
+
+```
+*EQUATION
+nterms
+node1, dof1, coeff1, node2, dof2, coeff2, … , nodeN, dofN, coeffN, [constant]
+```
+
+* `nterms` – number of node‑DOF pairs (the “terms”).  
+* The optional **constant** appears after the last coefficient and represents the right‑hand side of the equation.
+
+**Example – tie two nodes in the Z‑direction**
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0
+```
+
+This is exactly the line you wrote; it is correct **only** if the intention is to keep the two nodes together.
+
+---
+
+## 3. Common pitfalls & how to verify
+
+| Pitfall | Symptom | Fix |
+|---------|---------|-----|
+| Mixing `*BOUNDARY` and `*EQUATION` on the same DOF of the same node | Model over‑constrained → “singular matrix” or “over‑constrained” error. | Use **either** a prescribed value **or** an equation, never both on the same DOF. |
+| Forgetting the `NSET` argument when you intend to apply the BC to many nodes | Only the first node gets the BC, others remain free. | Either list each node explicitly or create a node set (`*NSET`) and reference it. |
+| Using the wrong DOF number (e.g., 3 for Z‑translation in a 2‑D model) | BC is ignored because that DOF does not exist. | Check model dimensionality: 2‑D has DOFs 1‑2 (translations) and optionally 3 (out‑of‑plane rotation). |
+| Supplying a negative value when you meant a positive displacement (or vice‑versa) | Unexpected deformation direction. | Verify sign conventions: positive X = +X direction, positive Y = +Y, positive Z = +Z. |
+| Not placing the `*BOUNDARY` line inside the correct step | BC applied in the wrong load step or not at all. | Put the `*BOUNDARY` (or `*DISPLACEMENT`) line **inside** the step where the condition should be active, or use the global `*BOUNDARY` (outside any step) for a time‑independent condition. |
+
+### How to check that the BC has been read correctly
+
+1. **Open the generated `.inp` file** – the `*BOUNDARY` lines should appear exactly as you wrote them.  
+2. **Run a quick analysis** and look at the **Message** file (`.msg`). Abaqus prints a summary of the applied boundary conditions.  
+3. **Post‑process the first increment** (Visualization → Tools → Query → Node). The displacement of the constrained node should match the prescribed value (or be zero if it is fixed).  
+
+---
+
+## 4. Minimal working example (complete input fragment)
+
+```abaqus
+*Heading
+** Simple cantilever beam – prescribe vertical displacement at tip
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** -------------------------------------------------
+**  Nodes
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+3, 20., 0., 0.
+4, 30., 0., 0.
+5, 40., 0., 0.
+6, 50., 0., 0.   ; tip node
+
+** -------------------------------------------------
+**  Elements (placeholder)
+*Element, type=B31
+1, 1, 2
+2, 2, 3
+3, 3, 4
+4, 4, 5
+5, 5, 6
+
+** -------------------------------------------------
+**  Node sets
+*NSET, NSET=FIXED, GENERATE
+1, 5, 1          ; nodes 1‑5 (left side) are fixed
+*END NSET
+
+*NSET, NSET=TIP
+6, 6, 1          ; tip node only
+
+** -------------------------------------------------
+**  Boundary conditions
+*BOUNDARY, NSET=FIXED
+1, 1, 6, 0.0      ; fix all 6 DOFs on the left side
+
+*BOUNDARY, NSET=TIP
+6, 3, 3, 0.005    ; prescribe U3 = +5 mm at the tip
+
+** -------------------------------------------------
+**  Step
+*Step, name=STEP-1, nlgeom=YES
+*Static
+0.1, 1., 1e-05, 1.
+*End Step
+```
+
+Running this model gives a cantilever beam whose tip moves **+5 mm** in the Z‑direction while the left end remains completely fixed. No `*EQUATION` line is needed.
+
+---
+
+## 5. What you should do now
+
+1. **Delete** the `*EQUATION` block you added (unless you really need a tie between two nodes).  
+2. **Insert** a `*BOUNDARY` (or `*DISPLACEMENT`) entry that references node 105 (or a node set containing it), the DOF you want to control (3 for Z‑translation), and the numeric value you desire (e.g. 0.005 m).  
+3. Place that line either **globally** (outside any step) for a permanent condition, or **inside the appropriate step** if the displacement should be applied only during that step.
+
+After those changes the analysis will apply the single prescribed displacement you intended. If later you need to keep two nodes moving together, re‑introduce an `*EQUATION` **instead of** a `*BOUNDARY` for those DOFs.
+
+=== 2026-04-17 23:57:26 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword to use |
+|--------------------|-----------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY`  (or `*DISPLACEMENT` inside a step) |
+| Tie two or more DOFs together, or write a linear relation between them | `*EQUATION` (multi‑point constraint, MPC) |
+
+---
+
+### Why your current `*EQUATION` does **not** prescribe a displacement  
+
+```abaqus
+*EQUATION
+2
+105,3,1.,129,3,-1.
+```  
+
+This tells Abaqus that the Z‑translation of node 105 must be **exactly the same** as the Z‑translation of node 129 ( U₃(105)=U₃(129) ). No magnitude is given, so it is not a prescribed displacement.
+
+If you simply want “move node 105 +5 mm in the Z‑direction”, replace the `*EQUATION` block with a `*BOUNDARY` (or `*DISPLACEMENT`) entry.
+
+---
+
+### 1. Prescribing a displacement correctly  
+
+#### a) Using `*BOUNDARY` (most common)
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+* **NSET** – name of a node set that contains the node(s) you want to control (you can also omit the set and list the node number directly).  
+* **first‑DOF, last‑DOF** – the degree(s) of freedom to which the value applies (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ).  
+* **value** – prescribed displacement (positive or negative).
+
+The same line without a node set:
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+#### b) Using `*DISPLACEMENT` inside a step (alternative syntax)
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*Static
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+`*DISPLACEMENT` is just a synonym for `*BOUNDARY` when it appears inside a step; the effect is identical.
+
+#### c) Fixing an entire face (or a group of nodes)
+
+```abaqus
+*NSET, NSET=FIXED, GENERATE
+1, 97, 1               ; example – nodes 1‑97 belong to the left face
+*END NSET
+
+*BOUNDARY, NSET=FIXED
+1, 1, 6, 0.0           ; fix all 6 DOFs on that face
+```
+
+---
+
+### 2. When you *do* need `*EQUATION`
+
+| Situation | Why `*EQUATION` is required |
+|-----------|-----------------------------|
+| Tie two nodes together (e.g., U₃(105)=U₃(129)) | You want the two DOFs to stay equal, but you are **not** prescribing a numeric value. |
+| Linear combination of DOFs (e.g., U₁ + 2 U₂ = 5) | The constraint involves more than one DOF and a constant term. |
+| Complex rigid‑body relationship that cannot be expressed with a simple `*BOUNDARY` | A relationship that needs coefficients and possibly a constant term. |
+
+**General syntax**
+
+```
+*EQUATION
+nterms
+node1, dof1, coeff1, node2, dof2, coeff2, … , nodeN, dofN, coeffN, [constant]
+```
+
+* `nterms` – number of node‑DOF pairs (the “terms”).  
+* The optional **constant** appears after the last coefficient and represents the right‑hand side of the equation.
+
+**Example – tie two nodes in Z**
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0
+```
+
+This is exactly the line you wrote; it is correct **only** if the intention is to keep the two nodes together.
+
+---
+
+### 3. Common pitfalls & how to verify
+
+| Pitfall | Symptom | Fix |
+|---------|---------|-----|
+| Mixing `*BOUNDARY` and `*EQUATION` on the same DOF of the same node | Model over‑constrained → “singular matrix” or “over‑constrained” error. | Use **either** a prescribed value **or** an equation, never both on the same DOF. |
+| Forgetting the `NSET` argument when you intend to apply the BC to many nodes | Only the first node gets the BC, others remain free. | Either list each node explicitly or create a node set (`*NSET`) and reference it. |
+| Using the wrong DOF number (e.g., 3 for Z‑translation in a 2‑D model) | BC is ignored because that DOF does not exist. | Check model dimensionality: 2‑D has DOFs 1‑2 (translations) and optionally 3 (out‑of‑plane rotation). |
+| Supplying a negative value when you meant a positive displacement (or vice‑versa) | Unexpected deformation direction. | Verify sign conventions: positive X = +X direction, positive Y = +Y, positive Z = +Z. |
+| Not placing the `*BOUNDARY` line inside the correct step | BC applied in the wrong load step or not at all. | Put the `*BOUNDARY` (or `*DISPLACEMENT`) line **inside** the step where the condition should be active, or use the global `*BOUNDARY` (outside any step) for a time‑independent condition. |
+
+#### How to check that the BC has been read correctly  
+
+1. Open the generated **.inp** file – the `*BOUNDARY` lines should appear exactly as you wrote them.  
+2. Run a quick analysis and look at the **Message** file (`.msg`); Abaqus prints a summary of the applied boundary conditions.  
+3. After the first increment, use **Tools → Query → Node** in the Visualization module; the displacement of the constrained node should match the prescribed value (or be zero if it is fixed).  
+
+---
+
+### 4. Minimal working example (complete fragment)
+
+```abaqus
+*Heading
+** Simple cantilever beam – prescribe vertical displacement at tip
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** Nodes
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+3, 20., 0., 0.
+4, 30., 0., 0.
+5, 40., 0., 0.
+6, 50., 0., 0.   ; tip node
+
+** Elements (placeholder)
+*Element, type=B31
+1, 1, 2
+2, 2, 3
+3, 3, 4
+4, 4, 5
+5, 5, 6
+
+** Node sets
+*NSET, NSET=FIXED, GENERATE
+1, 5, 1          ; nodes 1‑5 (left side) are fixed
+*END NSET
+
+*NSET, NSET=TIP
+6, 6, 1          ; tip node only
+
+** Boundary conditions
+*BOUNDARY, NSET=FIXED
+1, 1, 6, 0.0      ; fix all 6 DOFs on the left side
+
+*BOUNDARY, NSET=TIP
+6, 3, 3, 0.005    ; prescribe U3 = +5 mm at the tip
+
+** Step
+*Step, name=STEP-1, nlgeom=YES
+*Static
+0.1, 1., 1e-05, 1.
+*End Step
+```
+
+Running this model moves the tip **+5 mm** in the Z‑direction while the left end stays completely fixed. No `*EQUATION` line is required.
+
+---
+
+### 5. What you should do now  
+
+1. **Delete** the `*EQUATION` block you added (unless you truly need a tie between two nodes).  
+2. **Add** a `*BOUNDARY` (or `*DISPLACEMENT`) entry that references node 105 (or a set containing it), the DOF you want to control (3 for Z‑translation), and the numeric value you desire (e.g., 0.005 m).  
+3. Place that line either **globally** (outside any step) for a permanent condition, or **inside the appropriate step** if the displacement should be applied only during that step.
+
+After these changes the analysis will apply the single prescribed displacement you intended. If later you need to keep two nodes moving together, re‑introduce an `*EQUATION` **instead of** a `*BOUNDARY` for those DOFs.
+A: **Short answer**
+
+| What you want to do | Abaqus keyword to use |
+|---------------------|-----------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY`  (or `*DISPLACEMENT` inside a step) |
+| Tie two or more DOFs together, or write a linear relation between them | `*EQUATION` (multi‑point constraint, MPC) |
+
+---
+
+## 1.  Prescribing a displacement – the correct way  
+
+### a) Global (time‑independent) BC – `*BOUNDARY` outside any step  
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+* **NSET** – name of a node set that contains the node(s) you want to control.  
+* **first‑DOF, last‑DOF** – the degree(s) of freedom to which the value applies  
+  (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ).  
+* **value** – prescribed displacement (positive = + direction of the axis).  
+
+If you prefer to list the node directly, omit the set:
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+### b) Step‑specific BC – `*DISPLACEMENT` (or `*BOUNDARY`) inside a step  
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+`*DISPLACEMENT` is just a synonym for `*BOUNDARY` when it appears inside a step; the effect is identical.
+
+### c) Fixing an entire face (or a group of nodes)  
+
+```abaqus
+*NSET, NSET=FIXED, GENERATE
+1, 97, 1               ; nodes 1‑97 belong to the left face
+*BOUNDARY, NSET=FIXED
+1, 1, 6, 0.0           ; fix all 6 DOFs on that face
+```
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+| Situation | Why `*EQUATION` is required |
+|-----------|-----------------------------|
+| Tie two nodes together (e.g., U₃(105)=U₃(129)) | You want the two DOFs to stay equal **without** prescribing a numeric value. |
+| Linear combination of DOFs (e.g., U₁ + 2 U₂ = 5) | The constraint involves more than one DOF and a constant term. |
+| Complex rigid‑body relationship that cannot be expressed with a simple `*BOUNDARY` | A relationship that needs coefficients and possibly a constant term. |
+
+### General syntax  
+
+```
+*EQUATION
+nterms
+node1, dof1, coeff1, node2, dof2, coeff2, … , nodeN, dofN, coeffN, [constant]
+```
+
+* `nterms` – number of **node‑DOF** pairs (the “terms”).  
+* The optional **constant** appears after the last coefficient and is the right‑hand side of the equation.
+
+#### Example – tie two nodes in Z  
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0
+```
+
+This says **U₃(105) – U₃(129) = 0**, i.e. the two Z‑translations are identical.  
+If you also want a prescribed value, you must add a constant:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; both nodes move together +5 mm in Z
+```
+
+> **Important:** Do **not** apply a `*BOUNDARY` (or `*DISPLACEMENT`) to the same DOF that is already involved in an `*EQUATION`. That would over‑constrain the model and cause a “singular matrix” error.
+
+---
+
+## 3.  Common pitfalls & how to avoid them  
+
+| Pitfall | Symptom | Fix |
+|---------|---------|-----|
+| Using `*BOUNDARY` **and** `*EQUATION` on the same DOF of the same node | “Over‑constrained” or “singular matrix” error | Choose **one** method for that DOF. |
+| Forgetting the `NSET` argument when you intend to apply the BC to many nodes | Only the first node gets the BC | Create a node set (`*NSET`) and reference it, or list every node explicitly. |
+| Using the wrong DOF number (e.g., 3 for Z‑translation in a 2‑D model) | BC is ignored | Verify model dimensionality: 2‑D has DOFs 1‑2 (translations) and optionally 3 (out‑of‑plane rotation). |
+| Sign error (negative vs. positive displacement) | Deformation in the opposite direction | Remember: positive X = +X direction, positive Y = +Y, positive Z = +Z. |
+| Placing `*BOUNDARY` outside the step when you need it only for a particular load step | BC applied for the whole analysis (or not at all) | Put the line **inside** the step where it should be active, or keep it outside for a permanent condition. |
+
+### Quick sanity check  
+
+1. **Open the .inp file** – verify that the `*BOUNDARY` (or `*DISPLACEMENT`) line appears exactly as you wrote it.  
+2. **Run a short analysis** and look at the **.msg** file; Abaqus prints a summary of all applied boundary conditions.  
+3. In the **Visualization** module, query the constrained node after the first increment – its displacement should match the prescribed value (or be zero if it is fixed).  
+
+---
+
+## 4.  Minimal working example (complete fragment)
+
+```abaqus
+*Heading
+** Simple cantilever – prescribe vertical displacement at tip
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+** Nodes
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+3, 20., 0., 0.
+4, 30., 0., 0.
+5, 40., 0., 0.
+6, 50., 0., 0.   ; tip node (node 105 in your model)
+
+** Elements (placeholder)
+*Element, type=B31
+1, 1, 2
+2, 2, 3
+3, 3, 4
+4, 4, 5
+5, 5, 6
+
+** Node sets
+*NSET, NSET=FIXED, GENERATE
+1, 5, 1          ; nodes 1‑5 are fixed
+*END NSET
+
+*NSET, NSET=TIP
+6, 6, 1          ; tip node only
+
+** Boundary conditions
+*BOUNDARY, NSET=FIXED
+1, 1, 6, 0.0      ; fix all 6 DOFs on the left side
+
+*BOUNDARY, NSET=TIP
+6, 3, 3, 0.005    ; prescribe U3 = +5 mm at the tip
+
+** Step
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+0.1, 1., 1e-05, 1.
+*END STEP
+```
+
+Running this model moves the tip **+5 mm** in the Z‑direction while the left end stays completely fixed. No `*EQUATION` line is required.
+
+---
+
+## 5.  What you should do now (your specific case)
+
+1. **Delete** the `*EQUATION` block you added (unless you truly need a tie between two nodes).  
+2. **Add** a `*BOUNDARY` (or `*DISPLACEMENT`) entry that references node 105 (or a set containing it), the DOF you want to control (3 for Z‑translation), and the numeric value you desire (e.g., 0.005 m).  
+3. Place that line either **globally** (outside any step) for a permanent condition, or **inside the appropriate step** if the displacement should be applied only during that step.  
+
+After these changes the analysis will apply the single prescribed displacement you intended. If later you need to keep two nodes moving together, re‑introduce an `*EQUATION` **instead of** a `*BOUNDARY` for those DOFs.
+
+=== 2026-04-17 23:58:05 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword |
+|---------------------|----------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY`  (or `*DISPLACEMENT` inside a step) |
+| Tie two or more DOFs together, or write a linear relation between them | `*EQUATION` (multi‑point constraint) |
+
+---
+
+### Prescribing a displacement (the correct way)
+
+**Global (time‑independent) BC – outside any step**
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+*If you prefer to list the node directly, omit the set:*
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+**Step‑specific BC – inside a step**
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT          ; synonym for *BOUNDARY inside a step
+105, 3, 3, 0.005
+*END STEP
+```
+
+---
+
+### When you really need `*EQUATION`
+
+Use `*EQUATION` only if you want a **relationship** between DOFs (e.g., tie two nodes together or impose a linear combination). It does **not** prescribe a magnitude by itself.
+
+Example – tie two nodes in Z:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0          ; U3(105) – U3(129) = 0
+```
+
+If you also need a prescribed value, add a constant:
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; both nodes move together +5 mm in Z
+```
+
+**Do not** apply a `*BOUNDARY` (or `*DISPLACEMENT`) to the same DOF that is already in an `*EQUATION`; that over‑constrains the model.
+
+---
+
+### What to do in your case
+
+1. Remove the `*EQUATION` block (unless you truly need to tie node 105 to another node).  
+2. Insert a `*BOUNDARY` (or `*DISPLACEMENT`) line for node 105, DOF 3, with the desired value (e.g., 0.005 m).  
+3. Place it either globally (outside any step) for a permanent condition or inside the appropriate step if it should act only for that step.
+
+After this change the analysis will apply the single prescribed displacement you intended. If later you need to keep two nodes moving together, re‑introduce an `*EQUATION` **instead of** a `*BOUNDARY` for those DOFs.
+A: **Short answer**
+
+| What you want to do | Abaqus keyword to use |
+|---------------------|-----------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) or `*DISPLACEMENT` (inside a step) |
+| Tie two or more DOFs together, or write a linear relation between them | `*EQUATION` (multi‑point constraint) |
+
+---
+
+## 1. Prescribing a single displacement (the *right* way  
+
+### a) Global (time‑independent) BC – placed **outside** any step  
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+*If you do not want to use a node set, list the node directly:*
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+### b) Step‑specific BC – placed **inside** the step where it should act  
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT          ; synonym for *BOUNDARY inside a step
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both forms give the same result; the only difference is whether the condition is permanent (`*BOUNDARY` outside a step) or applied only for the duration of a particular step (`*DISPLACEMENT` inside a step).
+
+---
+
+## 2. When you really need `*EQUATION`
+
+`*EQUATION` does **not** prescribe a value by itself – it defines a **linear relationship** among DOFs. Use it only when you want to:
+
+* Tie two (or more) nodes together, e.g. enforce `U3(105) = U3(129)`.
+* Impose a linear combination, e.g. `U1 + 2·U2 = constant`.
+
+### Example – tie two nodes in the Z‑direction
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** prescribe a 5 mm translation
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+**Important:** Do **not** apply a `*BOUNDARY` (or `*DISPLACEMENT`) to any DOF that already appears in an `*EQUATION`. That would over‑constrain the model and cause the analysis to fail.
+
+---
+
+## 3. What to do for the situation you described
+
+1. **Delete** the `*EQUATION` block that you added for node 105 unless you truly need a multi‑point constraint.  
+2. **Add** a `*BOUNDARY` (or `*DISPLACEMENT` inside the appropriate step) line for node 105, DOF 3, with the required value, e.g.:
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; prescribe +5 mm in Z at node 105
+   ```
+
+   *or, if the displacement should only be active in a particular step:*
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model will now have a single, correctly‑prescribed displacement on node 105 and no conflicting constraints.
+
+---
+
+### TL;DR
+
+* Use `*BOUNDARY` (global) or `*DISPLACEMENT` (step‑specific) to **prescribe** a displacement.  
+* Use `*EQUATION` only when you need a **relationship** between two or more DOFs.  
+* Never mix the two on the same DOF.  
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+
+=== 2026-04-17 23:58:37 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword |
+|---------------------|----------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) or `*DISPLACEMENT` (inside a step) |
+| Tie two or more DOFs together, or write a linear relation between them | `*EQUATION` (multi‑point constraint) |
+
+---
+
+## 1.  Prescribing a displacement – the *right* way  
+
+### a) Global (time‑independent) boundary condition  
+Place the `*BOUNDARY` line **outside** any step.  
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+*If you do not want to use a node set, list the node directly:*
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+- **NSET** – name of a node set that contains the node(s) to be constrained.  
+- **first‑DOF, last‑DOF** – the degree(s) of freedom to which the value applies  
+  (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ).  
+- **value** – prescribed displacement (positive = + direction of the axis).
+
+### b) Step‑specific displacement  
+Place the condition **inside** the step where it should act.  
+`*DISPLACEMENT` is a synonym for `*BOUNDARY` inside a step.
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both forms give the same numerical result; the only difference is whether the condition is permanent (`*BOUNDARY` outside a step) or active only for the duration of a particular step (`*DISPLACEMENT` inside a step).
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` does **not** prescribe a magnitude by itself – it defines a **linear relationship** among DOFs. Use it only when you need to:
+
+* **Tie two (or more) nodes together** (e.g. enforce `U3(105) = U3(129)`).
+* **Impose a linear combination** of DOFs (e.g. `U1 + 2·U2 = constant`).
+
+### Example – tie two nodes in Z
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** prescribe a 5 mm translation
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+**Never** apply a `*BOUNDARY` (or `*DISPLACEMENT`) to any DOF that already appears in an `*EQUATION`; that would over‑constrain the model and cause a “singular matrix” error.
+
+---
+
+## 3.  What to do for the situation you described
+
+1. **Delete** the `*EQUATION` block you added for node 105 (unless you truly need a multi‑point constraint).  
+2. **Add** a `*BOUNDARY` (or `*DISPLACEMENT` inside the appropriate step) line for node 105, DOF 3, with the required value, e.g.:
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; prescribe +5 mm in Z at node 105
+   ```
+
+   *or, if the displacement should only be active in a particular step:*
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model will now have a single, correctly‑prescribed displacement on node 105 and no conflicting constraints.
+
+---
+
+### TL;DR
+
+* **Prescribe** a displacement → `*BOUNDARY` (global) or `*DISPLACEMENT` (inside a step).  
+* **Tie** or relate DOFs → `*EQUATION`.  
+* **Never** mix the two on the same DOF.  
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+A: **Short answer**
+
+| What you want to do | Abaqus keyword |
+|---------------------|----------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global, outside any step) or `*DISPLACEMENT` (inside a step) |
+| Tie two or more DOFs together, or write a linear relation between them | `*EQUATION` (multi‑point constraint) |
+
+---
+
+## 1.  Prescribing a displacement – the *right* way  
+
+### a) Global (time‑independent) boundary condition  
+Place the `*BOUNDARY` line **outside** any step. The condition is permanent for the whole analysis.
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+*If you do not want to use a node set, list the node directly:*
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+| Field | Meaning |
+|-------|---------|
+| **NSET** (optional) | Name of a node set that contains the node(s) to be constrained. |
+| **first‑DOF, last‑DOF** | The degree(s) of freedom to which the value applies (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ). |
+| **value** | Prescribed displacement (positive = + direction of the axis). |
+
+### b) Step‑specific displacement  
+Place the condition **inside** the step where it should act. Inside a step `*DISPLACEMENT` is just a synonym for `*BOUNDARY`.
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both forms give the same numerical result; the only difference is whether the condition is permanent (`*BOUNDARY` outside a step) or active only for the duration of a particular step (`*DISPLACEMENT` inside a step).
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` does **not** prescribe a magnitude by itself – it defines a **linear relationship** among DOFs. Use it only when you need to:
+
+* **Tie two (or more) nodes together** (e.g. enforce `U3(105) = U3(129)`).
+* **Impose a linear combination** of DOFs (e.g. `U1 + 2·U2 = constant`).
+
+### Example – tie two nodes in Z
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** prescribe a 5 mm translation
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Important:** Never apply a `*BOUNDARY` (or `*DISPLACEMENT`) to any DOF that already appears in an `*EQUATION`. Doing so over‑constrains the model and leads to a “singular matrix” error.
+
+---
+
+## 3.  What to do for the situation you described
+
+1. **Delete** the `*EQUATION` block you added for node 105 (unless you truly need a multi‑point constraint).  
+2. **Add** a `*BOUNDARY` (or `*DISPLACEMENT` inside the appropriate step) line for node 105, DOF 3, with the required value, e.g.:
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; prescribe +5 mm in Z at node 105
+   ```
+
+   *or, if the displacement should only be active in a particular step:*
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has a single, correctly‑prescribed displacement on node 105 and no conflicting constraints.
+
+---
+
+### TL;DR
+
+* **Prescribe a displacement** → `*BOUNDARY` (global) or `*DISPLACEMENT` (inside a step).  
+* **Tie or relate DOFs** → `*EQUATION`.  
+* **Never mix the two on the same DOF** – remove the `*EQUATION` if you only need a simple prescribed motion.  
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+
+=== 2026-04-17 23:59:11 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword |
+|---------------------|----------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global, placed outside any step) **or** `*DISPLACEMENT` (inside a step) |
+| Tie two or more DOFs together, or write a linear relation between them | `*EQUATION` (multi‑point constraint) |
+
+---
+
+## 1.  Prescribing a displacement – the *right* way  
+
+### a) Global (time‑independent) boundary condition  
+
+Place the line **outside** any step. The condition is permanent for the whole analysis.
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+If you do not want to use a node set, list the node directly:
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+* **NSET** – (optional) name of a node set that contains the node(s) to be constrained.  
+* **first‑DOF, last‑DOF** – the degree(s) of freedom to which the value applies  
+  (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ).  
+* **value** – prescribed displacement (positive = + direction of the axis).
+
+### b) Step‑specific displacement  
+
+Inside a step `*DISPLACEMENT` is just a synonym for `*BOUNDARY`.
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both forms give the same numerical result; the only difference is whether the condition is permanent (`*BOUNDARY` outside a step) or active only for the duration of a particular step (`*DISPLACEMENT` inside a step).
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` **does not** prescribe a magnitude. It defines a **linear relationship** among DOFs. Use it only when you need to:
+
+* Tie two (or more) nodes together, e.g. enforce `U3(105) = U3(129)`.
+* Impose a linear combination of DOFs, e.g. `U1 + 2·U2 = constant`.
+
+### Example – tie two nodes in the Z‑direction
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** prescribe a 5 mm translation
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Never** apply a `*BOUNDARY` (or `*DISPLACEMENT`) to any DOF that already appears in an `*EQUATION`; that over‑constrains the model and causes a “singular matrix” error.
+
+---
+
+## 3.  What to do for the situation you described
+
+1. **Remove** the `*EQUATION` block you added for node 105 (unless you truly need a multi‑point constraint).  
+2. **Insert** a `*BOUNDARY` (or `*DISPLACEMENT` inside the appropriate step) line for node 105, DOF 3, with the desired value, e.g.:
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; prescribe +5 mm in Z at node 105
+   ```
+
+   *or, if the displacement should act only during a particular step:*
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has a single, correctly‑prescribed displacement on node 105 and no conflicting constraints.
+
+---
+
+### TL;DR
+
+* **Prescribe** a displacement → `*BOUNDARY` (global) or `*DISPLACEMENT` (inside a step).  
+* **Tie or relate** DOFs → `*EQUATION`.  
+* **Never** mix the two on the same DOF – delete the `*EQUATION` if you only need a simple prescribed motion.
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+A: **Short answer**
+
+| What you want to do | Abaqus keyword |
+|---------------------|----------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global, placed **outside** any step) **or** `*DISPLACEMENT` (inside a step) |
+| Tie two or more DOFs together, or write a linear relation between them | `*EQUATION` (multi‑point constraint) |
+
+---
+
+## 1.  Prescribing a displacement – the *right* way  
+
+### a) Global (time‑independent) boundary condition  
+
+Place the line **outside** any `*STEP`. The condition is permanent for the whole analysis.
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; U3 = +5 mm at node 105
+```
+
+If you do not want to use a node set, list the node directly:
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+* **NSET** – (optional) name of a node set that contains the node(s) to be constrained.  
+* **first‑DOF, last‑DOF** – the degree(s) of freedom to which the value applies (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ).  
+* **value** – prescribed displacement (positive = + direction of the axis).
+
+### b) Step‑specific displacement  
+
+Inside a step `*DISPLACEMENT` is just a synonym for `*BOUNDARY`.
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both forms give the same numerical result; the only difference is whether the condition is **permanent** (`*BOUNDARY` outside a step) or **active only for the duration of a particular step** (`*DISPLACEMENT` inside a step).
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` **does not** prescribe a magnitude. It defines a **linear relationship** among DOFs. Use it only when you need to:
+
+* Tie two (or more) nodes together, e.g. enforce `U3(105) = U3(129)`.
+* Impose a linear combination of DOFs, e.g. `U1 + 2·U2 = constant`.
+
+### Example – tie two nodes in the Z‑direction
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** prescribe a 5 mm translation
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Never** apply a `*BOUNDARY` (or `*DISPLACEMENT`) to any DOF that already appears in an `*EQUATION`; that over‑constrains the model and produces a “singular matrix” error.
+
+---
+
+## 3.  What to do for the situation you described
+
+1. **Delete** the `*EQUATION` block you added for node 105 (unless you truly need a multi‑point constraint).  
+2. **Insert** a `*BOUNDARY` (global) or `*DISPLACEMENT` (inside the appropriate step) line for node 105, DOF 3, with the desired value, e.g.:
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; prescribe +5 mm in Z at node 105
+   ```
+
+   *or, if the displacement should act only during a particular step:*
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has a single, correctly‑prescribed displacement on node 105 and no conflicting constraints.
+
+---
+
+### TL;DR
+
+* **Prescribe a displacement** → `*BOUNDARY` (global) or `*DISPLACEMENT` (inside a step).  
+* **Tie or relate** DOFs → `*EQUATION`.  
+* **Never** mix the two on the same DOF – delete the `*EQUATION` if you only need a simple prescribed motion.
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+
+=== 2026-04-17 23:59:46 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword |
+|--------------------|----------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global, placed **outside** any step) **or** `*DISPLACEMENT` (inside a step) |
+| Tie two or more DOFs together, or write a linear relation between them | `*EQUATION` (multi‑point constraint) |
+
+---
+
+## 1.  Prescribing a displacement – the *right* way  
+
+### a) Global (permanent) boundary condition  
+
+Place the line **outside** any `*STEP`. The condition is active for the whole analysis.
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES
+105, 3, 3, 0.005      ; prescribe +5 mm in the Z‑direction at node 105
+```
+
+If you do not want to use a node set, list the node directly:
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+* **first‑DOF, last‑DOF** – the degree(s) of freedom to which the value applies  
+  (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ).  
+* **value** – prescribed displacement (positive = + direction of the axis).
+
+### b) Step‑specific displacement  
+
+Inside a step `*DISPLACEMENT` is just a synonym for `*BOUNDARY`.
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both forms give the same numerical result; the only difference is whether the condition is **permanent** (`*BOUNDARY` outside a step) or **active only for the duration of a particular step** (`*DISPLACEMENT` inside a step).
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` **does not** prescribe a displacement. It defines a **linear relationship** among degrees of freedom. Use it only when you need to:
+
+* **Tie two (or more) nodes together** – e.g. enforce `U3(105) = U3(129)`.
+* **Impose a linear combination** of DOFs – e.g. `U1 + 2·U2 = constant`.
+
+### Example – tie two nodes in Z
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** prescribe a 5 mm translation
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Never** apply a `*BOUNDARY` (or `*DISPLACEMENT`) to any DOF that already appears in an `*EQUATION`; doing so over‑constrains the model and results in a “singular matrix” error.
+
+---
+
+## 3.  What to do for the situation you described
+
+1. **Remove** the `*EQUATION` block you added for node 105 (unless you truly need a multi‑point constraint).  
+2. **Add** a `*BOUNDARY` (global) or `*DISPLACEMENT` (inside the appropriate step) line for node 105, DOF 3, with the desired value, e.g.:
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; prescribe +5 mm in Z at node 105
+   ```
+
+   *or, if the displacement should act only during a particular step:*
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has a single, correctly‑prescribed displacement on node 105 and no conflicting constraints.
+
+---
+
+### TL;DR
+
+* **Prescribe a displacement** → `*BOUNDARY` (global) or `*DISPLACEMENT` (inside a step).  
+* **Tie or relate DOFs** → `*EQUATION`.  
+* **Never mix the two on the same DOF** – delete the `*EQUATION` if you only need a simple prescribed motion.
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+A: **Short answer**
+
+| What you want to do | Abaqus keyword |
+|---------------------|----------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global, placed **outside** any `*STEP`) **or** `*DISPLACEMENT` (inside a step) |
+| Tie two or more DOFs together, or write a linear relation between them | `*EQUATION` (multi‑point constraint) |
+
+---
+
+## 1.  Prescribing a displacement – the *right* way  
+
+### a) Global (permanent) boundary condition  
+
+- **Location in the input file:** **outside** any `*STEP` block.  
+- **Effect:** active for the whole analysis (all steps).  
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES          ; use a node set (recommended)
+105, 3, 3, 0.005                    ; node 105, DOF 3 (Z), value = +5 mm
+
+*BOUNDARY                           ; or list the node directly
+105, 3, 3, 0.005
+```
+
+| Field | Meaning |
+|-------|---------|
+| **node** | node number (or a node set name) |
+| **first‑DOF** | first DOF to be constrained (1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ) |
+| **last‑DOF** | last DOF (same as first if only one) |
+| **value** | prescribed displacement (positive = + direction of the axis) |
+
+### b) Step‑specific displacement  
+
+- **Location:** inside a `*STEP` block.  
+- **Effect:** active **only** for the step in which it appears.  
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT                     ; synonym for *BOUNDARY inside a step
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both forms give the same numerical result; the only difference is the **time‑span** of the condition (permanent vs. step‑limited).
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` **does not** prescribe a displacement. It defines a **linear relationship** among degrees of freedom (a multi‑point constraint, MPC). Use it only when you need to:
+
+* **Tie two (or more) nodes together** – e.g. enforce `U3(105) = U3(129)`.  
+* **Impose a linear combination** of DOFs – e.g. `U1 + 2·U2 = constant`.  
+
+### Example – tie two nodes in Z
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** prescribe a 5 mm translation
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Important:** Never apply a `*BOUNDARY` (or `*DISPLACEMENT`) to any DOF that already appears in an `*EQUATION`. Doing so over‑constrains the model and produces a “singular matrix” error.
+
+---
+
+## 3.  How to fix the situation you described
+
+1. **Delete** the `*EQUATION` block that involves node 105 (unless you truly need a multi‑point constraint).  
+2. **Add** a proper displacement prescription:  
+
+   *Permanent (global) BC*  
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; +5 mm in Z at node 105 for the whole analysis
+   ```
+
+   *or, if the displacement should act only during a particular step*  
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has **one** correctly‑prescribed displacement on node 105 and **no conflicting constraints**, so the solver will not encounter a singular‑matrix problem.
+
+---
+
+### TL;DR
+
+| Goal | Keyword | Where to place it |
+|------|---------|-------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for permanent BC; inside a `*STEP` for step‑specific BC |
+| Tie two or more DOFs, or impose a linear relation | `*EQUATION` | Inside the model (outside steps) – defines an MPC |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model. |
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+
+=== 2026-04-18 00:00:28 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword | Where it belongs in the input file |
+|---------------------|----------------|------------------------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for a permanent BC; inside a `*STEP` for a step‑specific BC |
+| Tie two or more DOFs together, or impose a linear relation | `*EQUATION` (multi‑point constraint) | Outside the `*STEP` blocks (defines an MPC) |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model. |
+
+Below is a step‑by‑step guide that shows how to apply a displacement correctly and why `*EQUATION` is not the right tool for this job.
+
+---
+
+## 1.  Prescribing a displacement – the *right* way  
+
+### a) Global (permanent) boundary condition  
+
+Place the `*BOUNDARY` line **outside** any `*STEP`.  
+The condition will be active for **all** steps of the analysis.
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES          ; recommended: use a node set
+105, 3, 3, 0.005                    ; node 105, DOF 3 (Z), +5 mm
+
+*BOUNDARY                           ; or list the node directly
+105, 3, 3, 0.005
+```
+
+| Column | Meaning |
+|--------|---------|
+| node (or node‑set name) | the node that receives the BC |
+| first‑DOF | 1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ |
+| last‑DOF | same as first if only one DOF |
+| value | prescribed displacement (positive = + direction) |
+
+### b) Step‑specific displacement  
+
+If you want the displacement to be applied **only** during a particular step, put it inside that step. Inside a step the keyword is called `*DISPLACEMENT`; it is just a synonym for `*BOUNDARY`.
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both the global `*BOUNDARY` and the step‑specific `*DISPLACEMENT` give the same numerical result; the only difference is the **time span** of the condition (permanent vs. step‑limited).
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` **does not** prescribe a displacement. It creates a **linear relationship** (a multi‑point constraint, MPC) among several degrees of freedom. Use it only when you need to:
+
+* **Tie two (or more) nodes together** – e.g. enforce `U3(105) = U3(129)`.
+* **Impose a linear combination** of DOFs – e.g. `U1 + 2·U2 = constant`.
+
+### Example – tie two nodes in the Z‑direction
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** prescribe a 5 mm translation
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Never** apply a `*BOUNDARY` (or `*DISPLACEMENT`) to any DOF that already appears in an `*EQUATION`. Doing so over‑constrains the model and leads to a “singular matrix” error.
+
+---
+
+## 3.  How to fix the situation you described  
+
+You tried to prescribe a displacement with `*EQUATION`, which is the wrong keyword for that purpose. Follow these steps:
+
+1. **Delete** the `*EQUATION` block that involves node 105 (unless you truly need a multi‑point constraint).  
+2. **Add** a proper displacement prescription:
+
+   *Permanent (global) BC*  
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; +5 mm in Z at node 105 for the whole analysis
+   ```
+
+   *or, if the displacement should act only during a particular step*  
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has **one** correctly‑prescribed displacement on node 105 and **no conflicting constraints**, so the solver will not encounter a singular‑matrix problem.
+
+---
+
+### TL;DR
+
+| Goal | Keyword | Placement |
+|------|---------|-----------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for permanent BC; inside a `*STEP` for step‑specific BC |
+| Tie two or more DOFs, or impose a linear relation | `*EQUATION` (MPC) | Outside steps – defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model. |
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+A: **Short answer**
+
+| What you want to do | Abaqus keyword | Where it belongs in the input file |
+|---------------------|----------------|------------------------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for a permanent BC; inside a `*STEP` for a step‑specific BC |
+| Tie two or more DOFs together, or impose a linear relation | `*EQUATION` (multi‑point constraint) | Outside the `*STEP` blocks (defines an MPC) |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model. |
+
+---
+
+## 1.  Prescribing a displacement – the **right** way  
+
+### a) Global (permanent) boundary condition  
+
+Place the `*BOUNDARY` line **outside** any `*STEP`.  
+The condition will be active for **all** steps of the analysis.
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES          ; recommended: use a node set
+105, 3, 3, 0.005                    ; node 105, DOF 3 (Z), +5 mm
+```
+
+or, without a node set:
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+| Column | Meaning |
+|--------|---------|
+| node (or node‑set name) | the node that receives the BC |
+| first‑DOF | 1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ |
+| last‑DOF | same as first if only one DOF |
+| value | prescribed displacement (positive = + direction) |
+
+### b) Step‑specific displacement  
+
+If the displacement should be applied **only** during a particular step, put it inside that step. Inside a step the keyword is called `*DISPLACEMENT`; it is just a synonym for `*BOUNDARY`.
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both the global `*BOUNDARY` and the step‑specific `*DISPLACEMENT` give the same numerical result; the only difference is the **time span** of the condition (permanent vs. step‑limited).
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` **does not** prescribe a displacement. It creates a **linear relationship** (a multi‑point constraint, MPC) among several degrees of freedom. Use it only when you need to:
+
+* **Tie two (or more) nodes together** – e.g. enforce `U3(105) = U3(129)`.
+* **Impose a linear combination** of DOFs – e.g. `U1 + 2·U2 = constant`.
+
+### Example – tie two nodes in the Z‑direction
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** prescribe a 5 mm offset
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Important:** Never apply a `*BOUNDARY` (or `*DISPLACEMENT`) to any DOF that already appears in an `*EQUATION`. Doing so over‑constrains the model and typically produces a “singular matrix” error.
+
+---
+
+## 3.  How to fix the situation you described  
+
+You tried to prescribe a displacement with `*EQUATION`, which is the wrong keyword for that purpose. Follow these steps:
+
+1. **Delete** the `*EQUATION` block that involves node 105 (unless you truly need a multi‑point constraint).  
+2. **Add** a proper displacement prescription:
+
+   *Permanent (global) BC*  
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; +5 mm in Z at node 105 for the whole analysis
+   ```
+
+   *or, if the displacement should act only during a particular step*  
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has **one** correctly‑prescribed displacement on node 105 and **no conflicting constraints**, so the solver will not encounter a singular‑matrix problem.
+
+---
+
+### TL;DR
+
+| Goal | Keyword | Placement |
+|------|---------|-----------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for permanent BC; inside a `*STEP` for step‑specific BC |
+| Tie two or more DOFs, or impose a linear relation | `*EQUATION` (MPC) | Outside steps – defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model. |
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+
+=== 2026-04-18 00:01:09 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword | Where it belongs in the input file |
+|--------------------|----------------|-----------------------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for a permanent BC; inside a `*STEP` for a step‑specific BC |
+| Tie two or more DOFs together, or impose a linear relation | `*EQUATION` (multi‑point constraint) | Outside the `*STEP` blocks – it defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model and leads to a singular‑matrix error. |
+
+Below is a step‑by‑step guide that shows how to apply a displacement correctly and why `*EQUATION` is not the right tool for this job.
+
+---------------------------------------------------------------------
+
+## 1.  Prescribing a displacement – the **right** way  
+
+### a) Global (permanent) boundary condition  
+
+Place the `*BOUNDARY` line **outside** any `*STEP`.  
+The condition will be active for **all** steps of the analysis.
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES          ; recommended: use a node set
+105, 3, 3, 0.005                    ; node 105, DOF 3 (Z), +5 mm
+```
+
+or, without a node set:
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+| Column | Meaning |
+|--------|---------|
+| node (or node‑set name) | the node that receives the BC |
+| first‑DOF | 1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ |
+| last‑DOF | same as first if only one DOF |
+| value | prescribed displacement (positive = + direction of the axis) |
+
+### b) Step‑specific displacement  
+
+If the displacement should be applied **only** during a particular step, put it inside that step. Inside a step the keyword is called `*DISPLACEMENT`; it is just a synonym for `*BOUNDARY`.
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both the global `*BOUNDARY` and the step‑specific `*DISPLACEMENT` give the same numerical result; the only difference is the **time span** of the condition (permanent vs. step‑limited).
+
+---------------------------------------------------------------------
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` **does not** prescribe a displacement. It creates a **linear relationship** (a multi‑point constraint, MPC) among several degrees of freedom. Use it only when you need to:
+
+* **Tie two (or more) nodes together** – e.g. enforce `U3(105) = U3(129)`.
+* **Impose a linear combination** of DOFs – e.g. `U1 + 2·U2 = constant`.
+
+### Example – tie two nodes in the Z‑direction
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** prescribe a 5 mm offset
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Important:** Never apply a `*BOUNDARY` (or `*DISPLACEMENT`) to any DOF that already appears in an `*EQUATION`. Doing so over‑constrains the model and typically produces a “singular matrix” error.
+
+---------------------------------------------------------------------
+
+## 3.  How to fix the situation you described  
+
+You tried to prescribe a displacement with `*EQUATION`, which is the wrong keyword for that purpose. Follow these steps:
+
+1. **Delete** the `*EQUATION` block that involves node 105 (unless you truly need a multi‑point constraint).  
+2. **Add** a proper displacement prescription:
+
+   *Permanent (global) BC*
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; +5 mm in Z at node 105 for the whole analysis
+   ```
+
+   *or, if the displacement should act only during a particular step*
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has **one** correctly‑prescribed displacement on node 105 and **no conflicting constraints**, so the solver will not encounter a singular‑matrix problem.
+
+---------------------------------------------------------------------
+
+### TL;DR
+
+| Goal | Keyword | Placement |
+|------|---------|-----------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for permanent BC; inside a `*STEP` for step‑specific BC |
+| Tie two or more DOFs, or impose a linear relation | `*EQUATION` (MPC) | Outside steps – defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model. |
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+A: **Short answer**
+
+| What you want to do | Abaqus keyword | Where it belongs in the input file |
+|---------------------|----------------|------------------------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for a permanent BC; inside a `*STEP` for a step‑specific BC |
+| Tie two or more DOFs together, or impose a linear relation | `*EQUATION` (multi‑point constraint) | Outside all `*STEP` blocks – it defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model and produces a singular‑matrix error. |
+
+---
+
+## 1.  Prescribing a displacement – the **right** way  
+
+### a) Global (permanent) displacement  
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES          ; use a node set if possible
+105, 3, 3, 0.005                    ; node 105, DOF 3 (Z), +5 mm
+```
+
+*or, without a node set*
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+| Column | Meaning |
+|--------|---------|
+| node (or node‑set name) | node that receives the BC |
+| first‑DOF | 1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ |
+| last‑DOF | same as first if only one DOF |
+| value | prescribed displacement (positive = + direction of the axis) |
+
+### b) Step‑specific displacement  
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+`*DISPLACEMENT` is just a synonym for `*BOUNDARY`; the only difference is that the BC is active **only** during the step in which it appears.
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` does **not** prescribe a value. It creates a **linear relationship** (MPC) among several DOFs.
+
+### Example – tie two nodes in the Z‑direction  
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** impose a 5 mm offset  
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Important:** Do **not** apply a `*BOUNDARY`/`*DISPLACEMENT` to any DOF that already appears in an `*EQUATION`. That creates an over‑constrained system and typically yields a “singular matrix” error.
+
+---
+
+## 3.  How to fix the situation you described  
+
+You tried to prescribe a displacement with `*EQUATION`. Replace that with the proper keyword:
+
+1. **Delete** the offending `*EQUATION` block (unless you truly need a multi‑point constraint).  
+2. **Add** a correct displacement BC:
+
+   *Permanent (global) BC*  
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; +5 mm in Z at node 105 for the whole analysis
+   ```
+
+   *or, step‑specific*  
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has **one** correctly‑prescribed displacement on node 105 and **no conflicting constraints**, so the solver will not encounter a singular‑matrix problem.
+
+---
+
+### TL;DR
+
+| Goal | Keyword | Placement |
+|------|---------|-----------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for permanent BC; inside a `*STEP` for step‑specific BC |
+| Tie two or more DOFs, or impose a linear relation | `*EQUATION` (MPC) | Outside all `*STEP` blocks – defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model. |
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+
+=== 2026-04-18 00:01:48 ===
+Q: **Short answer**
+
+| What you want to do | Abaqus keyword | Where it belongs in the input file |
+|---------------------|----------------|-----------------------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for a permanent BC; inside a `*STEP` for a step‑specific BC |
+| Tie two or more DOFs together, or impose a linear relation | `*EQUATION` (multi‑point constraint) | Outside all `*STEP` blocks – it defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model and produces a singular‑matrix error. |
+
+---
+
+## 1.  Prescribing a displacement – the **right** way  
+
+### a) Global (permanent) displacement  
+
+Place the `*BOUNDARY` line **outside** any `*STEP`.  
+The condition will be active for **all** steps of the analysis.
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES          ; use a node set if possible
+105, 3, 3, 0.005                    ; node 105, DOF 3 (Z), +5 mm
+```
+
+*or, without a node set*
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+| Column | Meaning |
+|--------|---------|
+| node (or node‑set name) | node that receives the BC |
+| first‑DOF | 1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ |
+| last‑DOF | same as first if only one DOF |
+| value | prescribed displacement (positive = + direction of the axis) |
+
+### b) Step‑specific displacement  
+
+If the displacement should be applied **only** during a particular step, put it inside that step. Inside a step the keyword is called `*DISPLACEMENT`; it is just a synonym for `*BOUNDARY`.
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+Both the global `*BOUNDARY` and the step‑specific `*DISPLACEMENT` give the same numerical result; the only difference is the **time span** of the condition (permanent vs. step‑limited).
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` **does not** prescribe a value. It creates a **linear relationship** (a multi‑point constraint, MPC) among several degrees of freedom. Use it only when you need to:
+
+* **Tie two (or more) nodes together** – e.g. enforce `U3(105) = U3(129)`.
+* **Impose a linear combination** of DOFs – e.g. `U1 + 2·U2 = constant`.
+
+### Example – tie two nodes in the Z‑direction
+
+```abaqus
+*EQUATION
+2                     ; number of terms in the equation
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** impose a 5 mm offset
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Important:** Do **not** apply a `*BOUNDARY`/`*DISPLACEMENT` to any DOF that already appears in an `*EQUATION`. That creates an over‑constrained system and typically yields a “singular matrix” error.
+
+---
+
+## 3.  How to fix the situation you described  
+
+You tried to prescribe a displacement with `*EQUATION`. Replace that with the proper keyword:
+
+1. **Delete** the offending `*EQUATION` block (unless you truly need a multi‑point constraint).  
+2. **Add** a correct displacement BC:
+
+   *Permanent (global) BC*
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; +5 mm in Z at node 105 for the whole analysis
+   ```
+
+   *or, step‑specific*
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has **one** correctly‑prescribed displacement on node 105 and **no conflicting constraints**, so the solver will not encounter a singular‑matrix problem.
+
+---
+
+### TL;DR
+
+| Goal | Keyword | Placement |
+|------|---------|-----------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for permanent BC; inside a `*STEP` for step‑specific BC |
+| Tie two or more DOFs, or impose a linear relation | `*EQUATION` (MPC) | Outside all `*STEP` blocks – defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model. |
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+A: **Short answer**
+
+| What you want to do | Abaqus keyword | Where it belongs in the input file |
+|---------------------|----------------|------------------------------------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for a permanent BC; inside a `*STEP` for a step‑specific BC |
+| Tie two or more DOFs together, or impose a linear relation | `*EQUATION` (multi‑point constraint) | Outside all `*STEP` blocks – it defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model and produces a singular‑matrix error. |
+
+---
+
+## 1.  Prescribing a displacement – the **right** way  
+
+### a) Global (permanent) displacement  
+
+```abaqus
+*BOUNDARY, NSET=DISP_NODES      ; optional node set
+105, 3, 3, 0.005                ; node 105, DOF 3 (Z), +5 mm
+```
+
+or, without a node set  
+
+```abaqus
+*BOUNDARY
+105, 3, 3, 0.005
+```
+
+| Column | Meaning |
+|--------|---------|
+| node (or node‑set) | node that receives the BC |
+| first‑DOF | 1‑X, 2‑Y, 3‑Z, 4‑RX, 5‑RY, 6‑RZ |
+| last‑DOF | same as first if only one DOF |
+| value | prescribed displacement (positive = + direction of the axis) |
+
+The condition is active for **all** steps.
+
+### b) Step‑specific displacement  
+
+```abaqus
+*STEP, NAME=STEP-1, NLGEOM=YES
+*STATIC
+*DISPLACEMENT
+105, 3, 3, 0.005
+*END STEP
+```
+
+`*DISPLACEMENT` is just a synonym for `*BOUNDARY`; the only difference is that the BC exists **only** during the step in which it is defined.
+
+---
+
+## 2.  When you really need `*EQUATION`
+
+`*EQUATION` does **not** prescribe a value. It creates a **linear relationship** (multi‑point constraint, MPC) among several DOFs. Use it when you need to:
+
+* **Tie two (or more) nodes together** – e.g. enforce `U3(105) = U3(129)`.
+* **Impose a linear combination** of DOFs – e.g. `U1 + 2·U2 = constant`.
+
+### Example – tie two nodes in the Z‑direction  
+
+```abaqus
+*EQUATION
+2                     ; number of terms
+105, 3,  1.0,         ; +1·U3(105)
+129, 3, -1.0          ; -1·U3(129)  →  U3(105) – U3(129) = 0
+```
+
+### Example – tie them **and** impose a 5 mm offset  
+
+```abaqus
+*EQUATION
+2
+105, 3,  1.0,
+129, 3, -1.0, 0.005   ; U3(105) – U3(129) = 0.005
+```
+
+> **Important:** Do **not** apply a `*BOUNDARY`/`*DISPLACEMENT` to any DOF that already appears in an `*EQUATION`. That creates an over‑constrained system and typically yields a “singular matrix” error.
+
+---
+
+## 3.  How to fix the situation you described  
+
+You tried to prescribe a displacement with `*EQUATION`. Replace that with the proper keyword:
+
+1. **Delete** the offending `*EQUATION` block (unless you truly need a multi‑point constraint).  
+2. **Add** a correct displacement BC:
+
+   *Permanent (global) BC*  
+
+   ```abaqus
+   *BOUNDARY
+   105, 3, 3, 0.005   ; +5 mm in Z at node 105 for the whole analysis
+   ```
+
+   *or, step‑specific*  
+
+   ```abaqus
+   *STEP, NAME=STEP-1, NLGEOM=YES
+   *STATIC
+   *DISPLACEMENT
+   105, 3, 3, 0.005
+   *END STEP
+   ```
+
+3. Run the analysis. The model now has **one** correctly‑prescribed displacement on node 105 and **no conflicting constraints**, so the solver will not encounter a singular‑matrix problem.
+
+---
+
+### TL;DR
+
+| Goal | Keyword | Placement |
+|------|---------|-----------|
+| Prescribe a single displacement (or fix a DOF) | `*BOUNDARY` (global) **or** `*DISPLACEMENT` (inside a step) | Outside any `*STEP` for permanent BC; inside a `*STEP` for step‑specific BC |
+| Tie two or more DOFs, or impose a linear relation | `*EQUATION` (MPC) | Outside all `*STEP` blocks – defines a relationship, **not** a prescribed value |
+| **Never** combine `*BOUNDARY`/`*DISPLACEMENT` with an `*EQUATION` on the same DOF – it over‑constrains the model. |
+
+Apply the appropriate keyword as shown above and the model will behave as intended.
+

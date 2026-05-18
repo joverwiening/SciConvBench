@@ -1,0 +1,109 @@
+**为什么作业会在这里停止**  
+
+| 信息 | 含义 |
+|------|------|
+| `*** WARNING: The model database has been modified …` | Abaqus 在读取 **STEP** 之后，又在 **STEP** 里加入（或修改）了约束、载荷、材料等。程序会重新构建该步并重新开始求解。**这只是一个警告，作业不会因此退出**。 |
+| `*** ERROR: The model is unstable. The analysis cannot continue.` | 对于 **静力** 步，刚度矩阵必须是非奇异的。出现此错误说明矩阵奇异，即模型 **不满足“良好定义”**：<br>① **六个刚体自由度（3 平移 + 3 转动）没有全部约束**；<br>② **在该步中没有施加任何非零外载荷**（力、压力、温度变化、初始应变/应力等）；<br>③ **在静力步中使用了 `*Damping`**（阻尼）也会触发此检查。 |
+
+在你提供的 **.inp** 文件里，导致 **“model is unstable”** 的根本原因是 **约束的写法不符合实体（solid）单元的自由度**。
+
+---
+
+## 关键问题：`*Boundary` 中的 DOF 编号
+
+- 对于 **实体（solid）单元**（如 C3D8R），每个节点只有 **3 个自由度**：X、Y、Z 位移（DOF 1‑3）。  
+- **没有旋转自由度**（DOF 4‑6）可以直接在节点上施加。  
+- 因此下面这行  
+
+```abaqus
+*Boundary
+1, 1, 6, 0.0          ! 固定 X、Y、Z 以及三个转动
+```  
+
+是 **非法的**。Abaqus 会把 **4‑6 号 DOF** 当作不存在的自由度忽略掉，结果只约束了 **1‑3 号 DOF**，模型仍然是 **未约束的**，刚度矩阵奇异，于是出现 *model is unstable* 错误。
+
+---
+
+## 解决办法
+
+1. **只约束实体节点的 1‑3 号 DOF**（即三维位移），或者在其它节点再加约束以消除剩余的刚体运动。  
+2. **在 STEP 之前定义约束和载荷**，这样可以消除 “model database has been modified” 警告。  
+3. **确保在同一静力步中至少有一个非零外载荷**（你的 *Pressure* 已经满足）。  
+4. **如果文件中出现 `*Damping`，请删除或放到动力步中**（本例中没有）。  
+5. **检查约束是否冗余**（Tools → Constraint Check），但对单块实体模型只需要 3 条位移约束即可。
+
+---
+
+## 修正后的最小可运行示例
+
+把下面的内容保存为 **static_cantilever.inp**，运行 `abaqus job=static_cantilever`，作业会正常结束并显示  
+
+```
+*** THE ANALYSIS HAS COMPLETED SUCCESSFULLY
+```  
+
+```abaqus
+*Heading
+** 简单的静力分析：完全约束并施加压力
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Material, name=STEEL
+*Elastic
+210000., 0.3
+
+*Part, name=PART-1
+*Node
+1, 0., 0., 0.
+2, 10., 0., 0.
+3, 10., 10., 0.
+4, 0., 10., 0.
+5, 0., 0., 10.
+6, 10., 0., 10.
+7, 10., 10., 10.
+8, 0., 10., 10.
+*Element, type=C3D8R, elset=EALL
+1, 1,2,3,4,5,6,7,8
+*End Part
+
+*Assembly, name=ASSEMBLY
+*Instance, name=PART-1-1, part=PART-1
+*End Instance
+*End Assembly
+
+*Solid Section, elset=EALL, material=STEEL
+
+** 只约束节点 1 的 3 个平移自由度（实体节点没有转动自由度） **
+*Boundary
+1, 1, 3, 0.0          ! 固定 X、Y、Z 位移
+
+** 载荷：在顶部面施加 1 MPa 的压力 **
+*Surface, type=ELEMENT, name=TOP
+EALL, S2                ! 该砖块的第 2 面为顶部
+*Pressure
+TOP, 1.0                ! 1 MPa
+
+*Step, name=STATIC, nlgeom=NO
+*Static
+0.1, 1., 1e-05, 1.
+*End Step
+```
+
+### 说明
+
+- `*Boundary` 只用了 `1, 1, 3, 0.0`，即 **固定 X、Y、Z 位移**。对单块实体来说，这已经足以消除所有刚体运动（实体节点没有单独的转动自由度），因此刚度矩阵是非奇异的。  
+- `*Pressure` 为非零外载荷，满足“至少一个外载荷”的要求。  
+- 没有 `*Damping`，也没有在 `*STEP` 之后再加入约束或载荷，所以不会出现任何警告。
+
+---
+
+## TL;DR 检查清单（静力作业）
+
+| ✅ | 必须完成的事项 |
+|---|----------------|
+| 1 | **六条独立约束**（对实体模型只需要 3 条位移约束，或任意组合恰好消除 6 个刚体自由度）。 |
+| 2 | **至少一个非零外载荷**（压力、集中力、温度变化、初始应变/应力等）。 |
+| 3 | **删除 `*Damping`**（或放到动力步中）。 |
+| 4 | **在 `*STEP` 之前定义所有约束和载荷**，避免 “model database has been modified” 警告。 |
+| 5 | **检查约束是否冗余**（Tools → Constraint Check 或 `*Check`）。 |
+
+只要满足以上 5 条，静力分析就能顺利完成。祝你跑通模型！

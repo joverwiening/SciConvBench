@@ -1,0 +1,130 @@
+Solve the Fokker-Planck (Ornstein-Uhlenbeck) PDE numerically using the exact specifications below.
+
+PDE is p_t = d/dx(1.0 * x * p) + 0.1 * p_xx, equivalently p_t = -d/dx(J) where J = -(gamma * x * p + D * p_x).
+
+Parameters are gamma = 1.0, D = 0.1, L = 3.0, sigma0 = 0.2.
+
+Use a cell-centered finite-volume grid with Nx = 2000 uniform cells on [-L, L].
+dx = 2 * L / Nx = 6.0 / 2000 = 0.003.
+Cell centers are x_i = -L + (i + 0.5) * dx for i = 0, 1, ..., Nx-1.
+
+Initial condition: compute q_i = exp(-(x_i - 1)**2 / (2 * sigma0**2)) for each cell center x_i.
+Normalize so that sum(q) * dx = 1, then set p(x, 0) = q_normalized.
+
+Flux at each interior face between cell i and cell i+1 (face located at x_face = -L + (i+1)*dx) is J_{i+1/2} = -(gamma * x_face * p_upwind + D * (p_{i+1} - p_i) / dx).
+For the advective upwind part: if gamma * x_face >= 0 use p_i, else use p_{i+1}.
+Enforce J = 0 at the left boundary face (i=0 left face) and at the right boundary face (i=Nx right face) to implement reflecting zero-flux boundary conditions.
+
+Time integration uses Forward Euler with dt = 1e-4 and Nt = 10000 steps, so T = 1.0 is hit exactly.
+Update each cell as p_i^{n+1} = p_i^n - (dt / dx) * (J_{i+1/2}^n - J_{i-1/2}^n).
+
+At the end of the simulation compute p(x, T=1.0) on the cell-center grid.
+
+Print min(p), max(p), and the discrete L2 norm sqrt(sum(p**2) * dx) at T.
+Print M(0) = sum(p_initial) * dx, M(T) = sum(p_final) * dx, and relative change abs(M(T) - M(0)) / M(0).
+
+Save a file named "solution_agent_other_07_fokker_planck.npz" containing arrays x (1D, length Nx), p (1D, length Nx), and scalar metadata T=1.0, dx=0.003, dt=1e-4.
+
+Save a line plot of p(x, T=1.0) versus x as "solution_agent_other_07_fokker_planck.png" with x on the horizontal axis and p on the vertical axis.
+
+Use Python with numpy for numerics and matplotlib for the plot.
+Use '**' for exponentiation in Python code.
+Treat all trigonometric arguments in radians (no trig appears here, but apply this rule generally).
+
+```python
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+# Parameters
+gamma = 1.0
+D = 0.1
+L = 3.0
+sigma0 = 0.2
+Nx = 2000
+dx = 2.0 * L / Nx
+dt = 1e-4
+Nt = 10000
+T = 1.0
+
+# Cell-centered grid
+x = -L + (np.arange(Nx) + 0.5) * dx  # shape (Nx,)
+
+# Initial condition: normalized Gaussian centered at 1
+q = np.exp(-(x - 1.0)**2 / (2.0 * sigma0**2))
+q = q / (np.sum(q) * dx)
+p = q.copy()
+
+# Face positions: Nx+1 faces, face j is at x_face = -L + j*dx, j=0..Nx
+x_face = -L + np.arange(Nx + 1) * dx  # shape (Nx+1,)
+
+# Print initial mass
+M0 = np.sum(p) * dx
+print(f"M(0) = {M0:.10f}")
+
+# Time integration: Forward Euler
+for n in range(Nt):
+    # Compute fluxes at interior faces j=1..Nx-1
+    # J_{j} = -(gamma * x_face[j] * p_upwind + D * (p[j] - p[j-1]) / dx)
+    # Upwind for advection: if gamma * x_face[j] >= 0, use p[j-1] (left cell), else p[j] (right cell)
+    
+    # Interior faces: indices 1 to Nx-1 (between cell j-1 and cell j)
+    xf_int = x_face[1:Nx]          # shape (Nx-1,)
+    adv_coeff = gamma * xf_int      # shape (Nx-1,)
+    
+    # Upwind selection
+    p_upwind = np.where(adv_coeff >= 0.0, p[0:Nx-1], p[1:Nx])
+    
+    # Diffusive flux: central difference
+    J_int = -(adv_coeff * p_upwind + D * (p[1:Nx] - p[0:Nx-1]) / dx)  # shape (Nx-1,)
+    
+    # Boundary fluxes: J=0 at both ends (reflecting)
+    J_left = 0.0   # face 0
+    J_right = 0.0  # face Nx
+    
+    # Full flux array: shape (Nx+1,)
+    J = np.empty(Nx + 1)
+    J[0] = J_left
+    J[1:Nx] = J_int
+    J[Nx] = J_right
+    
+    # Update: p_i^{n+1} = p_i^n - (dt/dx) * (J[i+1] - J[i])
+    p = p - (dt / dx) * (J[1:Nx+1] - J[0:Nx])
+
+# Diagnostics at T
+MT = np.sum(p) * dx
+rel_change = abs(MT - M0) / abs(M0)
+p_min = np.min(p)
+p_max = np.max(p)
+L2 = np.sqrt(np.sum(p**2) * dx)
+
+print(f"min(p)       = {p_min:.10e}")
+print(f"max(p)       = {p_max:.10e}")
+print(f"L2 norm      = {L2:.10e}")
+print(f"M(T)         = {MT:.10f}")
+print(f"Relative change in mass = {rel_change:.6e}")
+
+# Save npz
+np.savez(
+    "solution_agent_other_07_fokker_planck.npz",
+    x=x,
+    p=p,
+    T=np.float64(T),
+    dx=np.float64(dx),
+    dt=np.float64(dt)
+)
+print("Saved solution_agent_other_07_fokker_planck.npz")
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(x, p, linewidth=1.5, color='steelblue')
+ax.set_xlabel("x")
+ax.set_ylabel("p(x, T=1.0)")
+ax.set_title("Fokker-Planck / Ornstein-Uhlenbeck solution at T=1.0")
+ax.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
+plt.savefig("solution_agent_other_07_fokker_planck.png", dpi=150)
+plt.close()
+print("Saved solution_agent_other_07_fokker_planck.png")
+```

@@ -1,0 +1,46 @@
+Looking at this specification, I need to identify what's being asked:
+
+The user wants a CalculiX input file named `beampfix.inp` that:
+1. Uses C3D8 elements (not C3D20R as in the reference input deck)
+2. Solves in a single static load step (not two steps)
+3. Has the same geometry/mesh topology as described
+
+The reference input deck uses C3D20R (20-node brick with reduced integration) with 261 nodes and 32 elements. The instruction says to use C3D8 (8-node brick) elements and a single static step.
+
+The key question is: with C3D8 elements, the mesh connectivity changes significantly. C3D20R elements use 20 nodes each (corner + midside nodes). C3D8 elements only use 8 corner nodes per element.
+
+Looking at the reference mesh: it's a 1x1x8 cantilever beam. The C3D20R mesh has 32 elements arranged in a 2x2x8 pattern (4 elements per cross-section, 8 layers along Z). The corner nodes of the C3D20R elements are the same corner nodes that would be used for C3D8 elements.
+
+For C3D8, I need only the 8 corner nodes per element. Looking at the C3D20R connectivity, nodes 1-8 are the corners of the full beam, and the mesh is 2x2 in cross-section × 8 along Z.
+
+The load in step 1 is 2 units in Y direction on the LOAD node set (nodes 5,6,7,8,22,25,28,31,100). For a single step, I'll use the step 1 load (2 units on LOAD set in Y direction), as the description says "single static load step with the load pattern held fixed throughout."
+
+Let me reconstruct the C3D8 mesh. The beam is 1×1×8. With a 2×2 cross-section mesh and 8 layers along Z (0 to 8, step 0.5... wait, looking at the nodes: Z goes from 0 to 8 in steps of 0.5 for edge nodes, giving 16 layers? No - the C3D20R elements span 1 unit in Z each (midside nodes at 0.5 steps). So 8 elements along Z, each 1 unit tall.
+
+For C3D8 with 2×2 cross-section × 8 along Z = 32 elements, I need a grid of nodes:
+- X: 0, 0.5, 1 (but for C3D8 just 0 and 1 in X... wait, 2×2 means 3×3 in cross-section)
+
+Actually 2×2 elements in cross-section means X: 0, 0.5, 1 and Y: 0, 0.5, 1 → 9 nodes per layer × 9 layers (Z: 0,1,2,...,8) = 81 nodes total, 32 elements.
+
+
+
+The job name is beampfix and the input file must be named beampfix.inp.
+The model is a cantilever beam with geometry 1 unit × 1 unit cross-section and 8 units long (Z-axis).
+Use C3D8 (8-node linear brick) elements for the discretization.
+Create a structured mesh with 2 elements in X, 2 elements in Y, and 8 elements in Z, giving 32 elements total.
+Node numbering: use a 3×3×9 grid (X: 0, 0.5, 1; Y: 0, 0.5, 1; Z: 0, 1, 2, 3, 4, 5, 6, 7, 8), yielding 81 nodes numbered 1 through 81.
+Number nodes layer by layer from Z=0 to Z=8, with the 9 nodes per layer ordered as: (0,0), (0.5,0), (1,0), (0,0.5), (0.5,0.5), (1,0.5), (0,1), (0.5,1), (1,1) in (X,Y).
+Define 32 C3D8 elements in element set Eall, each connecting 8 corner nodes of a unit cube cell.
+Create a node set named FIX containing all nodes at Z=0 (nodes 1 through 9, the first layer).
+Apply boundary conditions to FIX constraining degrees of freedom 1, 2, and 3 (all translations fixed).
+Create a node set named Nall using GENERATE from node 1 to node 81.
+Define material named EL with elastic modulus 210000.0 and Poisson's ratio 0.3.
+Assign material EL to element set Eall via a SOLID SECTION card.
+Create a node set named LOAD containing the nodes at Z=8 (the free end, nodes 73 through 81, the last layer).
+Define a single STEP with STATIC analysis.
+Apply a concentrated load of 2.0 units in the Y direction (DOF 2) to node set LOAD.
+Request NODE PRINT for displacement U on node set Nall.
+Request EL PRINT for stress S on element set Eall.
+Close the step with END STEP.
+The heading should read: Model: beam     Date: 10-Mar-1998.
+Write the results.json file with solver set to calculix, case_id set to beampfix, status set to success or error based on whether beampfix.sta contains JOB COMPLETED, ccx_version taken from ccx -v output, artifacts as an empty list, and notes recording the exact ccx command used and any error information if the run failed.

@@ -1,0 +1,221 @@
+Set up a transient OpenFOAM case for turbulent flow over a 2‑D cylinder in a channel using pimpleFoam with a hybrid LES‑RAS turbulence model.
+
+Assume the following geometry dimensions based on common practice for cylinder‑in‑channel studies:
+- Cylinder diameter D = 0.1 m.
+- Channel width (horizontal distance between side walls) = 10 D = 1.0 m.
+- Channel height (vertical distance between top and bottom walls) = 5 D = 0.5 m.
+- Channel length (distance from inlet to outlet) = 20 D = 2.0 m.
+
+Use standard incompressible air properties at 298 K:
+- Density ρ = 1.225 kg m⁻³.
+- Kinematic viscosity ν = 1.5 × 10⁻⁵ m² s⁻¹ (dynamic viscosity μ = 1.84 × 10⁻⁵ Pa·s).
+
+Boundary conditions:
+- Inlet (patch “inlet”): fixedValue uniform (10 0 0) m s⁻¹ for velocity, fixedValue uniform (ρ) for pressure, turbulence quantities set to zeroGradient.
+- Outlet (patch “outlet”): zeroGradient for velocity, fixedValue uniform 0 for pressure, turbulence quantities zeroGradient.
+- Cylinder surface and channel walls (patches “cylinder”, “topWall”, “bottomWall”, “sideWalls”): noSlip (fixedValue uniform (0 0 0)) for velocity, zeroGradient for pressure, turbulence quantities zeroGradient.
+
+Create the following key dictionaries:
+
+**system/controlDict**
+```
+application     pimpleFoam;
+startTime       0;
+stopTime        5;
+deltaT          0.001;
+writeControl    timeStep;
+writeInterval   100;
+purgeWrite      0;
+adjustTimeStep  yes;
+maxCo           0.5;
+maxDeltaT       0.01;
+```
+
+**system/fvSchemes**
+```
+ddtSchemes
+{
+    default         Euler;
+}
+gradSchemes
+{
+    default         Gauss linear;
+}
+divSchemes
+{
+    div(phi,U)      Gauss linearUpwindV grad(U);
+    div(phi,k)      Gauss linearUpwindV;
+    div(phi,omega)  Gauss linearUpwindV;
+    div((nuEff*dev(T(grad(U))))) Gauss linear;
+}
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+interpolationSchemes
+{
+    default         linear;
+}
+snGradSchemes
+{
+    default         limited;
+}
+```
+
+**system/fvSolution**
+```
+solvers
+{
+    p
+    {
+        solver          GAMG;
+        tolerance       1e-6;
+        relTol          0.1;
+    }
+    U
+    {
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        tolerance       1e-5;
+        relTol          0.1;
+    }
+    k omega
+    {
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        tolerance       1e-5;
+        relTol          0.1;
+    }
+}
+PIMPLE
+{
+    nCorrectors     2;
+    nNonOrthogonalCorrectors 0;
+    momentumPredictor yes;
+    nOuterCorrectors 1;
+    residualControl
+    {
+        U               1e-5;
+        p               1e-5;
+        k               1e-5;
+        omega           1e-5;
+    }
+}
+```
+
+**constant/transportProperties**
+```
+transportModel  Newtonian;
+nu              [0 2 -1 0 0 0 0] 1.5e-5;
+```
+
+**constant/turbulenceProperties**
+```
+simulationType LES;
+
+LES
+{
+    LESModel        Smagorinsky;
+    delta           cubeRootVol;
+    SmagorinskyCoeffs
+    {
+        C_s            0.1;
+    }
+}
+
+RAS
+{
+    RASModel        kOmegaSST;
+    turbulence      on;
+    printCoeffs     on;
+}
+```
+
+**0/U**
+```
+dimensions      [0 1 -1 0 0 0 0];
+internalField   uniform (0 0 0);
+boundaryField
+{
+    inlet
+    {
+        type            fixedValue;
+        value           uniform (10 0 0);
+    }
+    outlet
+    {
+        type            zeroGradient;
+    }
+    cylinder
+    {
+        type            fixedValue;
+        value           uniform (0 0 0);
+    }
+    topWall
+    {
+        type            fixedValue;
+        value           uniform (0 0 0);
+    }
+    bottomWall
+    {
+        type            fixedValue;
+        value           uniform (0 0 0);
+    }
+    sideWalls
+    {
+        type            fixedValue;
+        value           uniform (0 0 0);
+    }
+}
+```
+
+**0/p**
+```
+dimensions      [0 2 -2 0 0 0 0];
+internalField   uniform 0;
+boundaryField
+{
+    inlet
+    {
+        type            zeroGradient;
+    }
+    outlet
+    {
+        type            fixedValue;
+        value           uniform 0;
+    }
+    cylinder
+    {
+        type            zeroGradient;
+    }
+    topWall
+    {
+        type            zeroGradient;
+    }
+    bottomWall
+    {
+        type            zeroGradient;
+    }
+    sideWalls
+    {
+        type            zeroGradient;
+    }
+}
+```
+
+**0/k** and **0/omega** (RAS fields) are initialized with small uniform values (e.g., k = 0.01 m² s⁻², omega = 10 s⁻¹) and zeroGradient on all walls, fixedValue on inlet, zeroGradient on outlet.
+
+Mesh generation (blockMesh):
+- Use a structured mesh with refinement around the cylinder.
+- Minimum cell size near the cylinder surface ≈ D/30 = 0.0033 m to resolve the LES filter scale.
+- Gradually coarsen away from the cylinder, keeping the overall cell count manageable (≈ 2–3 million cells for a 2‑D extruded case).
+
+Run the case:
+```
+blockMesh
+snappyHexMesh -overwrite   # if using snappyHexMesh for cylinder refinement
+decomposePar -fileProcessor  # optional for parallel run
+mpirun -np <N> pimpleFoam -parallel
+```
+
+Post‑process with paraFoam or other visualization tools to examine velocity fields, pressure distribution, and turbulence quantities. The hybrid LES‑RAS setup will resolve large eddies with the Smagorinsky LES model while modeling the near‑wall and sub‑grid scales with the k‑omega SST RANS model.

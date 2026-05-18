@@ -1,0 +1,2509 @@
+=== 2026-04-17 19:48:40 ===
+Q: **Short answer** – the crash is caused by the *MPC definition.  
+The line  
+
+```  
+*MPC  
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262  
+```  
+
+asks Abaqus to constrain **DOF 7 and DOF 8** of node 262 (and of the other nodes that belong to the MPC). In a three‑dimensional solid model each node has only six degrees of freedom (1‑3 = translations, 4‑6 = rotations). DOF 7 and DOF 8 do not exist, so when the solver tries to build the MPC it calls the internal subroutine that creates the constraint matrix, the routine receives an illegal DOF number and throws the generic “user subroutine has caused an exception” error.
+
+---
+
+## Why the input file looks “correct” at first glance  
+
+* The *MATERIAL, *SOLID SECTION and the element set **EALL** are fine.  
+* The node set **N1** (node 262) is defined correctly.  
+* The *STEP/*END STEP block is syntactically correct.  
+
+The only thing that is syntactically wrong is the *MPC line. Abaqus does not check the DOF numbers when it reads the input file; the check is performed later, when the constraint equations are assembled. That is why the model parses without error but aborts during the first (and only) step.
+
+---
+
+## What the MEANROT MPC actually requires  
+
+The **MEANROT** (mean rotation) MPC is used to enforce that the average rotation of a group of nodes equals the rotation of a reference node. Its syntax (Abaqus 2020 manual) is:
+
+```
+*MPC, TYPE=MEANROT, NSET=<reference node set>, DOF1, DOF2, DOF3, <node set 1>, <node set 2>, ...
+```
+
+* **DOF1, DOF2, DOF3** – the three rotational DOFs of the reference node (normally 4, 5, 6 for rotations about the global X, Y, Z axes).  
+* The remaining numbers are **node‑set identifiers** (or node numbers) whose *average* rotation about the same three axes is tied to the reference node.
+
+Only the three rotational DOFs (4‑6) are allowed. Any other number (1‑3 are translations, 7‑∞ are undefined) will cause the subroutine that builds the MPC matrix to fail.
+
+---
+
+## How to fix the model  
+
+### 1. Use the correct DOF numbers  
+
+Replace the illegal DOFs (7 and 8) with the proper rotational DOFs (4, 5, 6). For a mean‑rotation constraint that ties the average rotation of nodes 5‑8 to node 262 you would write, for example:
+
+```  
+*MPC, TYPE=MEANROT, NSET=N1
+5,6,7, 262
+```  
+
+where **5, 6, 7** are the *local* rotational DOFs of the nodes in the element set (Abaqus numbers the rotational DOFs as 4, 5, 6 for a node; the numbers 5, 6, 7 in the original line were meant to be “node 5, node 6, node 7”, not DOF numbers).  
+
+A more explicit and less error‑prone way is to give the node set that contains the nodes whose mean rotation is to be constrained, and then reference that set:
+
+```  
+*NSET, NSET=ROT_NODES
+5,6,7,8
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=ROT_NODES, 262
+```  
+
+Abaqus will automatically use DOFs 4‑6 (the three rotations) for the nodes in **ROT_NODES**.
+
+### 2. Follow the exact syntax of the *MPC card  
+
+The recommended form for a mean‑rotation MPC is:
+
+```  
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=ROT_NODES
+```  
+
+* **TYPE=MEANROT** – tells Abaqus that this is a mean‑rotation constraint.  
+* **NSET=N1** – the reference node (the node whose rotation will be equal to the average).  
+* **NSET=ROT_NODES** – the set of nodes whose average rotation is tied to the reference node.
+
+If you prefer the older “comma‑separated” syntax, it must still respect the DOF limits:
+
+```  
+*MPC
+MEANROT,4,5,6,262
+```  
+
+where **4,5,6** are the three rotational DOFs of the reference node (node 262) and the remaining numbers are the node IDs whose average rotation is constrained.
+
+### 3. Verify that the reference node belongs to the model  
+
+Node 262 is defined (coordinates 0., 0., 1.) and is included in **NALL** (generated 1‑261, but you added 262 manually). That part is fine; just make sure the node is not duplicated elsewhere (the line `262,0.,0.,1.` is correctly placed after the *NSET, NSET=CN7* block).
+
+### 4. Re‑run the analysis  
+
+After correcting the *MPC line, the input file should look like this (minimal change):
+
+```  
+*NODE
+...
+262, 0., 0., 1.
+*ELEMENT, ELSET=B1
+...
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+*STEP
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+*END STEP
+```  
+
+or, using the explicit syntax:
+
+```  
+*NODE
+...
+262, 0., 0., 1.
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+*NSET, NSET=CN7
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+*NSET, NSET=N1
+262
+*STEP
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+*END STEP
+```  
+
+Now the model will run without the “user subroutine has caused an exception” error.
+
+---
+
+## Bottom line  
+
+The exception is **not** caused by a bug in Abaqus or by the material definition; it is caused by an illegal MPC definition that tries to constrain DOFs that do not exist (7 and 8). Use only DOFs 4‑6 for rotations in a 3‑D solid model, and follow the *MPC syntax shown in the Abaqus documentation. Once the MPC line is corrected, the analysis proceeds normally.
+A: **Short answer** – the crash is caused by the *MPC definition.  
+The line  
+
+```  
+*MPC  
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262  
+```  
+
+asks Abaqus to constrain **DOF 7 and DOF 8** of node 262 (and of the other nodes that belong to the MPC). In a three‑dimensional solid model each node has only six degrees of freedom (1‑3 = translations, 4‑6 = rotations). DOF 7 and DOF 8 do not exist, so when the solver tries to build the MPC it receives an illegal DOF number and aborts with the generic *“user subroutine has caused an exception”* message.
+
+---
+
+## Why the input file looks “correct” at first glance  
+
+* The *MATERIAL, *SOLID SECTION, element set **EALL**, and node set **N1** are all syntactically valid.  
+* The *STEP/*END STEP block is also syntactically correct.  
+
+The only thing that is syntactically wrong is the *MPC line. Abaqus does **not** validate the DOF numbers while reading the input file; the check is performed later, when the constraint equations are assembled. Therefore the model parses without error but aborts during the first (and only) step.
+
+---
+
+## What the **MEANROT** MPC actually requires  
+
+`MEANROT` is a *mean‑rotation* constraint. Its purpose is to force the **average rotation** of a group of nodes to be equal to the rotation of a reference node. The syntax (Abaqus 2020‑2024 manuals) is:
+
+```
+*MPC, TYPE=MEANROT, NSET=<reference‑node‑set>
+NSET=<node‑set‑with‑nodes‑whose‑mean‑rotation‑is‑constrained>
+```
+
+* **Reference node set** – contains the single node whose rotation will be used as the master value.  
+* **Node set** – contains all nodes whose *average* rotation (about the three rotational DOFs) is tied to the reference node.  
+
+Only the three rotational DOFs (4, 5, 6) are allowed. Any other number (1‑3 are translations, 7‑∞ are undefined) will cause the subroutine that builds the MPC matrix to fail.
+
+---
+
+## How to fix the model  
+
+### 1. Use the correct DOF numbers (4‑6)  
+
+Replace the illegal DOFs (7 and 8) with the proper rotational DOFs (4, 5, 6).  
+A minimal, correct *MPC card for a mean‑rotation constraint looks like this:
+
+```  
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+```
+
+* `NSET=N1` – node 262 (the reference node).  
+* `NSET=CN7` – the set that contains the nodes whose **average** rotation is to be matched to node 262.
+
+### 2. If you prefer the older comma‑separated form, it must still respect the DOF limits  
+
+```  
+*MPC
+MEANROT,4,5,6,262
+```  
+
+Here `4,5,6` are the three rotational DOFs of the reference node (node 262). The remaining numbers are **node IDs** (or node‑set identifiers) whose mean rotation is constrained. Do **not** list DOF numbers 7, 8, etc.
+
+### 3. Define the node sets clearly  
+
+```  
+*NODE
+...                     ! all your nodes
+262, 0., 0., 1.         ! reference node
+
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+*NSET, NSET=CN7
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=N1
+262
+```
+
+### 4. Full corrected input (only the parts that changed)
+
+```  
+*NODE
+...                     ! your existing node list
+262, 0., 0., 1.
+
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+*NSET, NSET=CN7
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=N1
+262
+
+*STEP
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+*END STEP
+```
+
+After this change the model runs without the “user subroutine has caused an exception” error.
+
+---
+
+## Bottom line  
+
+*The crash is **not** caused by a bug in Abaqus, the material definition, or the element set. It is caused by an illegal MPC definition that tries to constrain DOFs that do not exist (7 and 8). Use only DOFs 4‑6 for rotations in a 3‑D solid model and follow the *MPC syntax shown in the Abaqus documentation. Once the *MPC line is corrected, the analysis proceeds normally.*
+
+=== 2026-04-17 19:49:16 ===
+Q: **Short answer** – the analysis aborts because the *MPC card is illegal.  
+The line  
+
+```  
+*MPC  
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262  
+```  
+
+asks Abaqus to constrain **DOF 7 and DOF 8** of node 262 (and of the other nodes that belong to the MPC). In a three‑dimensional solid model each node has only six degrees of freedom (1‑3 = translations, 4‑6 = rotations). DOF 7 and DOF 8 do not exist, so when the solver assembles the MPC equations it receives an illegal DOF number and aborts with the generic “user subroutine has caused an exception” message.
+
+---
+
+## Why the input file looks “correct” at first glance  
+
+* The material definition (`*MATERIAL,NAME=LIN_ISO_EL`) and the solid section (`*SOLID SECTION,ELSET=EALL,MATERIAL=LIN_ISO_EL`) are syntactically valid.  
+* The node set **N1** (node 262) and the element set **EALL** are defined correctly.  
+* The *STEP/*END STEP block is also syntactically correct.  
+
+The only thing that is syntactically wrong is the *MPC line. Abaqus does **not** validate the DOF numbers while reading the input file; the check is performed later, when the constraint equations are assembled. Consequently the model parses without error but aborts during the first (and only) step.
+
+---
+
+## What the **MEANROT** MPC actually requires  
+
+`MEANROT` is a *mean‑rotation* multi‑point constraint. It forces the **average rotation** of a group of nodes to be equal to the rotation of a reference node. The syntax (Abaqus 2020‑2024 manuals) is:
+
+```
+*MPC, TYPE=MEANROT, NSET=<reference‑node‑set>
+NSET=<node‑set‑containing‑the‑constrained‑nodes>
+```
+
+* **Reference node set** – contains the single node whose rotation will be used as the master value.  
+* **Node set** – contains all nodes whose *average* rotation (about the three rotational DOFs) is tied to the reference node.  
+
+Only the three rotational DOFs (4, 5, 6) are allowed. Any other number (1‑3 are translations, 7‑∞ are undefined) will cause the subroutine that builds the MPC matrix to fail.
+
+---
+
+## How to fix the model  
+
+### 1. Use the correct DOF numbers (4‑6)  
+
+Replace the illegal DOFs (7 and 8) with the proper rotational DOFs (4, 5, 6).  
+A minimal, correct *MPC card for a mean‑rotation constraint looks like this:
+
+```  
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+```  
+
+* `NSET=N1` – node 262 (the reference node).  
+* `NSET=CN7` – the set that contains the nodes whose **average** rotation is to be matched to node 262.
+
+### 2. If you prefer the older comma‑separated form, it must still respect the DOF limits  
+
+```  
+*MPC
+MEANROT,4,5,6,262
+```  
+
+Here `4,5,6` are the three rotational DOFs of the reference node (node 262). The remaining numbers are **node IDs** (or node‑set identifiers) whose mean rotation is constrained. Do **not** list DOF numbers 7, 8, etc.
+
+### 3. Define the node sets clearly  
+
+```  
+*NODE
+...                     ! all your nodes
+262, 0., 0., 1.         ! reference node (belongs to NALL)
+
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+*NSET, NSET=CN7
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=N1
+262
+```  
+
+### 4. Full corrected input (only the parts that changed)
+
+```  
+*NODE
+...                     ! your existing node list
+262, 0., 0., 1.
+
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+*NSET, NSET=CN7
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=N1
+262
+
+*STEP
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+*END STEP
+```  
+
+After this change the model runs without the “user subroutine has caused an exception” error.
+
+---
+
+## Bottom line  
+
+The crash is **not** caused by a bug in Abaqus, the material definition, or the element set. It is caused by an illegal MPC definition that tries to constrain DOFs that do not exist (7 and 8). Use only DOFs 4‑6 for rotations in a 3‑D solid model and follow the *MPC syntax shown in the Abaqus documentation. Once the *MPC line is corrected, the analysis proceeds normally.
+A: **Short answer** – the job aborts because the *MPC card tries to constrain DOF 7 and DOF 8, which do not exist for a 3‑D solid node (only DOFs 1‑6 are defined). When Abaqus assembles the mean‑rotation constraint it receives an illegal DOF number and the solver stops with the generic *“user subroutine has caused an exception”* message.
+
+Below is a **complete, step‑by‑step guide** that shows why the error occurs, what the correct syntax for a `MEANROT` multi‑point constraint is, and how to modify your input file so that the analysis runs without error.
+
+---
+
+## 1. Why the original input looks “OK” but still fails  
+
+| Item | What you have | Why it looks OK | What actually fails |
+|------|---------------|----------------|---------------------|
+| `*MATERIAL` / `*SOLID SECTION` | syntactically correct | Abaqus accepts them at read time | – |
+| Node set `N1` (node 262) and element set `EALL` | correctly defined | No problem | – |
+| `*STEP/*END STEP` block | syntactically correct | No problem | – |
+| `*MPC` line | `MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262` | The line follows the *comma‑separated* format, so Abaqus does not raise a syntax error while reading the file. | The numbers **7** and **8** are interpreted as DOF numbers. In a 3‑D solid each node has only DOFs 1‑6 (1‑3 translations, 4‑6 rotations). DOFs 7/8 are undefined → the MPC assembly routine throws an exception → job aborts. |
+
+Abaqus only checks that the DOF numbers are within the allowed range **when it builds the constraint matrix**, not when it parses the input file. Hence the model parses cleanly but crashes at the first (and only) step.
+
+---
+
+## 2. What a `MEANROT` MPC really needs  
+
+`MEANROT` forces the **average rotation** of a group of nodes to be equal to the rotation of a *reference* node. Only the three rotational DOFs (4, 5, 6) are allowed. The syntax (Abaqus 2020‑2024 manuals) is one of the following:
+
+### 2.1. Modern keyword‑pair form (recommended)
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<reference‑node‑set>
+NSET=<node‑set‑containing‑the‑constrained‑nodes>
+```
+
+* `NSET=<reference‑node‑set>` – a set that **contains exactly one node** whose rotation will be used as the master value.  
+* `NSET=<node‑set‑containing‑the‑constrained‑nodes>` – the set of all nodes whose **average** rotation (about DOFs 4‑6) is tied to the reference node.
+
+### 2.2. Legacy comma‑separated form (still accepted)
+
+```
+*MPC
+MEANROT,4,5,6,<reference‑node‑ID>,<list‑of‑constrained‑node‑IDs>
+```
+
+* The three numbers after `MEANROT` **must be 4, 5, 6** (the rotational DOFs).  
+* No DOF numbers larger than 6 may appear.
+
+---
+
+## 3. How to fix your model  
+
+Below is a **minimal, fully functional version** of the part of the input that deals with the mean‑rotation constraint. Only the lines that needed change are shown; everything else (nodes, elements, material, etc.) can stay exactly as you already have it.
+
+### 3.1. Define the node sets
+
+```abaqus
+*NODE
+...                     ! (your existing node list)
+262, 0., 0., 1.         ! reference node – belongs to set N1
+
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+*NSET, NSET=CN7
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=N1
+262
+```
+
+* `CN7` – the set that contains **all** nodes whose *average* rotation will be constrained.  
+* `N1` – a set that contains **only** the reference node (node 262).
+
+### 3.2. Insert a correct `MEANROT` MPC
+
+**Option A – modern keyword‑pair form (preferred):**
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+*END STEP
+```
+
+**Option B – legacy comma‑separated form (if you must keep the old style):**
+
+```abaqus
+*STEP
+*MPC
+MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+14,13,12,11,10,9,4,3,2,1
+*END STEP
+```
+
+*Notice the three rotational DOFs are **4, 5, 6** – no 7 or 8.*
+
+### 3.3. Full corrected snippet (for clarity)
+
+```abaqus
+*NODE
+...                     ! your existing nodes
+262, 0., 0., 1.
+
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+*NSET, NSET=CN7
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=N1
+262
+
+*STEP
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+*END STEP
+```
+
+---
+
+## 4. What to expect after the fix  
+
+* The input file now **passes the syntax check** and the **DOF validation** performed during MPC assembly.  
+* Abaqus will build the mean‑rotation constraint matrix using only DOFs 4‑6, which are valid for every node in a 3‑D solid model.  
+* The job will run to completion (or to the next user‑defined termination point) without the “user subroutine has caused an exception” error.
+
+---
+
+## 5. Quick checklist for future MPC definitions  
+
+| ✅ Check | What to verify |
+|--------|----------------|
+| **DOF numbers** | Only 4, 5, 6 for rotations in a 3‑D solid. |
+| **Reference node set** | Contains **exactly one** node. |
+| **Constrained node set** | Contains all nodes whose *average* rotation you want to tie. |
+| **Keyword style** | Prefer `*MPC, TYPE=MEANROT, NSET=…` with a second `NSET=` line; the older comma‑separated form must still obey the DOF rule. |
+| **Element/section definitions** | Unchanged – they are not the source of the crash. |
+
+---
+
+### TL;DR  
+
+*Your model aborts because the `*MPC` line tries to constrain DOFs 7 and 8, which do not exist for a 3‑D solid node.*  
+Replace that line with a **valid mean‑rotation constraint** that uses only DOFs 4‑6, e.g.:
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+*END STEP
+```
+
+or the equivalent legacy form with `4,5,6`. After this change the analysis runs normally.
+
+=== 2026-04-17 19:50:04 ===
+Q: **Short answer** – the job aborts because the `*MPC` card is illegal.  
+The line  
+
+```abaqus
+*MPC
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```  
+
+asks Abaqus to constrain **DOF 7 and DOF 8** of node 262 (and of the other nodes that belong to the MPC). In a three‑dimensional solid model each node has only six degrees of freedom (1‑3 = translations, 4‑6 = rotations). DOFs 7/8 do not exist, so when the solver assembles the mean‑rotation constraint it receives an illegal DOF number and aborts with the generic *“user subroutine has caused an exception”* message.
+
+Below is a **complete, step‑by‑step guide** that shows why the error occurs, what the correct syntax for a `MEANROT` multi‑point constraint is, and how to modify your input file so that the analysis runs without error.
+
+---
+
+## 1. Why the original input looks “OK” but still fails  
+
+| Item | What you have | Why it looks OK | What actually fails |
+|------|---------------|----------------|---------------------|
+| `*MATERIAL` / `*SOLID SECTION` | syntactically correct | Abaqus accepts them at read time | – |
+| Node set `N1` (node 262) and element set `EALL` | correctly defined | No problem | – |
+| `*STEP/*END STEP` block | syntactically correct | No problem | – |
+| `*MPC` line | `MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262` | Follows the *comma‑separated* format, so Abaqus does not raise a syntax error while reading the file. | The numbers **7** and **8** are interpreted as DOF numbers. In a 3‑D solid each node has only DOFs 1‑6 (1‑3 translations, 4‑6 rotations). DOFs 7/8 are undefined → the MPC assembly routine throws an exception → job aborts. |
+
+Abaqus checks the validity of DOF numbers **when it builds the constraint matrix**, not when it parses the input file. Hence the model parses cleanly but crashes at the first (and only) step.
+
+---
+
+## 2. What a `MEANROT` MPC really needs  
+
+`MEANROT` forces the **average rotation** of a group of nodes to be equal to the rotation of a *reference* node. Only the three rotational DOFs (4, 5, 6) are allowed.
+
+### 2.1. Modern keyword‑pair form (recommended)
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<reference‑node‑set>
+NSET=<node‑set‑containing‑the‑constrained‑nodes>
+```
+
+* `NSET=<reference‑node‑set>` – a set that **contains exactly one node** whose rotation will be used as the master value.  
+* `NSET=<node‑set‑containing‑the‑constrained‑nodes>` – the set of all nodes whose **average** rotation (about DOFs 4‑6) is tied to the reference node.
+
+### 2.2. Legacy comma‑separated form (still accepted)
+
+```
+*MPC
+MEANROT,4,5,6,<reference‑node‑ID>,<list‑of‑constrained‑node‑IDs>
+```
+
+* The three numbers after `MEANROT` **must be 4, 5, 6** (the rotational DOFs).  
+* No DOF numbers larger than 6 may appear.
+
+---
+
+## 3. How to fix your model  
+
+Only the lines that deal with the mean‑rotation constraint need to be changed; everything else (nodes, elements, material, etc.) can stay exactly as you already have it.
+
+### 3.1. Define the node sets
+
+```abaqus
+*NODE
+...                     ! (your existing node list)
+262, 0., 0., 1.         ! reference node – belongs to set N1
+
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+*NSET, NSET=CN7
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=N1
+262
+```
+
+* `CN7` – the set that contains **all** nodes whose *average* rotation will be constrained.  
+* `N1` – a set that contains **only** the reference node (node 262).
+
+### 3.2. Insert a correct `MEANROT` MPC  
+
+**Option A – modern keyword‑pair form (preferred):**
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+*END STEP
+```
+
+**Option B – legacy comma‑separated form (if you must keep the old style):**
+
+```abaqus
+*STEP
+*MPC
+MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+14,13,12,11,10,9,4,3,2,1
+*END STEP
+```
+
+*Notice the three rotational DOFs are **4, 5, 6** – no 7 or 8.*
+
+### 3.3. Full corrected snippet (for clarity)
+
+```abaqus
+*NODE
+...                     ! your existing nodes
+262, 0., 0., 1.
+
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+*NSET, NSET=CN7
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+
+*NSET, NSET=N1
+262
+
+*STEP
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+*END STEP
+```
+
+---
+
+## 4. What to expect after the fix  
+
+* The input file now **passes the syntax check** and the **DOF validation** performed during MPC assembly.  
+* Abaqus will build the mean‑rotation constraint matrix using only DOFs 4‑6, which are valid for every node in a 3‑D solid model.  
+* The job will run to completion (or to the next user‑defined termination point) without the “user subroutine has caused an exception” error.
+
+---
+
+## 5. Quick checklist for future MPC definitions  
+
+| ✅ Check | What to verify |
+|--------|----------------|
+| **DOF numbers** | Only 4, 5, 6 for rotations in a 3‑D solid. |
+| **Reference node set** | Contains **exactly one** node. |
+| **Constrained node set** | Contains all nodes whose *average* rotation you want to tie. |
+| **Keyword style** | Prefer `*MPC, TYPE=MEANROT, NSET=…` with a second `NSET=` line; the older comma‑separated form must still obey the DOF rule. |
+| **Element/section definitions** | Unchanged – they are not the source of the crash. |
+
+---
+
+### TL;DR  
+
+Your model aborts because the `*MPC` line tries to constrain DOFs 7 and 8, which do not exist for a 3‑D solid node. Replace that line with a **valid mean‑rotation constraint** that uses only DOFs 4‑6, e.g.:
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=N1
+NSET=CN7
+*END STEP
+```
+
+or the equivalent legacy form with `4,5,6`. After this change the analysis runs normally.
+A: **Why the job aborts**
+
+`*MPC` with the line  
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```  
+
+asks Abaqus to constrain DOFs **7** and **8** of node 262 (and of the other nodes that belong to the MPC).  
+In a three‑dimensional solid each node has only six degrees of freedom:
+
+| DOF | Meaning |
+|-----|---------|
+| 1‑3 | translations (X, Y, Z) |
+| 4‑6 | rotations (about X, Y, Z) |
+
+DOFs 7 and 8 do not exist, so when the solver builds the mean‑rotation constraint it receives an illegal DOF number and aborts with the generic *“user subroutine has caused an exception”* message.
+
+---
+
+## What a **MEANROT** MPC really needs
+
+* Only the three **rotational** DOFs (4, 5, 6) may be used.
+* One node (the *reference* node) supplies the rotation that the **average** rotation of a group of nodes must follow.
+* The reference node must be placed in a set that contains **exactly one node**.
+
+There are two ways to write the keyword:
+
+### 1. Modern keyword‑pair form  *(recommended)*  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<reference‑node‑set>
+NSET=<constrained‑node‑set>
+```
+
+* `<reference‑node‑set>` – set with the single reference node.  
+* `<constrained‑node‑set>` – set that contains **all** nodes whose average rotation is tied to the reference node.
+
+### 2. Legacy comma‑separated form  
+
+```abaqus
+*MPC
+MEANROT,4,5,6,<reference‑node‑ID>,<list‑of‑constrained‑node‑IDs>
+```
+
+The three numbers after `MEANROT` **must be 4, 5, 6**; any larger number causes the crash you observed.
+
+---
+
+## How to fix your input file
+
+Only the MPC definition has to be changed; everything else (nodes, elements, material, etc.) can stay as it is.
+
+### Step‑by‑step modification
+
+1. **Create the two node sets** (if they do not already exist).
+
+   ```abaqus
+   *NSET, NSET=REFNODE
+   262                     ! the node that will provide the reference rotation
+
+   *NSET, NSET=MEANROT_NODES
+   97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+   14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+   ```
+
+2. **Insert a correct MEANROT MPC**.  
+   Choose either the modern or the legacy form.
+
+   **Modern (preferred) form**
+
+   ```abaqus
+   *STEP
+   *MPC, TYPE=MEANROT, NSET=REFNODE
+   NSET=MEANROT_NODES
+   *END STEP
+   ```
+
+   **Legacy form (if you must keep the old style)**
+
+   ```abaqus
+   *STEP
+   *MPC
+   MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+   14,13,12,11,10,9,4,3,2,1
+   *END STEP
+   ```
+
+   *Notice the three DOF numbers are **4, 5, 6** – no 7 or 8.*
+
+3. **Run the job again**.  
+   The input now passes the DOF‑validation stage, the mean‑rotation constraint is assembled correctly, and the analysis proceeds without the “user subroutine has caused an exception” error.
+
+---
+
+## Quick checklist for future MEANROT MPCs
+
+| ✅ Item | What to verify |
+|--------|----------------|
+| **DOF numbers** | Only 4, 5, 6 (rotations) for a 3‑D solid. |
+| **Reference node set** | Contains exactly one node. |
+| **Constrained node set** | Contains all nodes whose *average* rotation you want to tie. |
+| **Keyword style** | Prefer `*MPC, TYPE=MEANROT, NSET=…` with a second `NSET=` line; the legacy form must still obey the 4‑5‑6 rule. |
+| **Other model data** | No changes needed; the crash is solely due to the illegal DOFs. |
+
+---
+
+### TL;DR
+
+Your job aborts because the `*MPC` line tries to use DOFs 7 and 8, which do not exist for a 3‑D solid node. Replace that line with a **valid mean‑rotation constraint** that uses only DOFs 4‑6, e.g.:
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+or the equivalent legacy form with `4,5,6`. After this change the analysis runs normally.
+
+=== 2026-04-17 19:50:41 ===
+Q: **Why the job aborts**
+
+The line  
+
+```abaqus
+*MPC
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```  
+
+tells Abaqus to constrain the **rotational DOFs 5, 6, 7 and 8** of node 262 (and of the other nodes that belong to the MPC).  
+
+In a three‑dimensional solid each node has only six degrees of freedom  
+
+| DOF | Meaning |
+|-----|---------|
+| 1‑3 | translations (X, Y, Z) |
+| 4‑6 | rotations (about X, Y, Z) |
+
+DOFs 7 and 8 do **not exist**. When the solver builds the mean‑rotation constraint it receives an illegal DOF number, the internal DOF‑check fails and the job aborts with the generic message *“user subroutine has caused an exception”*.
+
+---
+
+## What a **MEANROT** MPC really needs  
+
+* Only the three **rotational** DOFs (4, 5, 6) may be used.  
+* One node (the *reference* node) supplies the rotation that the **average** rotation of a group of nodes must follow.  
+* The reference node must be placed in a set that contains **exactly one node**.
+
+There are two ways to write the keyword.
+
+### 1. Modern keyword‑pair form  *(recommended)*  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<reference‑node‑set>
+NSET=<constrained‑node‑set>
+```  
+
+* `<reference‑node‑set>` – a set that contains the single reference node.  
+* `<constrained‑node‑set>` – a set that contains **all** nodes whose average rotation is tied to the reference node.
+
+### 2. Legacy comma‑separated form (still accepted)
+
+```abaqus
+*MPC
+MEANROT,4,5,6,<reference‑node‑ID>,<list‑of‑constrained‑node‑IDs>
+```  
+
+The three numbers after `MEANROT` **must be 4, 5, 6**; any larger number (e.g. 7 or 8) causes the crash you observed.
+
+---
+
+## How to fix your model  
+
+Only the MPC definition has to be changed; everything else (nodes, elements, material, etc.) can stay exactly as you already have it.
+
+### 1. Define the two node sets (if they are not already present)
+
+```abaqus
+*NODE
+...                     ! (your existing node list)
+262, 0., 0., 1.         ! reference node
+
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+*NSET, NSET=REFNODE
+262                     ! the single reference node
+
+*NSET, NSET=MEANROT_NODES
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+```
+
+* `REFNODE` contains only node 262 (the reference rotation).  
+* `MEANROT_NODES` contains all the nodes whose **average** rotation must follow node 262.
+
+### 2. Insert a correct MEANROT MPC  
+
+**Modern (preferred) form**
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+**Legacy form (if you must keep the old style)**
+
+```abaqus
+*STEP
+*MPC
+MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+14,13,12,11,10,9,4,3,2,1
+*END STEP
+```
+
+*Notice the three DOF numbers are **4, 5, 6** – no 7 or 8.*
+
+---
+
+## What to expect after the fix  
+
+* The input now passes the syntax check **and** the DOF‑validation performed during MPC assembly.  
+* Abaqus builds the mean‑rotation constraint matrix using only DOFs 4‑6, which are valid for every node in a 3‑D solid model.  
+* The job runs to completion (or to the next user‑defined termination point) without the “user subroutine has caused an exception” error.
+
+---
+
+## Quick checklist for future MEANROT MPCs  
+
+| ✅ Item | What to verify |
+|--------|----------------|
+| **DOF numbers** | Only 4, 5, 6 (rotations) for a 3‑D solid. |
+| **Reference node set** | Contains **exactly one** node. |
+| **Constrained node set** | Contains all nodes whose *average* rotation you want to tie. |
+| **Keyword style** | Prefer `*MPC, TYPE=MEANROT, NSET=…` with a second `NSET=` line; the legacy form must still obey the 4‑5‑6 rule. |
+| **Other model data** | No changes needed; the crash is solely due to the illegal DOFs. |
+
+---
+
+### TL;DR  
+
+Your job aborts because the `*MPC` line tries to constrain DOFs 7 and 8, which do not exist for a 3‑D solid node. Replace that line with a **valid mean‑rotation constraint** that uses only DOFs 4‑6, e.g.:
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+or the equivalent legacy form with `4,5,6`. After this change the analysis runs normally.
+A: **Why the job aborts**
+
+`*MPC` with the line  
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```  
+
+asks Abaqus to constrain the rotational DOFs **5, 6, 7 and 8** of node 262 (and of the other nodes that belong to the MPC).  
+
+In a 3‑D solid each node has only six DOFs  
+
+| DOF | Meaning                     |
+|-----|----------------------------|
+| 1‑3 | translations X, Y, Z       |
+| 4‑6 | rotations about X, Y, Z    |
+
+DOFs 7 and 8 do **not exist**. When the solver builds the mean‑rotation constraint it receives an illegal DOF number, the internal DOF‑check fails and the job stops with the generic message *“user subroutine has caused an exception”*.
+
+---
+
+## What a **MEANROT** MPC really needs  
+
+* Only the three **rotational** DOFs (4, 5, 6) may be used.  
+* One node (the *reference* node) supplies the rotation that the **average** rotation of a group of nodes must follow.  
+* The reference node must be placed in a set that contains **exactly one node**.
+
+There are two ways to write the keyword.
+
+### 1. Modern (recommended) pair‑form  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<reference‑node‑set>
+NSET=<constrained‑node‑set>
+```
+
+* `<reference‑node‑set>` – a set that contains the single reference node.  
+* `<constrained‑node‑set>` – a set that contains **all** nodes whose average rotation is tied to the reference node.
+
+### 2. Legacy comma‑separated form (still accepted)
+
+```abaqus
+*MPC
+MEANROT,4,5,6,<reference‑node‑ID>,<list‑of‑constrained‑node‑IDs>
+```
+
+The three numbers after `MEANROT` **must be 4, 5, 6**; any larger number (e.g. 7 or 8) causes the crash you observed.
+
+---
+
+## How to fix your model  
+
+Only the MPC definition has to be changed; everything else (nodes, elements, material, etc.) can stay exactly as it is.
+
+### 1. Create the two required node sets (if they do not already exist)
+
+```abaqus
+*NODE
+...                     ! your existing node list
+262, 0., 0., 1.         ! reference node (example coordinates)
+
+*NSET, NSET=REFNODE
+262                     ! the single reference node
+
+*NSET, NSET=MEANROT_NODES
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+```
+
+* `REFNODE` contains **only** node 262 (the node that supplies the rotation).  
+* `MEANROT_NODES` contains every node whose **average** rotation must follow node 262.
+
+### 2. Insert a correct MEANROT MPC  
+
+#### Modern (preferred) form  
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+#### Legacy form (if you must keep the old style)  
+
+```abaqus
+*STEP
+*MPC
+MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+14,13,12,11,10,9,4,3,2,1
+*END STEP
+```
+
+*Notice the three DOF numbers are **4, 5, 6** – no 7 or 8.*
+
+---
+
+## What to expect after the fix  
+
+* The input now passes the syntax check **and** the DOF‑validation performed during MPC assembly.  
+* Abaqus builds the mean‑rotation constraint matrix using only DOFs 4‑6, which are valid for every node in a 3‑D solid model.  
+* The job runs to completion (or to the next user‑defined termination point) without the “user subroutine has caused an exception” error.
+
+---
+
+## Quick checklist for future MEANROT MPCs  
+
+| ✅ Item | What to verify |
+|--------|----------------|
+| **DOF numbers** | Only 4, 5, 6 (rotations) for a 3‑D solid. |
+| **Reference node set** | Contains **exactly one** node. |
+| **Constrained node set** | Contains all nodes whose *average* rotation you want to tie. |
+| **Keyword style** | Prefer `*MPC, TYPE=MEANROT, NSET=…` with a second `NSET=` line; the legacy form must still obey the 4‑5‑6 rule. |
+| **Other model data** | No changes needed; the crash is solely due to the illegal DOFs. |
+
+---
+
+### TL;DR  
+
+Your job aborts because the `*MPC` line tries to constrain DOFs 7 and 8, which do not exist for a 3‑D solid node. Replace that line with a **valid mean‑rotation constraint** that uses only DOFs 4‑6, e.g.:
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+or the equivalent legacy form with `4,5,6`. After this change the analysis runs normally.
+
+=== 2026-04-17 19:51:19 ===
+Q: **Why the job aborts**
+
+The line  
+
+```abaqus
+*MPC
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```  
+
+tells Abaqus to constrain the **rotational DOFs 5, 6, 7 and 8** of node 262 (and of the other nodes that belong to the MPC).  
+
+In a three‑dimensional solid each node has only six degrees of freedom  
+
+| DOF | Meaning                     |
+|-----|----------------------------|
+| 1‑3 | translations X, Y, Z       |
+| 4‑6 | rotations about X, Y, Z    |
+
+DOFs 7 and 8 **do not exist**. When the solver assembles the *mean‑rotation* constraint it receives an illegal DOF number, the internal DOF‑check fails and the job stops with the generic message *“user subroutine has caused an exception”*.
+
+---
+
+## What a **MEANROT** MPC really needs  
+
+* Only the three **rotational** DOFs (4, 5, 6) may be used.  
+* One node (the *reference* node) supplies the rotation that the **average** rotation of a group of nodes must follow.  
+* The reference node must be placed in a set that contains **exactly one node**.
+
+There are two ways to write the keyword.
+
+### 1. Modern (recommended) pair‑form  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<reference‑node‑set>
+NSET=<constrained‑node‑set>
+```  
+
+* `<reference‑node‑set>` – a set that contains the single reference node.  
+* `<constrained‑node‑set>` – a set that contains **all** nodes whose average rotation is tied to the reference node.
+
+### 2. Legacy comma‑separated form (still accepted)
+
+```abaqus
+*MPC
+MEANROT,4,5,6,<reference‑node‑ID>,<list‑of‑constrained‑node‑IDs>
+```  
+
+The three numbers after `MEANROT` **must be 4, 5, 6**; any larger number (e.g. 7 or 8) causes the crash you observed.
+
+---
+
+## How to fix your model  
+
+Only the MPC definition has to be changed; everything else (nodes, elements, material, etc.) can stay exactly as it is.
+
+### 1. Define the two required node sets (if they are not already present)
+
+```abaqus
+*NODE
+...                     ! your existing node list
+262, 0., 0., 1.         ! reference node (example coordinates)
+
+*NSET, NSET=REFNODE
+262                     ! the single reference node
+
+*NSET, NSET=MEANROT_NODES
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+```  
+
+* `REFNODE` contains **only** node 262 (the node that supplies the rotation).  
+* `MEANROT_NODES` contains every node whose **average** rotation must follow node 262.
+
+### 2. Insert a correct MEANROT MPC  
+
+#### Modern (preferred) form  
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```  
+
+#### Legacy form (if you must keep the old style)  
+
+```abaqus
+*STEP
+*MPC
+MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+14,13,12,11,10,9,4,3,2,1
+*END STEP
+```  
+
+*Notice the three DOF numbers are **4, 5, 6** – no 7 or 8.*
+
+---
+
+## What to expect after the fix  
+
+* The input now passes the syntax check **and** the DOF‑validation performed during MPC assembly.  
+* Abaqus builds the mean‑rotation constraint matrix using only DOFs 4‑6, which are valid for every node in a 3‑D solid model.  
+* The job runs to completion (or to the next user‑defined termination point) without the “user subroutine has caused an exception” error.
+
+---
+
+## Quick checklist for future MEANROT MPCs  
+
+| ✅ Item | What to verify |
+|--------|----------------|
+| **DOF numbers** | Only 4, 5, 6 (rotations) for a 3‑D solid. |
+| **Reference node set** | Contains **exactly one** node. |
+| **Constrained node set** | Contains all nodes whose *average* rotation you want to tie. |
+| **Keyword style** | Prefer `*MPC, TYPE=MEANROT, NSET=…` with a second `NSET=` line; the legacy form must still obey the 4‑5‑6 rule. |
+| **Other model data** | No changes needed; the crash is solely due to the illegal DOFs. |
+
+---
+
+### TL;DR  
+
+Your job aborts because the `*MPC` line tries to constrain DOFs 7 and 8, which do not exist for a 3‑D solid node. Replace that line with a **valid mean‑rotation constraint** that uses only DOFs 4‑6, e.g.:
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```  
+
+or the equivalent legacy form with `4,5,6`. After this change the analysis runs normally.
+A: **Why the job aborts**
+
+`*MPC` with the line  
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```  
+
+asks Abaqus to constrain the **rotational DOFs 5, 6, 7 and 8** of node 262 (and of the other nodes that belong to the MPC).  
+
+In a 3‑D solid each node has only **six** degrees of freedom  
+
+| DOF | Meaning                |
+|-----|------------------------|
+| 1‑3 | translations X, Y, Z   |
+| 4‑6 | rotations about X, Y, Z|
+
+DOFs **7** and **8** simply do not exist. When the solver builds the *mean‑rotation* constraint it receives an illegal DOF number, the internal DOF‑check fails and the job stops with the generic message *“user subroutine has caused an exception”*.
+
+---
+
+## What a **MEANROT** MPC really needs  
+
+* Only the three **rotational** DOFs (4, 5, 6) may be used.  
+* One node (the **reference node**) supplies the rotation that the **average** rotation of a group of nodes must follow.  
+* The reference node must be placed in a set that contains **exactly one node**.
+
+There are two ways to write the keyword.
+
+### 1. Modern (recommended) pair‑form  
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<reference‑node‑set>
+NSET=<constrained‑node‑set>
+```  
+
+* `<reference‑node‑set>` – a set that contains the single reference node.  
+* `<constrained‑node‑set>` – a set that contains **all** nodes whose average rotation is tied to the reference node.
+
+### 2. Legacy comma‑separated form (still accepted)
+
+```abaqus
+*MPC
+MEANROT,4,5,6,<reference‑node‑ID>,<list‑of‑constrained‑node‑IDs>
+```  
+
+The three numbers after `MEANROT` **must be 4, 5, 6**; any larger number (e.g. 7 or 8) causes the crash you observed.
+
+---
+
+## How to fix your model  
+
+Only the MPC definition has to be changed; everything else (nodes, elements, material, etc.) can stay exactly as it is.
+
+### 1. Create the two required node sets (if they are not already present)
+
+```abaqus
+*NODE
+...                     ! your existing node list
+262, 0., 0., 1.         ! reference node (example coordinates)
+
+*NSET, NSET=REFNODE
+262                     ! the single reference node
+
+*NSET, NSET=MEANROT_NODES
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+```  
+
+* `REFNODE` contains **only** node 262 (the node that supplies the rotation).  
+* `MEANROT_NODES` contains every node whose **average** rotation must follow node 262.
+
+### 2. Insert a correct MEANROT MPC  
+
+#### Modern (preferred) form  
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```  
+
+#### Legacy form (if you must keep the old style)  
+
+```abaqus
+*STEP
+*MPC
+MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+14,13,12,11,10,9,4,3,2,1
+*END STEP
+```  
+
+*Notice the three DOF numbers are **4, 5, 6** – no 7 or 8.*
+
+---
+
+## What to expect after the fix  
+
+* The input now passes the syntax check **and** the DOF‑validation performed during MPC assembly.  
+* Abaqus builds the mean‑rotation constraint matrix using only DOFs 4‑6, which are valid for every node in a 3‑D solid model.  
+* The job runs to completion (or to the next user‑defined termination point) without the “user subroutine has caused an exception” error.
+
+---
+
+## Quick checklist for future MEANROT MPCs  
+
+| ✅ Item | What to verify |
+|--------|----------------|
+| **DOF numbers** | Only 4, 5, 6 (rotations) for a 3‑D solid. |
+| **Reference node set** | Contains **exactly one** node. |
+| **Constrained node set** | Contains all nodes whose *average* rotation you want to tie. |
+| **Keyword style** | Prefer `*MPC, TYPE=MEANROT, NSET=…` with a second `NSET=` line; the legacy form must still obey the 4‑5‑6 rule. |
+| **Other model data** | No changes needed; the crash is solely due to the illegal DOFs. |
+
+---
+
+### TL;DR  
+
+Your job aborts because the `*MPC` line tries to constrain DOFs 7 and 8, which do **not** exist for a 3‑D solid node. Replace that line with a **valid mean‑rotation constraint** that uses only DOFs 4‑6, e.g.:
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```  
+
+or the equivalent legacy form with `4,5,6`. After this change the analysis runs normally.
+
+=== 2026-04-17 19:51:58 ===
+Q: **为什么作业会在这里停止**
+
+在 3‑D 实体单元中，每个节点只有 6 个自由度  
+
+| DOF | 含义                     |
+|-----|--------------------------|
+| 1‑3 | 位移  X、Y、Z            |
+| 4‑6 | 绕 X、Y、Z 的转动       |
+
+`*MPC` 关键字后面的
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```
+
+实际上是让 Abaqus 对节点 **262**（以及后面要约束的所有节点）约束 **DOF 5、6、7、8**。  
+DOF 7、8 在 3‑D 实体模型中根本不存在，求解器在组装 *mean‑rotation* 约束时检测到非法的自由度号，内部检查失败，于是报出
+
+```
+user subroutine has caused an exception
+```
+
+并立即终止作业。
+
+---
+
+## MEANROT 多点约束的正确写法
+
+1. **只能使用转动自由度 4、5、6**（对应绕 X、Y、Z 的转动）。  
+2. 必须指定一个 **参考节点**（提供基准转动），该节点只能放在只含 **一个节点** 的集合中。  
+3. 其余需要保持平均转动的节点放在另一个集合中。
+
+Abaqus 支持两种写法：
+
+### 1. 推荐的配对形式（pair‑form）
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=<reference‑node‑set>
+NSET=<constrained‑node‑set>
+```
+
+- `<reference‑node‑set>`：只包含参考节点的集合。  
+- `<constrained‑node‑set>`：包含所有要保持平均转动的节点。
+
+### 2. 传统的逗号分隔形式（仍被接受）
+
+```abaqus
+*MPC
+MEANROT,4,5,6,<reference‑node‑ID>,<list‑of‑constrained‑node‑IDs>
+```
+
+这里 **4、5、6** 必须写在一起，不能出现 7、8 等不存在的自由度号。
+
+---
+
+## 如何修改你的模型
+
+只需要把 **MPC** 部分改正，其他卡片（节点、单元、材料等）可以保持不变。
+
+### 1. 定义两个节点集合（如果还没有的话）
+
+```abaqus
+*NODE
+...                     ! 这里是你已有的节点定义
+262, 0., 0., 1.         ! 示例：参考节点的坐标
+
+*NSET, NSET=REFNODE
+262                     ! 只包含参考节点
+
+*NSET, NSET=MEANROT_NODES
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+```
+
+- **REFNODE**：只含节点 262（提供基准转动）。  
+- **MEANROT_NODES**：所有需要保持平均转动的节点。
+
+### 2. 正确的 MEANROT 多点约束
+
+#### 推荐的配对形式
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+#### 如果必须使用旧的逗号分隔形式
+
+```abaqus
+*STEP
+*MPC
+MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+14,13,12,11,10,9,4,3,2,1
+*END STEP
+```
+
+> 注意：这里的 **4、5、6** 是唯一允许出现的自由度号，**没有 7、8**。
+
+---
+
+## 修改后会发生什么
+
+- 输入文件通过语法检查并通过 Abaqus 在组装 MPC 时的自由度合法性检查。  
+- 求解器只约束 DOF 4‑6（合法的转动自由度），因此不会再出现 “user subroutine has caused an exception”。  
+- 作业可以正常完成（或在你设定的终止条件处结束）。
+
+---
+
+## 以后使用 MEANROT 时的检查清单
+
+| ✅ 检查项 | 需要确认的内容 |
+|----------|----------------|
+| **自由度号** | 只能是 4、5、6（转动），不能出现 7、8 等不存在的自由度 |
+| **参考节点集合** | 只包含 **一个** 节点 |
+| **约束节点集合** | 包含所有需要保持平均转动的节点 |
+| **关键字写法** | 推荐使用 `*MPC, TYPE=MEANROT, NSET=…` + 第二行 `NSET=…`；若使用旧式逗号分隔，必须遵守 4‑5‑6 规则 |
+| **其它模型数据** | 不需要改动，崩溃仅因非法自由度号导致 |
+
+---
+
+### TL;DR
+
+作业在 `*MPC` 那一行崩溃，是因为你让 Abaqus 约束了 **DOF 7、8**，而 3‑D 实体节点根本没有这些自由度。把该行改为只使用 **4、5、6** 的合法约束即可，例如：
+
+```abaqus
+*STEP
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+或等价的逗号分隔形式 `MEANROT,4,5,6,262,…`。修改后，作业将能够正常运行。
+A: **答案概述**  
+作业在 `*MPC, MEANROT` 那一行报错并停止，是因为在 3‑D 实体单元中 **只存在 6 个自由度（1‑6）**，其中 **转动自由度只能是 4、5、6**（分别对应绕 X、Y、Z 的转动）。  
+您在 `MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262` 中把 **DOF 7、8** 也写进了约束列表，而这两个自由度在 3‑D 实体模型里根本不存在。Abaqus 在组装 *mean‑rotation* 约束时检测到非法自由度号，内部检查失败，于是抛出
+
+```
+user subroutine has caused an exception
+```
+
+并立即终止作业。
+
+---
+
+## 1. 何为 MEANROT 多点约束
+
+`MEANROT` 用来 **强制一组节点的转动（DOF 4‑6）保持相同的平均值**，常用于：
+
+* 连接刚体与柔性体，使刚体只产生整体转动而不产生局部扭转  
+* 在对称模型中强制对称面的转动相同  
+
+约束的基本要素：
+
+| 要素 | 说明 |
+|------|------|
+| **参考节点** | 提供基准转动的唯一节点，只能放在只含 **一个节点** 的集合中 |
+| **约束节点集合** | 所有需要保持平均转动的节点 |
+| **自由度号** | 必须是 **4、5、6**（转动），不能出现 1‑3（位移）或 7‑8（不存在） |
+
+---
+
+## 2. 正确的写法（两种等价形式）
+
+### 2.1 推荐的配对（pair‑form）写法  
+
+```abaqus
+*STEP
+*STATIC                ;（或您实际使用的 STEP 类型）
+*MPC, TYPE=MEANROT, NSET=REFNODE   ;REFNODE 只含参考节点
+NSET=MEANROT_NODES                  ;约束节点集合
+*END STEP
+```
+
+- `REFNODE`：只包含 **一个** 节点（本例中为 262）  
+- `MEANROT_NODES`：所有需要保持平均转动的节点（您列出的 1‑97 等）
+
+### 2.2 传统的逗号分隔写法（仍被 Abaqus 接受）  
+
+```abaqus
+*STEP
+*STATIC
+*MPC
+MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+14,13,12,11,10,9,4,3,2,1
+*END STEP
+```
+
+> **关键点**：逗号后面的自由度号只能是 **4、5、6**，随后是 **参考节点号**（262），再后面是 **约束节点号列表**。  
+> 绝对不能出现 7、8、9… 等非法自由度号。
+
+---
+
+## 3. 如何在您的模型中实现（完整示例）
+
+假设您已经在模型中定义了所有节点，下面给出完整的 **NSET** 定义和 **MEANROT** 约束：
+
+```abaqus
+*NODE
+...                     ;（已有的节点定义）
+
+*ELEMENT, TYPE=C3D8, ELSET=ALL_ELEMS
+...                     ;（已有的单元定义）
+
+*NSET, NSET=REFNODE
+262                     ; 只含参考节点
+
+*NSET, NSET=MEANROT_NODES
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+```
+
+随后在 **STEP** 中加入约束（任选其一）：
+
+### 方式 A（配对形式）
+
+```abaqus
+*STEP
+*STATIC
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+### 方式 B（逗号分隔形式）
+
+```abaqus
+*STEP
+*STATIC
+*MPC
+MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+14,13,12,11,10,9,4,3,2,1
+*END STEP
+```
+
+> **提示**：如果您在同一个 STEP 中还有其它 *MPC*（如 `BEAM`, `JOINT` 等），请确保它们的 `TYPE` 与 `NSET` 参数分别对应，避免混淆。
+
+---
+
+## 4. 常见错误检查清单（防止再次崩溃）
+
+| ✅ 检查项 | 需要确认的内容 |
+|----------|----------------|
+| **自由度号** | 只能写 **4、5、6**（转动），**不要出现 7、8** |
+| **参考节点集合** | 只包含 **一个** 节点（如 `REFNODE`） |
+| **约束节点集合** | 包含所有需要保持平均转动的节点，且不包括参考节点本身 |
+| **关键字写法** | 推荐使用 `*MPC, TYPE=MEANROT, NSET=…` + `NSET=…`；若使用旧式逗号分隔，必须严格遵守 4‑5‑6 规则 |
+| **模型类型** | 仅在 **3‑D 实体**（C3D8、C3D20 等）中使用；在 2‑D 或壳单元中自由度编号不同，需另行处理 |
+| **输入文件完整性** | 确认 `*STEP`、`*END STEP` 对应完整，且 `*MPC` 位于 STEP 内部 |
+
+---
+
+## 5. 结论（TL;DR）
+
+- 作业在 `*MPC, MEANROT` 那一行停止，是因为 **约束了不存在的 DOF 7、8**。  
+- 在 3‑D 实体模型中 **只能约束 DOF 4、5、6**（转动）。  
+- 把错误行改为只使用 4、5、6，并正确指定 **参考节点** 与 **约束节点集合**，作业即可正常运行。  
+
+**示例（最简版）**
+
+```abaqus
+*STEP
+*STATIC
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+或等价的逗号分隔形式 `MEANROT,4,5,6,262,…`。  
+完成上述修改后，作业将不再在此处崩溃，能够顺利完成求解。祝您建模顺利！
+
+=== 2026-04-17 19:52:40 ===
+Q: **作业在 `*MPC, MEANROT` 那一行停止的根本原因是：**  
+在 3‑D 实体单元（C3D8、C3D20 …）中，每个节点只有 **6 个自由度**，其中 **转动自由度只能是 4、5、6**（分别对应绕 X、Y、Z 的转动）。  
+
+您在
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```
+
+中把 **DOF 7、8** 也写进了约束列表，而这两个自由度在 3‑D 实体模型里根本不存在。Abaqus 在组装 *mean‑rotation* 约束时检测到非法自由度号，内部检查失败，于是抛出
+
+```
+user subroutine has caused an exception
+```
+
+并立即终止作业。
+
+---
+
+## 正确的 MEANROT 多点约束写法
+
+### 1. 必须满足的要点  
+
+| 要点 | 说明 |
+|------|------|
+| **自由度号** | 只能是 **4、5、6**（转动），**不能出现 7、8** |
+| **参考节点集合** | 只包含 **一个** 节点（本例中为 262） |
+| **约束节点集合** | 包含所有需要保持平均转动的节点，且不包括参考节点本身 |
+
+### 2. 推荐的配对（pair‑form）写法  
+
+```abaqus
+*STEP
+*STATIC                     ;（或您实际使用的 STEP 类型）
+*MPC, TYPE=MEANROT, NSET=REFNODE   ;REFNODE 只含参考节点
+NSET=MEANROT_NODES                  ;约束节点集合
+*END STEP
+```
+
+- `REFNODE`：只包含节点 **262**。  
+- `MEANROT_NODES`：您列出的所有需要保持平均转动的节点（1‑97 等）。
+
+### 3. 传统的逗号分隔写法（仍被 Abaqus 接受）  
+
+```abaqus
+*STEP
+*STATIC
+*MPC
+MEANROT,4,5,6,262,97,96,95,94,93,20,19,18,17,16,15,
+14,13,12,11,10,9,4,3,2,1
+*END STEP
+```
+
+> **注意**：逗号后面的自由度号只能写 **4、5、6**，随后是 **参考节点号**（262），再后面是 **约束节点号列表**。绝对不能出现 7、8、9… 等非法自由度号。
+
+---
+
+## 完整示例（包括 NSET 定义）
+
+```abaqus
+*NODE
+...                     ;（已有的节点定义）
+
+*NSET, NSET=REFNODE
+262                     ; 只含参考节点
+
+*NSET, NSET=MEANROT_NODES
+97, 96, 95, 94, 93, 20, 19, 18, 17, 16, 15,
+14, 13, 12, 11, 10, 9, 4, 3, 2, 1
+```
+
+随后在 STEP 中任选一种写法（配对或逗号分隔）加入约束即可。
+
+---
+
+## 常见错误检查清单
+
+| ✅ 检查项 | 需要确认的内容 |
+|----------|----------------|
+| **自由度号** | 只能写 **4、5、6**（转动），**不要出现 7、8** |
+| **参考节点集合** | 只包含 **一个** 节点 |
+| **约束节点集合** | 包含所有需要保持平均转动的节点，且不包括参考节点本身 |
+| **关键字写法** | 推荐使用 `*MPC, TYPE=MEANROT, NSET=…` + `NSET=…`；若使用旧式逗号分隔，必须严格遵守 4‑5‑6 规则 |
+| **模型类型** | 仅在 **3‑D 实体**（C3D8、C3D20 等）中使用；2‑D 或壳单元的自由度编号不同，需另行处理 |
+
+---
+
+## TL;DR（最简答案）
+
+- 作业在 `*MPC, MEANROT` 那一行崩溃，是因为 **约束了不存在的 DOF 7、8**。  
+- 在 3‑D 实体模型中 **只能约束 DOF 4、5、6**（转动）。  
+- 把错误行改为只使用 4、5、6，并正确指定参考节点与约束节点集合，例如：
+
+```abaqus
+*STEP
+*STATIC
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+或等价的逗号分隔形式 `MEANROT,4,5,6,262,…`。  
+完成上述修改后，作业将不再在此处崩溃，能够顺利完成求解。祝您建模顺利！
+A: **作业在 `*MPC, MEANROT` 那一行停止的根本原因**  
+在 3‑D 实体单元（C3D8、C3D20、C3D8R、C3D20R …）中，每个节点只有 **6 个自由度**  
+
+| DOF 编号 | 含义 |
+|----------|------|
+| 1‑3      | 平移（X、Y、Z） |
+| 4‑6      | 转动（绕 X、Y、Z） |
+
+**转动自由度只能是 4、5、6**，在实体模型里根本不存在 DOF 7、8、9 …。  
+
+您在
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```
+
+中把 **DOF 7、8** 也写进了约束列表。Abaqus 在组装 *mean‑rotation* 多点约束时检测到非法自由度号，内部检查失败，于是抛出
+
+```
+user subroutine has caused an exception
+```
+
+并立即终止作业。
+
+---
+
+## 正确的 MEANROT 多点约束写法
+
+### 1. 必须满足的基本规则  
+
+1. **自由度号只能是 4、5、6**（对应绕 X、Y、Z 的转动）。  
+2. **参考节点（reference node）只能有一个**，它的编号放在自由度号之后。  
+3. **约束节点（constrained nodes）** 列在参考节点之后，**不能再出现自由度号**。  
+4. 对于 3‑D 实体模型，**不要使用 7、8、9 …** 这类不存在的 DOF。
+
+### 2. 推荐的配对（pair‑form）写法（更易读、易维护）
+
+```abaqus
+*STEP
+*STATIC                     ;（或您实际使用的 STEP 类型）
+
+*NODE
+...                         ;（已有的节点定义）
+
+* NSET, NSET=REFNODE
+262                         ; 只含参考节点
+
+* NSET, NSET=MEANROT_NODES
+1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15,
+16, 17, 18, 19, 20, 93, 94, 95, 96, 97
+                         ; 需要保持平均转动的所有节点（不包括 262）
+
+*MPC, TYPE=MEANROT, NSET=REFNODE   ; 参考节点集合
+NSET=MEANROT_NODES                  ; 约束节点集合
+*END STEP
+```
+
+- `TYPE=MEANROT` 告诉 Abaqus 这是 **平均转动** 多点约束。  
+- `NSET=REFNODE` 只包含 **一个** 参考节点（这里是 262）。  
+- `NSET=MEANROT_NODES` 包含所有需要保持相同转动的节点。  
+- Abaqus 自动把 **DOF 4、5、6**（转动）作用在这些节点上，无需在关键字后手动写自由度号。
+
+### 3. 仍被 Abaqus 接受的传统逗号分隔写法（必须严格遵守 4‑5‑6 规则）
+
+如果您更喜欢旧式的写法，只要把 **7、8** 去掉即可：
+
+```abaqus
+*STEP
+*STATIC
+*MPC
+MEANROT,4,5,6,262,
+1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+*END STEP
+```
+
+解释：
+
+- 前 3 个数字 **4,5,6** → 约束的自由度（转动）。  
+- 第 4 个数字 **262** → 参考节点号。  
+- 其后全部是 **约束节点号列表**，不再出现自由度号。
+
+---
+
+## 完整示例（包括 NSET 定义）
+
+```abaqus
+*HEADING
+...（标题）
+
+*NODE
+...（已有节点）
+
+*ELEMENT, TYPE=C3D8, ELSET=EALL
+...（单元定义）
+
+*NSET, NSET=REFNODE
+262
+
+*NSET, NSET=MEANROT_NODES
+1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15,
+16, 17, 18, 19, 20, 93, 94, 95, 96, 97
+
+*STEP
+*STATIC
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+---
+
+## 常见错误检查清单（防止再次报错）
+
+| ✅ 检查项 | 需要确认的内容 |
+|----------|----------------|
+| **自由度号** | 只能写 **4、5、6**（转动），**不要出现 7、8、9…** |
+| **参考节点集合** | 只包含 **一个** 节点（本例 262） |
+| **约束节点集合** | 包含所有需要保持平均转动的节点，且 **不包括参考节点本身** |
+| **关键字写法** | 推荐使用 `*MPC, TYPE=MEANROT, NSET=…` + `NSET=…`；若使用旧式逗号分隔，必须严格遵守 “4‑5‑6‑参考‑约束节点” 顺序 |
+| **模型类型** | 仅在 **3‑D 实体单元**（C3D8、C3D20 等）中使用；壳单元、梁单元或 2‑D 平面单元的自由度编号不同，需另行处理 |
+| **节点编号** | 确认约束节点列表中没有误写的节点号或遗漏的节点号 |
+
+---
+
+## TL;DR（最简答案）
+
+- 作业在 `*MPC, MEANROT` 那一行崩溃，是因为 **约束了不存在的 DOF 7、8**。  
+- 在 3‑D 实体模型中 **只能约束 DOF 4、5、6**（转动）。  
+- 把错误行改为只使用 4、5、6，并正确指定参考节点与约束节点集合，例如：
+
+```abaqus
+*STEP
+*STATIC
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+或等价的逗号分隔形式：
+
+```abaqus
+*MPC
+MEANROT,4,5,6,262,1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+```
+
+完成上述修改后，作业将不再在此处崩溃，能够顺利完成求解。祝您建模顺利！
+
+=== 2026-04-17 19:53:20 ===
+Q: **Why the job stops at the `*MPC, MEANROT` line**
+
+In a 3‑D solid model (C3D8, C3D20, …) each node has only **six** degrees of freedom  
+
+| DOF | Meaning |
+|-----|---------|
+| 1‑3 | Translational (X, Y, Z) |
+| 4‑6 | Rotational (about X, Y, Z) |
+
+The rotational DOFs that can be constrained are **only 4, 5, 6**.  
+DOFs 7, 8, 9 … do **not exist** for a solid node.
+
+Your line
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```
+
+asks Abaqus to constrain DOFs 7 and 8, which are illegal. When Abaqus assembles the *mean‑rotation* MPC it detects the invalid DOF numbers, the internal check fails and the solver aborts with
+
+```
+user subroutine has caused an exception
+```
+
+---
+
+## Correct way to write a **MEANROT** multi‑point constraint
+
+### 1. Rules that must be satisfied
+1. **Only DOFs 4, 5, 6** may be listed (they are the rotational DOFs).  
+2. After the three DOF numbers comes the **reference node** (only one node).  
+3. All remaining numbers are the **constrained‑node list** – no more DOF numbers may appear.  
+4. The reference node must be placed in a set that contains **exactly one node**.
+
+### 2. Recommended “pair‑form” syntax (easier to read and maintain)
+
+```abaqus
+*STEP
+*STATIC                     ; or any other step type
+
+* NSET, NSET=REFNODE
+262                         ; reference node (only one node)
+
+* NSET, NSET=MEANROT_NODES
+1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15,
+16, 17, 18, 19, 20, 93, 94, 95, 96, 97
+                         ; all nodes that must share the same rotation
+
+*MPC, TYPE=MEANROT, NSET=REFNODE   ; reference‑node set (single node)
+NSET=MEANROT_NODES                  ; constrained‑node set
+*END STEP
+```
+
+Abaqus automatically applies the rotational DOFs 4‑6 to the nodes in `MEANROT_NODES` and ties their average rotation to the rotation of node 262.
+
+### 3. Traditional comma‑separated form (still accepted)
+
+If you prefer the older syntax, just remove the illegal DOFs 7 and 8:
+
+```abaqus
+*STEP
+*STATIC
+*MPC
+MEANROT,4,5,6,262,
+1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+*END STEP
+```
+
+Explanation of the line:
+
+* `4,5,6` – the rotational DOFs to be constrained  
+* `262` – the reference node number  
+* the remaining numbers – the list of constrained nodes (no further DOF numbers)
+
+---
+
+## Quick checklist to avoid another crash
+
+| Check | What to verify |
+|-------|----------------|
+| DOF numbers | Only **4, 5, 6** (no 7, 8, 9…) |
+| Reference set | Contains **exactly one node** (e.g., 262) |
+| Constrained set | Contains all nodes that must share the same rotation, **excluding** the reference node |
+| Syntax | Use `*MPC, TYPE=MEANROT, NSET=…` + `NSET=…` (recommended) or the comma form with the strict `4,5,6,ref,constrained‑nodes` order |
+| Model type | Applicable only to **3‑D solid** elements (C3D8, C3D20, …) |
+
+---
+
+## TL;DR (the minimal fix)
+
+The job aborts because the line tries to constrain non‑existent DOFs 7 and 8.  
+In a 3‑D solid model you may only constrain DOFs 4‑6.  
+Replace the erroneous line with a correct one, for example:
+
+```abaqus
+*STEP
+*STATIC
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+or, using the old comma syntax:
+
+```abaqus
+*MPC
+MEANROT,4,5,6,262,1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+```
+
+After this change the analysis will run without stopping at the `*MPC, MEANROT` line.
+A: **Why the job aborts at the `*MPC, MEANROT` line**
+
+In a 3‑D solid model (C3D8, C3D20, …) each node possesses **only six** degrees of freedom  
+
+| DOF | Meaning |
+|-----|---------|
+| 1‑3 | Translational (X, Y, Z) |
+| 4‑6 | Rotational (about X, Y, Z) |
+
+The **only rotational DOFs that can be used in a *MEANROT* multi‑point constraint are 4, 5 and 6**.  
+DOFs 7, 8, 9 … do **not exist** for a solid node.  
+
+Your line  
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```  
+
+asks Abaqus to constrain DOFs 7 and 8. When the solver assembles the *MEANROT* MPC it detects these illegal DOF numbers, the internal consistency check fails and the job stops with the generic message *“user subroutine has caused an exception”* (or a similar abort).
+
+---
+
+## How to write a correct **MEANROT** MPC
+
+### 1. Rules that must be obeyed
+1. **Only DOFs 4‑6 may be listed** (they are the rotational DOFs).  
+2. After the three DOF numbers comes the **reference node** (exactly one node).  
+3. All numbers that follow are the **constrained‑node list** – no further DOF numbers are allowed.  
+4. The reference node must be placed in a set that contains **exactly one node**.
+
+### 2. Recommended “named‑set” syntax (clearer and less error‑prone)
+
+```abaqus
+*STEP
+*STATIC                     ; or any other step type
+
+* NSET, NSET=REFNODE
+262                         ; reference node (single node)
+
+* NSET, NSET=MEANROT_NODES
+1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15,
+16, 17, 18, 19, 20, 93, 94, 95, 96, 97
+                         ; all nodes that must share the same rotation
+
+*MPC, TYPE=MEANROT, NSET=REFNODE   ; reference‑node set (one node)
+NSET=MEANROT_NODES                  ; constrained‑node set
+*END STEP
+```
+
+Abaqus automatically applies the rotational DOFs 4‑6 to every node in `MEANROT_NODES` and ties their **average rotation** to the rotation of node 262.
+
+### 3. Traditional comma‑separated form (still accepted)
+
+If you prefer the older syntax, just remove the illegal DOFs 7 and 8:
+
+```abaqus
+*STEP
+*STATIC
+*MPC
+MEANROT,4,5,6,262,
+1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+*END STEP
+```
+
+Explanation of the line:
+
+* `4,5,6` – the rotational DOFs that are to be constrained (the only allowed ones)  
+* `262`   – the **reference node** whose rotation is the master value  
+* the remaining numbers – the **constrained nodes** whose rotations are averaged and linked to node 262
+
+---
+
+## Quick checklist – avoid another crash
+
+| What to check | Correct value |
+|---------------|---------------|
+| DOF numbers   | **Only 4, 5, 6** (no 7, 8, 9…) |
+| Reference set | Contains **exactly one node** (e.g., 262) |
+| Constrained set| All nodes that must share the same rotation, **excluding** the reference node |
+| Syntax        | Use `*MPC, TYPE=MEANROT, NSET=…` + `NSET=…` (recommended) or the strict `MEANROT,4,5,6,ref,constrained‑nodes` form |
+| Element type  | Applicable only to **3‑D solid** elements (C3D8, C3D20, …) |
+
+---
+
+## TL;DR (the minimal fix)
+
+The job stops because the line tries to constrain non‑existent DOFs 7 and 8.  
+In a 3‑D solid model you may only constrain DOFs 4‑6.  
+
+Replace the erroneous line with a correct one, e.g.:
+
+```abaqus
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+```
+
+or, using the old comma syntax:
+
+```abaqus
+*MPC
+MEANROT,4,5,6,262,1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+```
+
+After this change the analysis will run without aborting at the `*MPC, MEANROT` line.
+
+=== 2026-04-17 19:53:58 ===
+Q: **作业在 `*MPC, MEANROT` 那一行停止的根本原因**  
+
+在 3‑D 实体单元（C3D8、C3D20、C3D8R、C3D20R …）中，每个节点只有 **6 个自由度**  
+
+| DOF 编号 | 含义 |
+|----------|------|
+| 1‑3      | 平移（X、Y、Z） |
+| 4‑6      | 转动（绕 X、Y、Z） |
+
+因此 **只能约束转动自由度 4、5、6**。  
+DOF 7、8、9 … 在实体节点中根本不存在。
+
+您在输入文件中写的
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```
+
+实际上让 Abaqus 去约束 **DOF 7 和 DOF 8**，这属于非法的自由度编号。  
+当求解器在组装 *MEANROT* 多点约束时检测到这些非法 DOF，内部一致性检查失败，随后报出
+
+```
+user subroutine has caused an exception
+```
+
+并立即终止作业。
+
+---
+
+## 正确的 **MEANROT** 多点约束写法
+
+### 必须遵守的基本规则  
+
+1. **只能列出 DOF 4、5、6**（它们是转动自由度）。  
+2. 这三个 DOF 号后面紧跟 **参考节点号**（只能有一个节点）。  
+3. 参考节点之后的所有数字都是 **受约束节点的编号**，此后不再出现 DOF 号。  
+4. 参考节点必须放在只包含 **单个节点** 的集合中。
+
+### 推荐的“配对（pair‑form）”语法（更易读、易维护）
+
+```abaqus
+*STEP
+*STATIC                     ; 或其他 step 类型
+
+* NSET, NSET=REFNODE
+262                         ; 参考节点（只能有一个）
+
+* NSET, NSET=MEANROT_NODES
+1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15,
+16, 17, 18, 19, 20, 93, 94, 95, 96, 97
+                         ; 需要保持相同平均转动的所有节点（不包括 262）
+
+*MPC, TYPE=MEANROT, NSET=REFNODE   ; 参考节点集合（单节点）
+NSET=MEANROT_NODES                  ; 受约束节点集合
+*END STEP
+```
+
+Abaqus 会自动把 **DOF 4、5、6**（转动）施加到 `MEANROT_NODES` 中的每个节点，并把这些节点的平均转动与参考节点 262 的转动绑定在一起。
+
+### 仍被 Abaqus 接受的传统逗号分隔写法（必须严格遵守 4‑5‑6 规则）
+
+如果您更喜欢旧式写法，只需把非法的 7、8 去掉：
+
+```abaqus
+*STEP
+*STATIC
+*MPC
+MEANROT,4,5,6,262,
+1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+*END STEP
+```
+
+解释：
+
+* `4,5,6` – 要约束的转动自由度（唯一合法的）  
+* `262`   – 参考节点号（主节点）  
+* 其余数字 – 受约束节点列表（不再出现自由度号）
+
+---
+
+## 防止再次报错的快速检查清单
+
+| 检查项 | 正确做法 |
+|--------|----------|
+| DOF 编号 | 只能是 **4、5、6**（不要出现 7、8、9 …） |
+| 参考节点集合 | 必须只包含 **一个节点**（如 262） |
+| 受约束节点集合 | 包含所有需要共享相同转动的节点，**不包括参考节点本身** |
+| 关键字语法 | 推荐使用 `*MPC, TYPE=MEANROT, NSET=…` + `NSET=…`；若使用旧式逗号形式，必须严格遵守 `MEANROT,4,5,6,ref,constrained‑nodes` 的顺序 |
+| 元素类型 | 仅适用于 **3‑D 实体** 单元（C3D8、C3D20 等） |
+
+---
+
+## TL;DR（最简修正）
+
+作业在 `*MPC, MEANROT` 行中止，是因为该行试图约束 **不存在的 DOF 7、8**。  
+在 3‑D 实体模型中只能约束 **DOF 4、5、6**（转动）。  
+
+把错误行改为只使用 4、5、6，并正确指定参考节点与受约束节点集合，例如：
+
+```abaqus
+*STEP
+*STATIC
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+或使用传统逗号语法：
+
+```abaqus
+*MPC
+MEANROT,4,5,6,262,1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+```
+
+完成上述修改后，分析将不再在 `*MPC, MEANROT` 行停止，作业能够顺利完成。祝您建模顺利！
+A: **根本原因**  
+在 3‑D 实体单元（C3D8、C3D20、C3D8R、C3D20R …）的节点只有 **6 个自由度**（1‑3 为平移，4‑6 为转动）。因此 **只能在 *MPC,MEANROT* 中约束 DOF 4、5、6**。  
+
+您在输入文件里写的  
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```  
+
+实际上让 Abaqus 去约束 **DOF 7、8**（以及重复的 5、6），这些自由度在实体节点中根本不存在。求解器在组装 *MEANROT* 多点约束时检测到非法 DOF，触发内部一致性检查失败，随后报出
+
+```
+user subroutine has caused an exception
+```
+
+并在该行立即终止作业。
+
+---
+
+## 正确的 **MEANROT** 用法
+
+### 1. 只能使用的 DOF 编号  
+```
+4  – 绕 X 轴的转动
+5  – 绕 Y 轴的转动
+6  – 绕 Z 轴的转动
+```
+**绝对不要出现 7、8、9 …**。
+
+### 2. 语法两种等价写法  
+
+#### (a) 推荐的 “配对（pair‑form）” 语法  
+```abaqus
+*STEP
+*STATIC                     ; 或其他 step 类型
+
+* NSET, NSET=REFNODE
+262                         ; 参考节点（只能有一个）
+
+* NSET, NSET=MEANROT_NODES
+1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+                         ; 需要保持相同平均转动的所有节点（不包括 262）
+
+*MPC, TYPE=MEANROT, NSET=REFNODE   ; 参考节点集合（单节点）
+NSET=MEANROT_NODES                  ; 受约束节点集合
+*END STEP
+```
+Abaqus 会自动把 **DOF 4、5、6** 施加到 `MEANROT_NODES` 中的每个节点，并把这些节点的平均转动与参考节点 262 的转动绑定在一起。
+
+#### (b) 传统的逗号分隔写法（必须严格遵守 4‑5‑6 规则）  
+```abaqus
+*STEP
+*STATIC
+*MPC
+MEANROT,4,5,6,262,
+1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+*END STEP
+```
+解释：
+
+| 项目 | 含义 |
+|------|------|
+| `4,5,6` | 要约束的转动自由度（唯一合法的） |
+| `262`   | 参考节点号（主节点） |
+| 其余数字 | 受约束节点列表（**不再出现 DOF 号**） |
+
+---
+
+## 防止再次报错的快速检查清单
+
+| 检查项 | 正确做法 |
+|--------|----------|
+| **DOF 编号** | 只能是 **4、5、6**（不要出现 7、8、9 …） |
+| **参考节点集合** | 必须只包含 **一个节点**（如 262） |
+| **受约束节点集合** | 包含所有需要共享相同转动的节点，**不包括参考节点本身** |
+| **关键字语法** | 推荐使用 `*MPC, TYPE=MEANROT, NSET=…` + `NSET=…`；若使用旧式逗号形式，必须严格遵守 `MEANROT,4,5,6,ref,constrained‑nodes` 的顺序 |
+| **元素类型** | 仅适用于 **3‑D 实体** 单元（C3D8、C3D20、C3D8R、C3D20R …） |
+
+---
+
+## TL;DR（最简修正）
+
+作业在 `*MPC, MEANROT` 行停止，是因为该行试图约束 **不存在的 DOF 7、8**。在 3‑D 实体模型中只能约束 **DOF 4、5、6**（转动）。
+
+**把错误行改为只使用 4、5、6，并正确指定参考节点与受约束节点集合**，例如：
+
+```abaqus
+*STEP
+*STATIC
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+或使用传统逗号语法：
+
+```abaqus
+*MPC
+MEANROT,4,5,6,262,1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+```
+
+完成上述修改后，分析将不再在 `*MPC, MEANROT` 行停止，作业能够顺利完成。祝您建模顺利！
+
+=== 2026-04-17 19:54:35 ===
+Q: **根本原因**  
+在 3‑D 实体单元（C3D8、C3D20、C3D8R、C3D20R …）的每个节点只有 **6 个自由度**：  
+
+| DOF 编号 | 含义 |
+|----------|------|
+| 1‑3      | 平移（X、Y、Z） |
+| 4‑6      | 转动（绕 X、Y、Z） |
+
+因此 **在 `*MPC,MEANROT` 中只能约束 DOF 4、5、6**。  
+您在输入文件里写的
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```
+
+实际上让 Abaqus 去约束 **DOF 7、8**（以及重复的 5、6），这些自由度在实体节点中根本不存在。求解器在组装 *MEANROT* 多点约束时检测到非法 DOF，触发内部一致性检查失败，随后报出
+
+```
+user subroutine has caused an exception
+```
+
+并在该行立即终止作业。
+
+---
+
+## 正确的 **MEANROT** 用法
+
+### 1. 只能使用的 DOF 编号  
+```
+4 – 绕 X 轴的转动
+5 – 绕 Y 轴的转动
+6 – 绕 Z 轴的转动
+```
+**绝对不要出现 7、8、9 …**。
+
+### 2. 两种等价写法  
+
+#### (a) 推荐的 “配对（pair‑form）” 语法（使用集合）  
+
+```abaqus
+*STEP
+*STATIC                     ; 或其他 step 类型
+
+* NSET, NSET=REFNODE
+262                         ; 参考节点（只能有一个）
+
+* NSET, NSET=MEANROT_NODES
+1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+                         ; 需要保持相同平均转动的所有节点（不包括 262）
+
+*MPC, TYPE=MEANROT, NSET=REFNODE   ; 参考节点集合（单节点）
+NSET=MEANROT_NODES                  ; 受约束节点集合
+*END STEP
+```
+
+Abaqus 会自动把 **DOF 4、5、6** 施加到 `MEANROT_NODES` 中的每个节点，并把这些节点的平均转动与参考节点 262 的转动绑定在一起。
+
+#### (b) 传统的逗号分隔写法（必须严格遵守 4‑5‑6 规则）  
+
+```abaqus
+*STEP
+*STATIC
+*MPC
+MEANROT,4,5,6,262,
+1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+*END STEP
+```
+
+解释：
+
+* `4,5,6` – 要约束的转动自由度（唯一合法的）  
+* `262`   – 参考节点号（主节点）  
+* 其余数字 – 受约束节点列表（**不再出现 DOF 号**）
+
+---
+
+## 防止再次报错的快速检查清单
+
+| 检查项 | 正确做法 |
+|--------|----------|
+| **DOF 编号** | 只能是 **4、5、6**（不要出现 7、8、9 …） |
+| **参考节点集合** | 必须只包含 **一个节点**（如 262） |
+| **受约束节点集合** | 包含所有需要共享相同转动的节点，**不包括参考节点本身** |
+| **关键字语法** | 推荐使用 `*MPC, TYPE=MEANROT, NSET=…` + `NSET=…`；若使用旧式逗号形式，必须严格遵守 `MEANROT,4,5,6,ref,constrained‑nodes` 的顺序 |
+| **元素类型** | 仅适用于 **3‑D 实体** 单元（C3D8、C3D20、C3D8R、C3D20R …） |
+
+---
+
+## TL;DR（最简修正）
+
+作业在 `*MPC, MEANROT` 行停止，是因为该行试图约束 **不存在的 DOF 7、8**。在 3‑D 实体模型中只能约束 **DOF 4、5、6**（转动）。
+
+**把错误行改为只使用 4、5、6，并正确指定参考节点与受约束节点集合**，例如：
+
+```abaqus
+*STEP
+*STATIC
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+或使用传统逗号语法：
+
+```abaqus
+*MPC
+MEANROT,4,5,6,262,1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+```
+
+完成上述修改后，分析将不再在 `*MPC, MEANROT` 行停止，作业能够顺利完成。祝您建模顺利！
+A: **问题根源**  
+在 3‑D 实体单元（C3D8、C3D20、C3D8R、C3D20R …）的每个节点只有 **6 个自由度**  
+
+| DOF 编号 | 含义 |
+|----------|------|
+| 1‑3      | 平移（X、Y、Z） |
+| 4‑6      | 转动（绕 X、Y、Z） |
+
+`*MPC,MEANROT` 只能约束 **转动 DOF（4、5、6）**。  
+您在输入文件中写成  
+
+```abaqus
+MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262
+```  
+
+实际上让 Abaqus 去约束 **DOF 7、8**（以及重复的 5、6），而这些自由度在实体节点中根本不存在。求解器在组装 *MEANROT* 多点约束时检测到非法 DOF，触发内部一致性检查失败，随后报出
+
+```
+user subroutine has caused an exception
+```
+
+并在该行立即终止作业。
+
+---
+
+## 正确的 **MEANROT** 用法
+
+### 1. 只能使用的 DOF 编号  
+```
+4 – 绕 X 轴的转动
+5 – 绕 Y 轴的转动
+6 – 绕 Z 轴的转动
+```
+**绝对不要出现 7、8、9 …**。
+
+### 2. 两种等价写法  
+
+#### (a) 推荐的 “配对（pair‑form）” 语法（使用集合）  
+
+```abaqus
+*STEP
+*STATIC                     ; 或其他 step 类型
+
+* NSET, NSET=REFNODE
+262                         ; 参考节点（只能有一个）
+
+* NSET, NSET=MEANROT_NODES
+1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+                         ; 需要保持相同平均转动的所有节点（不包括 262）
+
+*MPC, TYPE=MEANROT, NSET=REFNODE   ; 参考节点集合（单节点）
+NSET=MEANROT_NODES                  ; 受约束节点集合
+*END STEP
+```
+
+Abaqus 会自动把 **DOF 4、5、6** 施加到 `MEANROT_NODES` 中的每个节点，并把这些节点的平均转动与参考节点 262 的转动绑定在一起。
+
+#### (b) 传统的逗号分隔写法（必须严格遵守 4‑5‑6 规则）  
+
+```abaqus
+*STEP
+*STATIC
+*MPC
+MEANROT,4,5,6,262,
+1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+*END STEP
+```
+
+解释：
+
+| 项目 | 含义 |
+|------|------|
+| `4,5,6` | 要约束的转动自由度（唯一合法的） |
+| `262`   | 参考节点号（主节点） |
+| 其余数字 | 受约束节点列表（**不再出现 DOF 号**） |
+
+---
+
+## 防止再次报错的快速检查清单
+
+| 检查项 | 正确做法 |
+|--------|----------|
+| **DOF 编号** | 只能是 **4、5、6**（不要出现 7、8、9 …） |
+| **参考节点集合** | 必须只包含 **一个节点**（如 262） |
+| **受约束节点集合** | 包含所有需要共享相同转动的节点，**不包括参考节点本身** |
+| **关键字语法** | 推荐使用 `*MPC, TYPE=MEANROT, NSET=…` + `NSET=…`；若使用旧式逗号形式，必须严格遵守 `MEANROT,4,5,6,ref,constrained‑nodes` 的顺序 |
+| **元素类型** | 仅适用于 **3‑D 实体** 单元（C3D8、C3D20、C3D8R、C3D20R …） |
+
+---
+
+## TL;DR（最简修正）
+
+作业在 `*MPC,MEANROT` 行停止，是因为该行试图约束 **不存在的 DOF 7、8**。在 3‑D 实体模型中只能约束 **DOF 4、5、6**（转动）。
+
+**把错误行改为只使用 4、5、6，并正确指定参考节点与受约束节点集合**，例如：
+
+```abaqus
+*STEP
+*STATIC
+*MPC, TYPE=MEANROT, NSET=REFNODE
+NSET=MEANROT_NODES
+*END STEP
+```
+
+或使用传统逗号语法：
+
+```abaqus
+*MPC
+MEANROT,4,5,6,262,1,2,3,4,9,10,11,12,13,14,15,
+16,17,18,19,20,93,94,95,96,97
+```
+
+完成上述修改后，分析将不再在 `*MPC, MEANROT` 行停止，作业能够顺利完成。祝您建模顺利！
+

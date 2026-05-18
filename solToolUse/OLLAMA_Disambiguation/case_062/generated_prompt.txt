@@ -1,0 +1,111 @@
+**Why the fragment cannot be read by Abaqus/Standard**
+
+| # | What the file contains | Why it is illegal (Abaqus/Standard syntax) |
+|---|------------------------|--------------------------------------------|
+| 1 | `INC=100000` on the `*STEP` line | `*STEP` may **only** hold step‑level options (e.g. `NLGEOM`, `AMPLITUDE`, `TIME`).  Increment‑control keywords (`INC`, `DTIME`, `MIN`, `MAX`) belong to the **analysis‑type** keyword (`*STATIC`, `*DYNAMIC`, `*BUCKLE`, …), not to `*STEP`. |
+| 2 | No analysis‑type keyword after `*STEP` | After a `*STEP` header Abaqus expects a keyword such as `*STATIC`. Because it is missing, the next line (`.5E‑5,.5E‑5`) is taken as a new keyword and the parser stops with *“Expected *STATIC, *DYNAMIC … after *STEP”*. |
+| 3 | Node sets `N1` and `LAST` contain nodes 100‑102, but those nodes are never defined in a `*NODE` section | When the file is parsed Abaqus will later raise *“node not defined”* for those sets. |
+
+---
+
+## Correct way to write a **static** step  
+
+The hierarchy of an Abaqus step is
+
+```
+*STEP, <step‑level options only>
+*STATIC, <analysis‑type options – INC, DTIME, MIN, MAX …>
+<total‑step‑time>, <initial‑or‑minimum‑increment>
+*END STEP
+```
+
+### Short‑form (most common)
+
+```abaqus
+*STEP, NLGEOM                ! step‑level options only
+*STATIC, INC=100000          ! analysis‑type options (increment control)
+0.5E-5, 0.5E-5               ! total step time, initial (or minimum) increment
+*END STEP
+```
+
+### Long‑form (explicit min/max)
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=100000, DTIME=0.5E-5, MIN=0.5E-5, MAX=0.5E-5
+*END STEP
+```
+
+Both are syntactically valid; the short‑form is sufficient for the majority of static analyses.
+
+---
+
+## Fix the undefined node sets  
+
+The blocks
+
+```abaqus
+*NSET, NSET=N1
+100,101,102
+*NSET, NSET=LAST
+100,101,102
+```
+
+refer to nodes **100‑102**, which are never defined.  
+Either define those nodes (the usual choice) or delete/rename the sets if they are not needed.  
+A minimal node definition that makes the sets valid is
+
+```abaqus
+*NODE
+100, 0.0, 0.0, 0.0
+101, 1.0, 0.0, 0.0
+102, 0.0, 1.0, 0.0
+```
+
+---
+
+## Fully corrected fragment (including the missing nodes)
+
+```abaqus
+*NODE
+100, 0.0, 0.0, 0.0
+101, 1.0, 0.0, 0.0
+102, 0.0, 1.0, 0.0
+
+*NSET, NSET=N1
+100,101,102
+*NSET, NSET=LAST
+100,101,102
+
+*STEP, NLGEOM                ! step‑level options only
+*STATIC, INC=100000          ! analysis‑type options (increment control)
+0.5E-5, 0.5E-5               ! total step time, initial (or minimum) increment
+*END STEP
+```
+
+All other model sections (materials, sections, loads, boundary conditions, etc.) should appear **before** the `*STEP` block, exactly as in a normal Abaqus input file.
+
+---
+
+## Quick pre‑run checklist
+
+| ✔ | Item to verify |
+|---|----------------|
+| 1 | `*STEP` contains **only** step‑level options (`NLGEOM`, `AMPLITUDE`, `TIME`, …). |
+| 2 | An analysis‑type keyword (`*STATIC`, `*DYNAMIC`, `*BUCKLE`, …) follows `*STEP`. |
+| 3 | Increment control (`INC`, `DTIME`, `MIN`, `MAX`) is placed on the analysis‑type line, **not** on `*STEP`. |
+| 4 | The line after the analysis‑type keyword supplies “total time, initial (or minimum) increment”. |
+| 5 | Every node number used in a `*NSET` (or `*ELSET`) appears in a `*NODE` (or `*ELEMENT`) definition. |
+| 6 | The step ends with `*END STEP`. |
+| 7 | No stray commas, spaces, or line‑breaks that could be interpreted as a new keyword. |
+
+---
+
+### Bottom line
+
+1. **Move** `INC=100000` (and any `DTIME`, `MIN`, `MAX`) from the `*STEP` line to the `*STATIC` line.  
+2. **Insert** the required analysis‑type keyword (`*STATIC`) immediately after `*STEP`.  
+3. **Supply** the two numbers after `*STATIC` as “total step time, initial (or minimum) increment”.  
+4. **Define** all nodes that are referenced in sets (or delete the sets if they are not needed).
+
+After applying these corrections the input file is syntactically valid; Abaqus will no longer raise the “expected *STATIC/*DYNAMIC …” or “node not defined” errors, and the analysis can be run successfully.

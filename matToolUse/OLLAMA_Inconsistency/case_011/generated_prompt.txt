@@ -1,0 +1,134 @@
+Use Pymatgen to write a Python function that computes the following properties:
+    - `competing_phases_at_chempot_limits`: This property tests the set of competing phases at specific chemical potential limits in a formation energy diagram. The format is a dictionary where keys are strings representing chemical potential limits and values are sets of competing phase names.
+
+Available inputs and setup:
+- Assume `file_path` points to the base directory that contains the local input files for this case.
+    - Load the stable entries from `stable_entries_Mg_Ga_N.json` and the defect data from `Mg_Ga`.
+    - Build the formation energy diagram from the Mg_Ga data for charge states `[-2, -1, 0, 1]`, but only include the neutral and positive charge-state folders when reporting the competing phases at the chemical-potential limits.
+Write a Python function with no required input arguments. The function should:
+- Read the data from the provided file paths or generate data based on the description in the first section.
+- Calculate all the properties mentioned above using Pymatgen.
+- Return a dictionary where the property names are keys, and the calculated results are the values.
+
+Also ensure the function includes:
+- Necessary imports (e.g., `from pymatgen.analysis.defects.thermo import FormationEnergyDiagram`).
+- Proper file handling or data generation code.
+- Output in the form of a dictionary as specified above.
+- A complete docstring with clear input parameters, data types, and a description of the output.
+
+**Write the required Python function for this task**.```python
+import os
+import json
+from typing import Dict, Set
+
+from pymatgen.core import Structure
+from pymatgen.entries.computed_entries import ComputedEntry
+from pymatgen.analysis.defects.thermo import FormationEnergyDiagram, DefectEntry
+
+
+def compute_competing_phases_at_chempot_limits() -> Dict[str, Set[str]]:
+    """
+    Compute the competing phases at chemical‑potential limits for the Mg‑Ga defect
+    system using Pymatgen.
+
+    Returns
+    -------
+    Dict[str, Set[str]]
+        A dictionary where each key is a string describing a chemical‑potential limit
+        (e.g. ``"mu_Mg = 0 eV, mu_Ga = -1.2 eV"``) and each value is a set of phase
+        names that compete at that limit.  Only the neutral (charge 0) and positive
+        (charge +1) defect entries are considered when determining the competing
+        phases.
+    """
+    # ------------------------------------------------------------------
+    # 1. Resolve file locations relative to this script
+    # ------------------------------------------------------------------
+    script_dir = os.path.abspath(os.path.dirname(__file__))
+    stable_entries_path = os.path.join(script_dir, "stable_entries_Mg_Ga_N.json")
+    defect_root = os.path.join(script_dir, "Mg_Ga")
+
+    # ------------------------------------------------------------------
+    # 2. Load stable entries (list of ComputedEntry objects)
+    # ------------------------------------------------------------------
+    with open(stable_entries_path, "r") as f:
+        stable_entries_json = json.load(f)
+
+    stable_entries = []
+    for entry_dict in stable_entries_json:
+        # Each entry is assumed to be stored in the format produced by
+        # ComputedEntry.as_dict()
+        stable_entries.append(ComputedEntry.from_dict(entry_dict))
+
+    # ------------------------------------------------------------------
+    # 3. Load defect entries for the four charge states
+    # ------------------------------------------------------------------
+    charge_folders = {
+        -2: "-2",
+        -1: "-1",
+         0: "0",
+         1: "1",
+    }
+
+    defect_entries_all = []          # all charge states (used to build the diagram)
+    defect_entries_neutral_pos = []  # only charge 0 and +1 (used for reporting)
+
+    for charge, folder_name in charge_folders.items():
+        folder_path = os.path.join(defect_root, folder_name)
+
+        # Pymatgen can create a DefectEntry directly from a VASP output folder.
+        # The helper ``DefectEntry.from_directory`` looks for vasprun.xml,
+        # POSCAR (defect) and POSCAR (bulk) inside the folder.
+        # If the folder layout differs, adjust the loading routine accordingly.
+        defect_entry = DefectEntry.from_directory(folder_path)
+
+        defect_entries_all.append(defect_entry)
+
+        if charge in (0, 1):
+            defect_entries_neutral_pos.append(defect_entry)
+
+    # ------------------------------------------------------------------
+    # 4. Build the formation‑energy diagram
+    # ------------------------------------------------------------------
+    fed = FormationEnergyDiagram(
+        defect_entries=defect_entries_all,
+        stable_entries=stable_entries,
+    )
+
+    # ------------------------------------------------------------------
+    # 5. Extract competing phases at chemical‑potential limits
+    # ------------------------------------------------------------------
+    # The method returns a dict: {chempot_limit_string: set_of_phase_names}
+    raw_competing = fed.get_competing_phases_at_chempot_limits()
+
+    # Keep only phases that originate from the neutral or positive defect entries.
+    # Each DefectEntry has a ``name`` attribute (e.g. "V_Mg_0", "V_Mg_+1").
+    allowed_names = {de.name for de in defect_entries_neutral_pos}
+
+    filtered_competing: Dict[str, Set[str]] = {}
+    for limit, phases in raw_competing.items():
+        # ``phases`` may contain bulk/compound names as well as defect names.
+        # We intersect with the allowed defect names to enforce the requirement.
+        filtered = {phase for phase in phases if phase in allowed_names}
+        filtered_competing[limit] = filtered
+
+    return filtered_competing
+
+
+def compute_properties() -> Dict[str, Dict[str, Set[str]]]:
+    """
+    Wrapper that returns all requested properties in a single dictionary.
+
+    Returns
+    -------
+    Dict[str, Dict[str, Set[str]]]
+        {
+            "competing_phases_at_chempot_limits": {
+                "<chempot limit description>": {"defect_name_1", "defect_name_2", ...},
+                ...
+            }
+        }
+    """
+    return {
+        "competing_phases_at_chempot_limits": compute_competing_phases_at_chempot_limits()
+    }
+```

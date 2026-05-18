@@ -1,0 +1,201 @@
+Write a single Python function named compute_localized_bands() that takes no required input arguments.
+Assume a variable named file_path exists in the module/global scope and points to the base directory containing the input files.
+Read VASP outputs from two CCD directions under file_path: v_Ga/ccd_0_-1 and v_Ga/ccd_-1_0.
+In each CCD direction directory, load three vasprun.xml files located in subdirectories named 0, 1, and 2 (i.e., v_Ga/ccd_0_-1/0/vasprun.xml, v_Ga/ccd_0_-1/1/vasprun.xml, v_Ga/ccd_0_-1/2/vasprun.xml, and similarly for v_Ga/ccd_-1_0).
+For the three vaspruns in v_Ga/ccd_0_-1, pair each with the PROCAR file located at v_Ga/ccd_-1_0/1/PROCAR.
+For the three vaspruns in v_Ga/ccd_-1_0, pair each with the PROCAR file located at v_Ga/ccd_0_-1/1/PROCAR.
+Use pymatgen.io.vasp.outputs.Vasprun to parse each vasprun.xml with parse_projected_eigen=True.
+Use pymatgen.io.vasp.outputs.Procar to parse each paired PROCAR file.
+Assume spin-unpolarized or spin-polarized calculations may occur and handle both by aggregating over spins when computing localization metrics.
+Define “localized state” using an inverse participation ratio (IPR) computed from PROCAR orbital projections per band and k-point, aggregated across ions and orbitals.
+Compute per-(band,k) IPR as sum_i(w_i^2) / (sum_i(w_i))^2 where w_i is the total projection weight on ion i summed over all orbitals (and summed over spin channels if present).
+Compute a band-level IPR by k-point-weighted averaging of the per-(band,k) IPR values using k-point weights from the Vasprun object.
+Classify a band as localized if its band-level IPR is greater than or equal to 0.20.
+Use VASP-style 1-based band numbers in all returned sets.
+For localized_bands_set_1, compute localized bands for the defect configuration corresponding to directory v_Ga/ccd_0_-1 using the vasprun in subdirectory 1 (i.e., v_Ga/ccd_0_-1/1/vasprun.xml) paired with PROCAR from v_Ga/ccd_-1_0/1/PROCAR.
+For localized_bands_set_2, compute localized bands for the defect configuration corresponding to directory v_Ga/ccd_-1_0 using the vasprun in subdirectory 1 (i.e., v_Ga/ccd_-1_0/1/vasprun.xml) paired with PROCAR from v_Ga/ccd_0_-1/1/PROCAR.
+For localized_bands_set_2, additionally apply a band-energy window filter defined as energies within ±1.0 eV of the Fermi level (Efermi) from the corresponding Vasprun.
+Determine whether a band is within the window by checking if any k-point eigenvalue for that band (in any spin channel) lies within [Efermi-1.0, Efermi+1.0] eV.
+Return localized_bands_set_1 as the set of all 1-based band indices classified as localized for configuration 1 without any energy-window filtering.
+Return localized_bands_set_2 as the set of all 1-based band indices classified as localized for configuration 2 that also satisfy the ±1.0 eV around Efermi window.
+Include all necessary imports at the top of the function, including os, numpy as np, Vasprun, and Procar.
+Implement robust file handling by constructing paths with os.path.join and raising a clear FileNotFoundError if any required vasprun.xml or PROCAR file is missing.
+Return a dictionary with exactly two keys: "localized_bands_set_1" and "localized_bands_set_2".
+Ensure the function docstring states that it requires a global file_path string, describes the localization criterion (IPR threshold 0.20), describes the energy window for set 2 (±1.0 eV around Efermi), specifies that returned band indices are VASP-style 1-based, and documents the returned dictionary structure.
+
+def compute_localized_bands():
+    """
+    Compute localized band indices for two defect configurations using Pymatgen.
+
+    This function expects a global variable `file_path` (str) to exist in the module scope.
+    It reads VASP outputs from:
+      - {file_path}/v_Ga/ccd_0_-1/{0,1,2}/vasprun.xml
+      - {file_path}/v_Ga/ccd_-1_0/{0,1,2}/vasprun.xml
+    and pairs vaspruns as follows:
+      - ccd_0_-1 vaspruns are paired with PROCAR from ccd_-1_0/1/PROCAR
+      - ccd_-1_0 vaspruns are paired with PROCAR from ccd_0_-1/1/PROCAR
+
+    Localization criterion (best-practice assumption):
+    A band is classified as "localized" if its k-point-weighted inverse participation ratio (IPR)
+    computed from PROCAR ion-projection weights satisfies IPR >= 0.20.
+
+    IPR definition:
+    For each band and k-point, let w_i be the total projection weight on ion i summed over all
+    orbitals (and summed over spins if present). Then:
+        IPR(b,k) = sum_i (w_i^2) / (sum_i w_i)^2
+    The band-level IPR is the k-point-weighted average of IPR(b,k).
+
+    Band indexing:
+    Returned band indices are VASP-style 1-based band numbers.
+
+    Energy window for localized_bands_set_2 (best-practice assumption):
+    Only include localized bands that have at least one eigenvalue (at any k-point, any spin)
+    within ±1.0 eV of the Fermi level Efermi.
+
+    Returns
+    -------
+    dict
+        {
+          "localized_bands_set_1": set[int],
+          "localized_bands_set_2": set[int],
+        }
+    """
+    import os
+    import numpy as np
+    from pymatgen.io.vasp.outputs import Vasprun, Procar
+
+    # ---- helpers ----
+    def _require_file(p):
+        if not os.path.isfile(p):
+            raise FileNotFoundError(f"Required file not found: {p}")
+        return p
+
+    def _load_vaspruns(ccd_dir):
+        vaspruns = []
+        for i in (0, 1, 2):
+            vr_path = _require_file(os.path.join(file_path, ccd_dir, str(i), "vasprun.xml"))
+            vaspruns.append(Vasprun(vr_path, parse_projected_eigen=True))
+        return vaspruns
+
+    def _load_procar(procar_path):
+        procar_path = _require_file(procar_path)
+        return Procar(procar_path)
+
+    def _get_kweights(vr):
+        # Pymatgen stores k-point weights on the Kpoints object
+        # Normalize to sum to 1 for safety.
+        w = np.array([kp.weight for kp in vr.kpoints.kpts], dtype=float)
+        if w.sum() == 0:
+            # fallback: equal weights
+            w = np.ones_like(w) / len(w)
+        else:
+            w = w / w.sum()
+        return w
+
+    def _eigenvalues_by_spin(vr):
+        # vr.eigenvalues: dict[Spin] -> array shape (nkpts, nbands, 2) where [:,:,0]=energy
+        return vr.eigenvalues
+
+    def _band_in_window(vr, band_index_0based, emin, emax):
+        eig = _eigenvalues_by_spin(vr)
+        for spin, arr in eig.items():
+            energies = arr[:, band_index_0based, 0]
+            if np.any((energies >= emin) & (energies <= emax)):
+                return True
+        return False
+
+    def _compute_band_ipr_from_procar(vr, procar):
+        """
+        Compute band-level IPR for each band using PROCAR ion weights.
+        Returns: np.ndarray shape (nbands,) with band-level IPR.
+        """
+        kweights = _get_kweights(vr)
+
+        # Procar data layout differs across pymatgen versions; handle common cases.
+        # We aim to extract per k-point, per band, per ion weights summed over orbitals.
+        # Try to use procar.data if present; otherwise fall back to procar._data.
+        data = getattr(procar, "data", None)
+        if data is None:
+            data = getattr(procar, "_data", None)
+        if data is None:
+            raise RuntimeError("Unable to access PROCAR projection data from pymatgen Procar object.")
+
+        # Common pymatgen Procar.data structure:
+        # data[spin][k][band][ion][orbital] = weight
+        # We'll sum over orbitals to get w_i, then compute IPR.
+        spins = list(data.keys()) if isinstance(data, dict) else [None]
+
+        # Determine dimensions from first available entry
+        if isinstance(data, dict):
+            first_spin = spins[0]
+            nk = len(data[first_spin])
+            nb = len(data[first_spin][0])
+            nions = len(data[first_spin][0][0])
+        else:
+            # If not dict, assume shape-like nested list: [k][band][ion][orb]
+            nk = len(data)
+            nb = len(data[0])
+            nions = len(data[0][0])
+
+        band_ipr = np.zeros(nb, dtype=float)
+
+        for b in range(nb):
+            ipr_k = np.zeros(nk, dtype=float)
+            for k in range(nk):
+                w_ions = np.zeros(nions, dtype=float)
+                if isinstance(data, dict):
+                    for sp in spins:
+                        # sum over orbitals for each ion
+                        for iion in range(nions):
+                            w_ions[iion] += float(np.sum(data[sp][k][b][iion]))
+                else:
+                    for iion in range(nions):
+                        w_ions[iion] += float(np.sum(data[k][b][iion]))
+
+                denom = float(np.sum(w_ions))
+                if denom <= 0:
+                    ipr_k[k] = 0.0
+                else:
+                    ipr_k[k] = float(np.sum(w_ions ** 2) / (denom ** 2))
+
+            band_ipr[b] = float(np.sum(kweights * ipr_k))
+
+        return band_ipr
+
+    def _localized_band_set(vr, procar, ipr_threshold=0.20, energy_window=None):
+        """
+        energy_window: None or tuple(emin, emax) in eV.
+        """
+        band_ipr = _compute_band_ipr_from_procar(vr, procar)
+        localized = set()
+        for b0 in range(len(band_ipr)):
+            if band_ipr[b0] >= ipr_threshold:
+                if energy_window is not None:
+                    emin, emax = energy_window
+                    if not _band_in_window(vr, b0, emin, emax):
+                        continue
+                localized.add(b0 + 1)  # VASP-style 1-based
+        return localized
+
+    # ---- load inputs ----
+    # Load all vaspruns (as required by the setup), though we use index 1 for the outputs.
+    vaspruns_0m1 = _load_vaspruns("v_Ga/ccd_0_-1")
+    vaspruns_m10 = _load_vaspruns("v_Ga/ccd_-1_0")
+
+    procar_for_0m1 = _load_procar(os.path.join(file_path, "v_Ga/ccd_-1_0", "1", "PROCAR"))
+    procar_for_m10 = _load_procar(os.path.join(file_path, "v_Ga/ccd_0_-1", "1", "PROCAR"))
+
+    vr1 = vaspruns_0m1[1]
+    vr2 = vaspruns_m10[1]
+
+    # ---- compute outputs ----
+    localized_bands_set_1 = _localized_band_set(vr1, procar_for_0m1, ipr_threshold=0.20, energy_window=None)
+
+    efermi2 = float(vr2.efermi)
+    energy_window_2 = (efermi2 - 1.0, efermi2 + 1.0)
+    localized_bands_set_2 = _localized_band_set(vr2, procar_for_m10, ipr_threshold=0.20, energy_window=energy_window_2)
+
+    return {
+        "localized_bands_set_1": localized_bands_set_1,
+        "localized_bands_set_2": localized_bands_set_2,
+    }

@@ -1,0 +1,158 @@
+Solve the Allen-Cahn PDE u_t = (0.02)^2 * (u_xx + u_yy) + u - u**3 numerically using Python.
+The spatial domain is (x,y) in [0,1] x [0,1] and time domain is t in [0, 0.1].
+Use epsilon = 0.02.
+Use Nx = Ny = 300 uniform intervals in each spatial direction, giving 301 x 301 grid points including both endpoints.
+Set dx = 1/300 and dy = 1/300.
+Set x_i = i * dx for i = 0, 1, ..., 300 and y_j = j * dy for j = 0, 1, ..., 300.
+Use dt = 0.0001 and run for 1000 time steps to reach T = 0.1.
+Set the initial condition as follows: compute r = sqrt((x - 0.5)**2 + (y - 0.5)**2), then u(x, y, 0) = tanh((0.25 - r) / (sqrt(2) * 0.02)).
+Apply Dirichlet boundary conditions by setting boundary nodes to the initial condition values (evaluated at the boundary points) at every time step.
+Use a 5-point Laplacian stencil for the spatial discretization of u_xx + u_yy.
+Use the semi-implicit time integration scheme: (u_new - u_old) / dt = epsilon**2 * Laplacian(u_new) + u_old - u_old**3.
+Rearrange to form a sparse linear system (I - dt * epsilon**2 * L) * u_new = u_old + dt * (u_old - u_old**3) where L is the discrete Laplacian operator, and solve it at each time step using a sparse solver.
+Enforce Dirichlet boundary conditions by fixing boundary rows in the linear system so that u_new at boundary nodes equals the prescribed boundary values.
+After 1000 steps, compute the solution u(x, y, T=0.1) on the full 301 x 301 grid.
+Store the solution as a 2D array with shape (301, 301) where u[j, i] = u(x_i, y_j).
+Save a file named "solution_agent_allen_cahn_05.npz" containing: x as a 1D array of length 301, y as a 1D array of length 301, u as the 2D solution array of shape (301, 301), and scalar metadata T=0.1, dx=1/300, dy=1/300, dt=0.0001.
+Save a heatmap or filled contour plot of u(x, y, T=0.1) as "solution_agent_allen_cahn_05.png".
+Print min(u), max(u), and the discrete L2 norm computed as sqrt(sum(u**2) * dx * dy) at T=0.1.
+
+```python
+import numpy as np
+from scipy.sparse import eye, kron, diags
+from scipy.sparse.linalg import spsolve
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+# ── parameters ────────────────────────────────────────────────────────────────
+epsilon = 0.02
+Nx = Ny = 300          # number of intervals  →  301 grid points each direction
+dt = 0.0001
+Nt = 1000              # steps to reach T = 0.1
+T  = 0.1
+
+dx = 1.0 / Nx
+dy = 1.0 / Ny
+
+x = np.linspace(0.0, 1.0, Nx + 1)   # 301 points
+y = np.linspace(0.0, 1.0, Ny + 1)   # 301 points
+
+Nx1 = Nx + 1   # 301
+Ny1 = Ny + 1   # 301
+N   = Nx1 * Ny1
+
+# ── initial condition ─────────────────────────────────────────────────────────
+XX, YY = np.meshgrid(x, y)           # shape (Ny1, Nx1)
+R  = np.sqrt((XX - 0.5)**2 + (YY - 0.5)**2)
+U  = np.tanh((0.25 - R) / (np.sqrt(2) * epsilon))   # shape (Ny1, Nx1)
+
+# boundary values = initial condition evaluated at boundary (fixed for all time)
+U_bc = U.copy()   # Dirichlet BC values (constant in time for this problem)
+
+# ── build 1-D second-derivative matrices (interior + Dirichlet) ───────────────
+# We build the full (N x N) system and handle BCs by identity rows.
+
+def build_1d_laplacian(n, h):
+    """
+    Returns the (n x n) tridiagonal matrix for d^2/dx^2 with
+    Dirichlet BCs: rows 0 and n-1 are identity rows (zero RHS handled outside).
+    Interior rows: standard second-difference / h^2.
+    """
+    main  = np.full(n, -2.0 / h**2)
+    off   = np.full(n - 1,  1.0 / h**2)
+    A = diags([off, main, off], [-1, 0, 1], shape=(n, n), format='lil')
+    # Dirichlet: replace first and last rows with identity
+    A[0,  :] = 0;  A[0,  0]  = 1.0
+    A[-1, :] = 0;  A[-1, -1] = 1.0
+    return A.tocsr()
+
+# 1-D operators
+Lx = build_1d_laplacian(Nx1, dx)   # (Nx1 x Nx1)
+Ly = build_1d_laplacian(Ny1, dy)   # (Ny1 x Ny1)
+
+# 2-D Laplacian via Kronecker products
+# u is stored row-major: index = j*Nx1 + i  (j=row=y-index, i=col=x-index)
+Ix = eye(Nx1, format='csr')
+Iy = eye(Ny1, format='csr')
+
+L2D = kron(Iy, Lx, format='csr') + kron(Ly, Ix, format='csr')
+# Note: kron(Iy, Lx) acts on x for each fixed y-row;
+#       kron(Ly, Ix) acts on y for each fixed x-column.
+
+# ── identify boundary node indices ────────────────────────────────────────────
+# A node (j, i) is on the boundary if i==0, i==Nx, j==0, or j==Ny.
+is_boundary = np.zeros((Ny1, Nx1), dtype=bool)
+is_boundary[0,  :] = True
+is_boundary[-1, :] = True
+is_boundary[:,  0] = True
+is_boundary[:, -1] = True
+bc_idx = np.where(is_boundary.ravel())[0]
+
+# ── fix boundary rows in L2D: set to identity ─────────────────────────────────
+# (The Kronecker product already sets boundary rows to identity for pure
+#  x- or y-boundary nodes, but corner nodes get double-counted; we reset all.)
+from scipy.sparse import lil_matrix
+L2D_lil = L2D.tolil()
+for idx in bc_idx:
+    L2D_lil[idx, :] = 0
+    L2D_lil[idx, idx] = 1.0
+L2D = L2D_lil.tocsr()
+
+# ── system matrix  A = I - dt * eps^2 * L2D  (assembled once) ────────────────
+A_mat = eye(N, format='csr') - dt * epsilon**2 * L2D
+
+# ── time integration ──────────────────────────────────────────────────────────
+u_flat = U.ravel().copy()   # shape (N,)
+bc_vals = U_bc.ravel()[bc_idx]
+
+for step in range(Nt):
+    # explicit (nonlinear) part: f = u - u^3
+    f = u_flat - u_flat**3
+
+    # RHS = u_old + dt * f
+    rhs = u_flat + dt * f
+
+    # enforce Dirichlet BC in RHS
+    rhs[bc_idx] = bc_vals
+
+    # solve sparse system
+    u_flat = spsolve(A_mat, rhs)
+
+    # hard-enforce BC (guard against floating drift)
+    u_flat[bc_idx] = bc_vals
+
+# ── reshape solution ──────────────────────────────────────────────────────────
+u_sol = u_flat.reshape(Ny1, Nx1)   # u_sol[j, i] = u(x_i, y_j)
+
+# ── diagnostics ───────────────────────────────────────────────────────────────
+u_min  = u_sol.min()
+u_max  = u_sol.max()
+l2norm = np.sqrt(np.sum(u_sol**2) * dx * dy)
+print(f"min(u)  = {u_min:.6f}")
+print(f"max(u)  = {u_max:.6f}")
+print(f"L2 norm = {l2norm:.6f}")
+
+# ── save .npz ─────────────────────────────────────────────────────────────────
+np.savez(
+    "solution_agent_allen_cahn_05.npz",
+    x=x, y=y, u=u_sol,
+    T=np.float64(T),
+    dx=np.float64(dx),
+    dy=np.float64(dy),
+    dt=np.float64(dt),
+)
+print("Saved solution_agent_allen_cahn_05.npz")
+
+# ── save plot ─────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(6, 5))
+cf = ax.contourf(XX, YY, u_sol, levels=64, cmap='RdBu_r')
+plt.colorbar(cf, ax=ax, label='u')
+ax.set_title(f'Allen-Cahn solution at T={T}')
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+plt.tight_layout()
+plt.savefig("solution_agent_allen_cahn_05.png", dpi=150)
+plt.close()
+print("Saved solution_agent_allen_cahn_05.png")
+```

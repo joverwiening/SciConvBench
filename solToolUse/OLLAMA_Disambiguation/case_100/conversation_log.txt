@@ -1,0 +1,1669 @@
+=== 2026-04-18 14:41:47 ===
+Q: **What the message really means**
+
+When Abaqus reads a material definition that contains an *EXPANSION* (thermal‑expansion) entry it must know the **reference temperature** (the temperature at which the material is assumed to be stress‑free).  
+If the reference temperature is not supplied Abaqus automatically assumes **Tref = 0 °C** and prints the warning
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+In the input file you *do* have an *EXPANSION* card, but the syntax you used is not recognised by Abaqus, therefore the card is ignored and the material ends up without a reference temperature.  
+In addition, the material definition is incomplete because a **linear elastic** part is missing – Abaqus needs an elastic modulus (and Poisson’s ratio) before it can use the plastic data.
+
+Below is a minimal, fully‑functional version of the material definition that eliminates the warning and also fixes a few other small syntax problems that would otherwise stop the analysis.
+
+---
+
+## 1. Correct the *EXPANSION* card
+
+The correct syntax is
+
+```abaqus
+*EXPANSION, ZERO=0.0
+12.E-6,
+```
+
+* `ZERO=` must be followed by a **real number** (0.0, not just 0).  
+* The coefficient of thermal expansion (CTE) is given on the next line (or after a comma).  
+
+---
+
+## 2. Add the missing *ELASTIC* data
+
+A plastic material in Abaqus is always *elastic‑plastic*.  
+You have to give at least one elastic modulus and Poisson’s ratio.  
+If you do not care about the exact elastic response (you are only interested in the plastic part) you can use a very large modulus, e.g.
+
+```abaqus
+*ELASTIC
+2.1E5, 0.3
+```
+
+(Young’s modulus = 210 GPa, ν = 0.30 – typical for steel).  
+You can replace the numbers with any values that are appropriate for the alloy you are modelling.
+
+---
+
+## 3. Full corrected material block
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3               ! E (MPa) and ν
+*PLASTIC
+800., 0.0
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6
+```
+
+* The elastic part must appear **before** the plastic part.  
+* The plastic data are written as “σ, εp” pairs (stress in MPa, plastic strain).  
+* The *EXPANSION* card now contains the required reference temperature (0 °C) and the CTE.
+
+---
+
+## 4. Small additional fixes (optional but recommended)
+
+| Issue | Why it matters | Fix |
+|-------|----------------|-----|
+| `*BOUNDARY` line | The syntax you used (`*BOUNDARY 2,2,2`) is not a valid Abaqus keyword line. | Use a separate line for the keyword and then the data, e.g. <br>`*BOUNDARY`<br>`2, 2, 2` |
+| `*NSET, NSET=CN7` list | The list is split over several lines but the continuation character (a comma) is missing on the last line of the set. | End the last line with a comma **or** put the whole set on one line. |
+| `*STEP, NLGEOM` | The step time should be given as `*STEP, NLGEOM` (no extra numbers) unless you really need a *static* step with a time increment. | If you want a static thermal step you can write: <br>`*STEP, NLGEOM`<br>`*STATIC`<br>`1., 1., 1e-05, 1.` |
+| `*TEMPERATURE` in the step | You are applying a temperature of 1500 °C to **all** nodes (`NALL`). That is fine, but make sure the initial temperature (0 °C) is defined in the *INITIAL CONDITIONS* card, which you already have. | No change needed, just keep it in mind. |
+
+---
+
+## 5. Minimal working example (only the material part)
+
+Below is a **complete, self‑contained** snippet that you can paste into your input file (replace the original material block). All other parts of the model (nodes, elements, sets, loads, etc.) can stay exactly as they are.
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3
+*PLASTIC
+800., 0.
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+When you run the analysis with this corrected material definition the warning about the missing reference temperature disappears, and Abaqus will be able to compute the thermal strains correctly.
+
+---
+
+### TL;DR
+
+* **Add a proper *ELASTIC* entry** (any reasonable E and ν).  
+* **Write the *EXPANSION* card as `*EXPANSION, ZERO=0.0`** (the zero reference temperature must be a real number).  
+* Fix the syntax of the *BOUNDARY* card (keyword on its own line).  
+
+After these three changes the model will run without the “reference temperature not defined” warning.
+A: **What the warning really means**
+
+When Abaqus reads a material that contains an **EXPANSION** (thermal‑expansion) entry it must know the **reference temperature** (the temperature at which the material is assumed to be stress‑free).  
+If the reference temperature is not supplied Abaqus silently sets it to **0 °C** and prints  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+In your input file the *EXPANSION* card is written with a syntax that Abaqus does not recognise, so the card is ignored.  
+Because the material also has no **elastic** definition, Abaqus cannot build a complete elastic‑plastic material model.  
+Consequently the program falls back to the default reference temperature (0 °C) and issues the warning.
+
+---
+
+## 1. Fix the *EXPANSION* card
+
+The correct syntax is
+
+```abaqus
+*EXPANSION, ZERO=0.0
+12.E-6,
+```
+
+* `ZERO=` must be followed by a **real number** (0.0, not just 0).  
+* The coefficient of thermal expansion (CTE) is placed on the next line (or after a comma).  
+
+---
+
+## 2. Add the missing *ELASTIC* data
+
+A plastic material in Abaqus is always **elastic‑plastic**.  
+You have to give at least one elastic modulus and Poisson’s ratio before the plastic data.  
+If you do not care about the exact elastic response you can use a very large modulus, e.g.
+
+```abaqus
+*ELASTIC
+2.1E5, 0.3          ! E = 210 GPa, ν = 0.30 (typical steel)
+```
+
+Replace the numbers with values appropriate for the alloy you are modelling.
+
+---
+
+## 3. Put the cards in the proper order
+
+Abaqus expects the material cards in the order  
+
+```
+*ELASTIC
+*PLASTIC   (optional)
+*EXPANSION (optional)
+```
+
+so the *ELASTIC* entry must appear **before** the *PLASTIC* entry.
+
+---
+
+## 4. Full corrected material block
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3               ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                ! σ (MPa) , εp (plastic strain)
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+* The elastic part is now present.  
+* The plastic data are written as “σ, εp” pairs (stress in MPa, plastic strain).  
+* The *EXPANSION* card now contains the required reference temperature (0 °C) and the CTE.
+
+---
+
+## 5. Small additional syntax fixes (optional but recommended)
+
+| Issue | Why it matters | Quick fix |
+|-------|----------------|-----------|
+| `*BOUNDARY 2,2,2` | The keyword and its data must be on separate lines. | ```*BOUNDARY```<br/>```2, 2, 2``` |
+| `*NSET, NSET=CN7` list split over several lines | The last line of a set must end with a comma (or the whole set be on one line). | Add a trailing comma on the last line or keep the list on a single line. |
+| `*STEP, NLGEOM` line | The step definition is incomplete if you intend a static step. | ```*STEP, NLGEOM```<br/>```*STATIC```<br/>```1., 1., 1e-05, 1.``` |
+| Temperature load | You apply 1500 °C to all nodes (`NALL`). That is fine, just be sure the initial temperature (0 °C) is defined in the *INITIAL CONDITIONS* card (you already have it). | No change needed. |
+
+---
+
+## 6. Minimal working example (material only)
+
+You can replace the original material block in your input file with the snippet below. All other parts of the model (nodes, elements, sets, loads, etc.) can stay exactly as they are.
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3
+*PLASTIC
+800., 0.
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+Running the analysis with this corrected material definition eliminates the warning about the missing reference temperature, and Abaqus will correctly compute the thermal strains.
+
+---
+
+### TL;DR
+
+1. **Add a proper *ELASTIC* entry** (any reasonable `E` and `ν`).  
+2. **Write the *EXPANSION* card as `*EXPANSION, ZERO=0.0`** (the zero reference temperature must be a real number).  
+3. **Place the cards in the order** `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **Fix the syntax of the *BOUNDARY* card** (keyword on its own line).  
+
+After these three changes the model runs without the “reference temperature not defined” warning and the thermal‑expansion behavior is correctly accounted for.
+
+=== 2026-04-18 14:42:22 ===
+Q: **What the warning really means**
+
+When Abaqus reads a material that contains an **EXPANSION** (thermal‑expansion) entry it must know the **reference temperature** – the temperature at which the material is assumed to be stress‑free.  
+If the reference temperature is not supplied Abaqus silently sets it to **0 °C** and prints  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+In the input file you *do* have an *EXPANSION* card, but the syntax you used is not recognised by Abaqus, so the card is ignored.  
+Because the material also has **no elastic definition**, Abaqus cannot build a complete elastic‑plastic material model. Consequently the program falls back to the default reference temperature (0 °C) and issues the warning.
+
+Below is a minimal, fully‑functional version of the material definition that eliminates the warning and also fixes a few other small syntax problems that would otherwise stop the analysis.
+
+---
+
+## 1. Correct the *EXPANSION* card
+
+The correct syntax is
+
+```abaqus
+*EXPANSION, ZERO=0.0
+12.E-6,
+```
+
+* `ZERO=` must be followed by a **real number** (0.0, not just 0).  
+* The coefficient of thermal expansion (CTE) is placed on the next line (or after a comma).
+
+---
+
+## 2. Add the missing *ELASTIC* data
+
+Abaqus requires an **elastic‑plastic** material definition – the elastic part must be present before the plastic data.  
+If you do not care about the exact elastic response you can use a very large modulus, e.g.
+
+```abaqus
+*ELASTIC
+2.1E5, 0.3          ! E = 210 GPa, ν = 0.30 (typical steel)
+```
+
+Replace the numbers with values appropriate for the alloy you are modelling.
+
+---
+
+## 3. Put the cards in the proper order
+
+Abaqus expects the material cards in the order  
+
+```
+*ELASTIC
+*PLASTIC   (optional)
+*EXPANSION (optional)
+```
+
+so the *ELASTIC* entry must appear **before** the *PLASTIC* entry.
+
+---
+
+## 4. Full corrected material block
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3               ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                ! σ (MPa) , εp (plastic strain)
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+* The elastic part is now present.  
+* The plastic data are written as “σ, εp” pairs (stress in MPa, plastic strain).  
+* The *EXPANSION* card now contains the required reference temperature (0 °C) and the CTE.
+
+---
+
+## 5. Small additional syntax fixes (optional but recommended)
+
+| Issue | Why it matters | Quick fix |
+|-------|----------------|-----------|
+| `*BOUNDARY 2,2,2` | Keyword and its data must be on separate lines. | ```*BOUNDARY```<br/>```2, 2, 2``` |
+| `*NSET, NSET=CN7` list split over several lines | The last line of a set must end with a comma (or keep the whole set on one line). | Add a trailing comma on the last line or keep the list on a single line. |
+| `*STEP, NLGEOM` line | The step definition is incomplete if you intend a static step. | ```*STEP, NLGEOM```<br/>```*STATIC```<br/>```1., 1., 1e-05, 1.``` |
+| Temperature load | You apply 1500 °C to all nodes (`NALL`). That is fine, just be sure the initial temperature (0 °C) is defined in the *INITIAL CONDITIONS* card (you already have it). | No change needed. |
+
+---
+
+## 6. Minimal working example (material only)
+
+Replace the original material block in your input file with the snippet below. All other parts of the model (nodes, elements, sets, loads, etc.) can stay exactly as they are.
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3
+*PLASTIC
+800., 0.
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+Running the analysis with this corrected material definition eliminates the warning about the missing reference temperature, and Abaqus will correctly compute the thermal strains.
+
+---
+
+### TL;DR
+
+1. **Add a proper *ELASTIC* entry** (any reasonable `E` and `ν`).  
+2. **Write the *EXPANSION* card as `*EXPANSION, ZERO=0.0`** (the zero reference temperature must be a real number).  
+3. **Place the cards in the order** `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **Fix the syntax of the *BOUNDARY* card** (keyword on its own line).  
+
+After these three changes the model runs without the “reference temperature not defined” warning and the thermal‑expansion behavior is correctly accounted for.
+A: **Short answer** –  
+Add a proper *ELASTIC* definition, write the *EXPANSION* card with a real‑number reference temperature (`ZERO=0.0`), and place the material cards in the order **ELASTIC → PLASTIC → EXPANSION**. After that the warning
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+disappears and Abaqus will use the thermal‑expansion data you supplied.
+
+---
+
+## 1. Why the warning appears
+
+| What you wrote | What Abaqus sees |
+|----------------|------------------|
+| `*EXPANSION` with a syntax that is not recognised | The card is ignored → no reference temperature is defined |
+| No `*ELASTIC` entry in the material definition | Abaqus cannot build a complete elastic‑plastic material model, so it falls back to the default reference temperature (0 °C) and prints the warning. |
+
+---
+
+## 2. What has to be fixed
+
+1. **Give the material an elastic part** – any realistic `E` and `ν` (or a very large modulus if you really do not care about the elastic response).  
+2. **Write the expansion card with the required keyword `ZERO=` followed by a real number** (e.g. `ZERO=0.0`).  
+3. **Put the cards in the order required by Abaqus**:  
+
+   ```
+   *ELASTIC
+   *PLASTIC   (optional)
+   *EXPANSION (optional)
+   ```
+
+4. **Correct a few unrelated syntax slips** that would otherwise stop the analysis (boundary card, set lists, step definition, etc.).  
+
+---
+
+## 3. Corrected material block (copy‑and‑paste)
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3               ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                ! σ (MPa) , εp (plastic strain)
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6                   ! coefficient of thermal expansion (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+*Replace `2.1E5, 0.3` with the actual elastic constants of your alloy if you have them.*  
+The plastic data are written as **stress, plastic‑strain** pairs (the first value is the yield stress, the second the accumulated plastic strain at that point).
+
+---
+
+## 4. Minimal working example (material only)
+
+If you replace the original material definition in your input file with the snippet above, the model will:
+
+* have a complete elastic‑plastic description,  
+* recognise the thermal‑expansion coefficient,  
+* use the reference temperature **0 °C** that you explicitly supplied, and  
+* no longer emit the “reference temperature not defined” warning.
+
+---
+
+## 5. Other small syntax fixes (highly recommended)
+
+| Card / line | Problem | Fix |
+|-------------|---------|-----|
+| `*BOUNDARY 2,2,2` | Keyword and its data must be on separate lines. | ```*BOUNDARY```<br/>```2, 2, 2``` |
+| `*NSET, NSET=CN7` list split over several lines | The last line of a set must end with a comma (or keep the whole list on one line). | Add a trailing comma on the last line, or keep the whole list on a single line. |
+| `*STEP, NLGEOM` | No step type is given; a static step is usually intended. | ```*STEP, NLGEOM```<br/>```*STATIC```<br/>```1., 1., 1e-05, 1.``` |
+| Temperature load (`*CLOAD, OP=NEW` … `1500., NALL`) | This is fine, just be sure the initial temperature (0 °C) is defined (you already have `*INITIAL CONDITIONS, TYPE=TEMPERATURE`). | No change needed. |
+
+---
+
+## 6. TL;DR (the “cheat‑sheet”)
+
+1. **Add an elastic entry** (`*ELASTIC`).  
+2. **Write the expansion card as** `*EXPANSION, ZERO=0.0` followed by the CTE.  
+3. **Order the cards**: `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **Fix the boundary line** (`*BOUNDARY` on its own line).  
+
+After these three changes the analysis runs without the reference‑temperature warning and the thermal‑expansion behavior is correctly taken into account.
+
+=== 2026-04-18 14:42:50 ===
+Q: **Short answer** – give the material an elastic part, write the expansion card with a real‑number reference temperature (`ZERO=0.0`), and place the material cards in the order **ELASTIC → PLASTIC → EXPANSION**. After that the warning
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+disappears and Abaqus will use the thermal‑expansion data you supplied.
+
+---
+
+### What has to be fixed
+
+| What is missing / wrong | How to fix it |
+|--------------------------|---------------|
+| **No elastic definition** – a material that contains plastic data must also have an elastic part. | Add a `*ELASTIC` card (any reasonable `E` and `ν`). |
+| **EXPANSION card syntax** – `ZERO=` must be followed by a real number; the coefficient of thermal expansion must be on the next line (or after a comma). | Write it as `*EXPANSION, ZERO=0.0` followed by the CTE. |
+| **Card order** – Abaqus expects `*ELASTIC` before `*PLASTIC` (and before `*EXPANSION`). | Put the cards in the order `*ELASTIC → *PLASTIC → *EXPANSION`. |
+| **Boundary line** – keyword and data must be on separate lines. | Use `*BOUNDARY` on one line and the data on the next line (`2, 2, 2`). |
+
+---
+
+### Corrected material block (copy‑and‑paste)
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3               ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                ! σ (MPa) , εp (plastic strain)
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6                   ! coefficient of thermal expansion (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+*Replace `2.1E5, 0.3` with the actual elastic constants of your alloy if you have them.*
+
+---
+
+### TL;DR (cheat‑sheet)
+
+1. **Add `*ELASTIC`** (any reasonable `E` and `ν`).  
+2. **Write `*EXPANSION, ZERO=0.0`** followed by the CTE.  
+3. **Order the cards**: `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **Fix the boundary line** (`*BOUNDARY` on its own line).  
+
+After these changes the model runs without the “reference temperature not defined” warning and the thermal‑expansion behavior is correctly accounted for.
+A: **Answer – how to eliminate the “reference temperature not defined” warning and get a valid material definition**
+
+---
+
+## 1. What Abaqus is really complaining about  
+
+When a material contains a `*PLASTIC` card it **must also contain an elastic definition**.  
+If the material also has a `*EXPANSION` card, Abaqus expects the keyword to be written as  
+
+```
+*EXPANSION, ZERO=<real‑number>
+```
+
+and the coefficient of thermal expansion (CTE) must be supplied on the next line (or after a comma).  
+If `ZERO=` is omitted or left blank Abaqus inserts the default value **0.0** and prints the warning you saw.
+
+In addition, Abaqus reads the material cards in a **fixed order**:
+
+```
+*ELASTIC   →   *PLASTIC   →   *EXPANSION
+```
+
+If the order is different the parser still works, but the warning about the reference temperature is triggered because the `*EXPANSION` card is not recognised correctly.
+
+---
+
+## 2. Step‑by‑step fix
+
+| # | Issue | Fix |
+|---|-------|-----|
+| 1 | **No elastic part** – a plastic material must have an elastic definition. | Add a `*ELASTIC` card (any realistic `E` and `ν`). |
+| 2 | **Wrong EXPANSION syntax** – `ZERO=` must be followed by a numeric value. | Write `*EXPANSION, ZERO=0.0` (or the temperature you really want). |
+| 3 | **Card order** – Abaqus expects elastic → plastic → expansion. | Re‑order the cards exactly in that sequence. |
+| 4 | **Boundary line formatting** – keyword and data must be on separate lines. | Put `*BOUNDARY` on its own line, then the data line (`2, 2, 2`). |
+| 5 | **Optional – give the real CTE** – supply the coefficient of thermal expansion on the line after the `*EXPANSION` card. | `12.E-6` (or your alloy’s value). |
+
+---
+
+## 3. Complete, ready‑to‑copy material block
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3               ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                ! σ (MPa) , εp (plastic strain)
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6                   ! coefficient of thermal expansion (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+> **Note** – Replace `2.1E5, 0.3` with the actual elastic constants of your alloy if you have them. The CTE (`12.E-6`) is just an example; use the value that belongs to your material.
+
+---
+
+## 4. Example of the whole input snippet (including the boundary fix)
+
+```abaqus
+*HEADING
+** Example model
+...
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3
+*PLASTIC
+800., 0.0
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+
+*BOUNDARY
+2, 2, 2                ! fix DOF 2 (U2) at node set 2
+...
+```
+
+---
+
+## 5. TL;DR (cheat‑sheet)
+
+1. **Add `*ELASTIC`** (any realistic `E` and `ν`).  
+2. **Write `*EXPANSION, ZERO=0.0`** (or the temperature you need).  
+3. **Place the cards in order**: `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **Put data on the line after the keyword** (e.g., CTE on the line after `*EXPANSION`).  
+5. **Fix `*BOUNDARY` formatting** – keyword on its own line, data on the next line.
+
+After applying these five points the warning disappears and Abaqus will correctly use the thermal‑expansion data you supplied.
+
+=== 2026-04-18 14:43:13 ===
+Q: **Short answer –**  
+Add a proper *ELASTIC* definition, write the *EXPANSION* card with a real‑number reference temperature (`ZERO=0.0`), and place the material cards in the order **ELASTIC → PLASTIC → EXPANSION**. After that the warning
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```  
+
+disappears and Abaqus will correctly use the thermal‑expansion data you supplied.  
+
+**Copy‑and‑paste material block**
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3               ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                ! σ (MPa) , εp (plastic strain)
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6                   ! coefficient of thermal expansion (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+A: **Solution – how to eliminate the “reference temperature not defined” warning**
+
+1. **Give the material an *ELASTIC* entry** – Abaqus will not accept a material that only has *PLASTIC* and *EXPANSION* cards.  
+2. **Write the *EXPANSION* card with an explicit reference temperature** (`ZERO=`). If you want the reference to be 0 °C, use `ZERO=0.0`.  
+3. **Place the material cards in the required order**  
+
+```
+*ELASTIC
+*PLASTIC
+*EXPANSION
+```
+
+When the cards appear in that sequence Abaqus recognises the thermal‑expansion data and the warning disappears.
+
+---
+
+### Ready‑to‑copy material block
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3               ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                ! σ (MPa) , εp (plastic strain)
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6                   ! coefficient of thermal expansion (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+**What this does**
+
+- `*ELASTIC` supplies the mandatory elastic properties.  
+- `*PLASTIC` defines the yield curve.  
+- `*EXPANSION, ZERO=0.0` tells Abaqus that the coefficient of thermal expansion (CTE) is referenced to 0 °C, so the warning
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+no longer appears, and the thermal‑expansion behaviour is used correctly in the analysis.
+
+=== 2026-04-18 14:43:33 ===
+Q: **How to get rid of the warning and have a valid material definition**
+
+1. **Add an elastic part** – a material that contains plastic data must also have an `*ELASTIC` card (any realistic `E` and `ν` will do).
+
+2. **Write the expansion card with an explicit reference temperature**.  
+   The keyword must be `ZERO=` followed by a real number (e.g. `ZERO=0.0` for a 0 °C reference).  
+   The coefficient of thermal expansion (CTE) is then given on the next line (or after a comma).
+
+3. **Place the material cards in the order required by Abaqus**  
+
+   ```
+   *ELASTIC
+   *PLASTIC   (optional)
+   *EXPANSION (optional)
+   ```
+
+4. (Optional) Fix unrelated syntax slips that would otherwise stop the run, e.g. put `*BOUNDARY` on its own line and the data on the next line.
+
+---
+
+### Ready‑to‑copy material block
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.1E5, 0.3               ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                ! σ (MPa) , εp (plastic strain)
+1600., 0.1
+*EXPANSION, ZERO=0.0
+12.E-6                   ! coefficient of thermal expansion (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+*Replace `2.1E5, 0.3` with the actual elastic constants of your alloy if you have them, and use the correct CTE value for your material.*
+
+---
+
+### What this does
+
+- Supplies the mandatory elastic properties (`*ELASTIC`).  
+- Defines the yield curve (`*PLASTIC`).  
+- Gives Abaqus an explicit reference temperature for thermal expansion (`*EXPANSION, ZERO=0.0`).  
+
+With these three fixes the warning
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+disappears, and Abaqus will correctly use the thermal‑expansion data you supplied.
+A: **Answer – How to eliminate the “reference temperature for expansion” warning and obtain a valid material definition in Abaqus/Standard**
+
+---
+
+## 1. Why the warning appears  
+
+When a material contains an **`*EXPANSION`** (thermal‑expansion) card Abaqus expects a **reference temperature** (`ZERO=`) to be supplied.  
+If the keyword is written without `ZERO=` (or with a typo) Abaqus assumes a default value of 0 °C and prints the warning:
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+In addition, a material that has plastic data must also contain an **elastic** definition (`*ELASTIC`). Without it the material is incomplete and the job will abort.
+
+---
+
+## 2. What the input file must contain  
+
+| Card | Why it is needed | Typical syntax |
+|------|------------------|----------------|
+| `*ELASTIC` | Gives the linear elastic constants (Young’s modulus **E** and Poisson’s ratio **ν**). Required for every material that has plastic or expansion data. | `*ELASTIC`<br>`E, ν` |
+| `*PLASTIC` (optional) | Defines the yield surface (σ‑εp curve). | `*PLASTIC`<br>`σ₁, εp₁`<br>`σ₂, εp₂` … |
+| `*EXPANSION` (optional) | Supplies the coefficient of thermal expansion (CTE) **α** and the reference temperature **T₀**. The reference temperature **must** be given with the keyword `ZERO=`. | `*EXPANSION, ZERO=T₀`<br>`α` |
+| `*SOLID SECTION` | Associates the material with an element set. | `*SOLID SECTION, ELSET=…, MATERIAL=…` |
+
+**Important ordering rule** – Abaqus reads the material cards in the order they appear. The recommended (and safest) order is:
+
+```
+*ELASTIC
+*PLASTIC   (if you have plastic data)
+*EXPANSION (if you have thermal‑expansion data)
+```
+
+If you place `*EXPANSION` before `*ELASTIC` the parser still works, but some older Abaqus versions issue a warning. Keeping the order above avoids any ambiguity.
+
+---
+
+## 3. Common syntax pitfalls that stop the run  
+
+| Problem | Symptom | Fix |
+|---------|---------|-----|
+| `*BOUNDARY` written on the same line as its data | “Incorrect number of data items” error | Put `*BOUNDARY` on its own line; the following line(s) contain the node‑set, DOF, and value. |
+| Missing comma or extra spaces in the card line | “Invalid keyword” error | Use the exact keyword spelling, commas only where required, no stray characters. |
+| Using scientific notation without a leading digit (e.g. `.12E-5`) | “Invalid data” error | Write `0.12E-5` or `1.2E-6`. |
+| Forgetting the trailing slash for a continuation line (if you split a line) | “Data line too long” error | Either keep the whole line on one line, or end the first line with a comma and continue on the next line. |
+
+---
+
+## 4. Ready‑to‑copy material block  
+
+Replace the placeholder numbers with the actual values for your alloy (E, ν, plastic curve, CTE). The reference temperature (`ZERO=`) can be any temperature that matches the temperature at which the CTE was measured – 0 °C is the most common choice.
+
+```abaqus
+*MATERIAL, NAME=HYDROGENATED_STEEL
+*ELASTIC
+2.10E5, 0.30                ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                   ! σ (MPa) , εp (plastic strain)
+1600., 0.10
+*EXPANSION, ZERO=0.0        ! Reference temperature = 0 °C
+12.0E-6                     ! Coefficient of thermal expansion (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=HYDROGENATED_STEEL
+```
+
+**Explanation of each line**
+
+| Line | Meaning |
+|------|---------|
+| `*MATERIAL, NAME=HYDROGENATED_STEEL` | Starts a new material definition. |
+| `*ELASTIC` | Begins the elastic property block. |
+| `2.10E5, 0.30` | **E = 210 000 MPa**, **ν = 0.30** (example values). |
+| `*PLASTIC` | Begins the plastic‑flow curve. |
+| `800., 0.0`<br>`1600., 0.10` | Two points on the σ‑εp curve (yield at 800 MPa, hardening to 1600 MPa at 0.10 plastic strain). |
+| `*EXPANSION, ZERO=0.0` | Thermal‑expansion card with an explicit reference temperature of 0 °C. |
+| `12.0E-6` | **α = 12 × 10⁻⁶ /°C** (example CTE). |
+| `*SOLID SECTION, ELSET=EALL, MATERIAL=HYDROGENATED_STEEL` | Assigns the material to the element set `EALL`. |
+
+---
+
+## 5. What you will see after the fix  
+
+* The warning about the missing reference temperature disappears.  
+* Abaqus reads the material without error and uses the supplied CTE at the defined reference temperature.  
+* The job proceeds normally, and the thermal‑expansion effects are correctly accounted for in the analysis.
+
+---
+
+### Quick checklist before running
+
+1. **Elastic data present?** – Yes (`*ELASTIC`).  
+2. **Reference temperature supplied?** – Yes (`ZERO=0.0` or your chosen value).  
+3. **Cards in correct order?** – `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **No stray data on keyword lines** – e.g. `*BOUNDARY` alone on its line.  
+5. **All numeric values are real numbers** (use a leading digit for scientific notation).  
+
+If every item above is satisfied, the material definition is **valid** and the analysis will run without the earlier warning.
+
+=== 2026-04-18 14:44:07 ===
+Q: **How to get rid of the “reference temperature for expansion” warning and obtain a valid material definition**
+
+A material that contains `*PLASTIC` (or `*EXPANSION`) must also have an elastic part and the `*EXPANSION` card has to be written with an explicit reference temperature (`ZERO=`).  
+When the cards are placed in the order required by Abaqus the warning disappears and the material can be used in the analysis.
+
+---
+
+### 1. What the material must contain  
+
+| Card | Why it is needed |
+|------|------------------|
+| `*ELASTIC` | Supplies the mandatory linear‑elastic constants (Young’s modulus **E** and Poisson’s ratio **ν**). Required for any material that also has plastic or expansion data. |
+| `*PLASTIC` (optional) | Defines the yield curve (σ‑εp). |
+| `*EXPANSION, ZERO=<real‑number>` | Gives the coefficient of thermal expansion (α) **and** the reference temperature (the value after `ZERO=`). If you want the reference to be 0 °C use `ZERO=0.0`. |
+| `*SOLID SECTION` | Associates the material with an element set. |
+
+**Required order** (the safest order for all Abaqus versions)
+
+```
+*ELASTIC
+*PLASTIC   (if you have plastic data)
+*EXPANSION (if you have thermal‑expansion data)
+```
+
+---
+
+### 2. Ready‑to‑copy material block  
+
+Replace the placeholder numbers with the actual values for your alloy (E, ν, plastic curve, CTE). The reference temperature can be any temperature that matches the temperature at which the CTE was measured – 0 °C (`ZERO=0.0`) is the most common choice.
+
+```abaqus
+*MATERIAL, NAME=HY
+*ELASTIC
+2.10E5, 0.30                ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                   ! σ (MPa) , εp (plastic strain)
+1600., 0.10
+*EXPANSION, ZERO=0.0        ! Reference temperature = 0 °C
+12.0E-6                     ! coefficient of thermal expansion (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=HY
+```
+
+* `*ELASTIC` supplies the mandatory elastic properties.  
+* `*PLASTIC` defines the yield curve.  
+* `*EXPANSION, ZERO=0.0` tells Abaqus that the coefficient of thermal expansion is referenced to 0 °C, so the warning
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+no longer appears, and the thermal‑expansion behaviour is used correctly in the analysis.
+
+---
+
+### 3. Quick checklist before running
+
+1. **Elastic entry present?** – Yes (`*ELASTIC`).  
+2. **Reference temperature supplied?** – Yes (`ZERO=0.0` or your chosen value).  
+3. **Cards in correct order?** – `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **No data on the same line as a keyword** (e.g., `*BOUNDARY` must be on its own line).  
+
+If all the items above are satisfied, the material definition is valid and the job will run without the “reference temperature not defined” warning.
+A: **Answer – How to eliminate the “reference temperature for expansion” warning and create a valid material definition in Abaqus**
+
+---
+
+## 1. Why the warning appears  
+
+When a material contains **`*PLASTIC`** (or **`*EXPANSION`**) Abaqus expects the material to have a **linear‑elastic** part (`*ELASTIC`).  
+In addition, the **`*EXPANSION`** card must contain an explicit **reference temperature** (`ZERO=`).  
+If either of these requirements is missing, Abaqus issues the warning  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+and the material is considered *incomplete* – it can still be used, but the thermal‑expansion data are taken with an implicit reference of 0 °C, which is often not what you intended.
+
+---
+
+## 2. What a *complete* material definition must contain  
+
+| Card | Mandatory? | What it supplies | Remarks |
+|------|------------|------------------|---------|
+| `*ELASTIC` | **Yes** (for any material that also has plastic or expansion data) | Young’s modulus **E** and Poisson’s ratio **ν** (linear‑elastic constants) | Must be the **first** card of the material block. |
+| `*PLASTIC` | Optional (only if you need a yield curve) | Yield stress – plastic strain pairs (σ‑εp) | Can be omitted for a purely elastic‑thermal material. |
+| `*EXPANSION, ZERO=<Tref>` | **Yes** if you use thermal expansion | Coefficient of thermal expansion **α** and the temperature at which α was measured (`Tref`) | `ZERO=` can be any temperature (0 °C, 20 °C, 293 K …). The value you choose must match the data source. |
+| `*SOLID SECTION` (or `*SHELL SECTION`, etc.) | Yes – to assign the material to an element set | Links the material name to a region of the model | Not part of the material block itself, but required for the model to run. |
+
+**Important:** The **order** of the cards matters for all Abaqus releases. The safest order is  
+
+```
+*ELASTIC
+*PLASTIC   (if present)
+*EXPANSION (if present)
+```
+
+If you place `*EXPANSION` before `*ELASTIC`, Abaqus will still read the file but may generate the warning or, in older versions, even abort the job.
+
+---
+
+## 3. Ready‑to‑copy material block  
+
+Below is a minimal, fully‑valid material definition that you can paste into your **`.inp`** file.  
+Replace the placeholder numbers with the actual data for your alloy (or polymer, concrete, etc.).
+
+```abaqus
+*MATERIAL, NAME=MY_MATERIAL
+*ELASTIC
+210000., 0.30                ! E (MPa) , ν
+*PLASTIC
+400., 0.0                    ! σy (MPa) , εp (plastic strain)
+600., 0.05
+800., 0.12
+*EXPANSION, ZERO=0.0         ! Reference temperature = 0 °C (change if needed)
+12.0E-6                      ! α (1/°C)
+```
+
+**Explanation of the lines**
+
+| Line | Meaning |
+|------|---------|
+| `*MATERIAL, NAME=MY_MATERIAL` | Starts a new material called *MY_MATERIAL*. |
+| `*ELASTIC` | Begins the elastic block. |
+| `210000., 0.30` | **E = 210 GPa**, **ν = 0.30** (units are those used in the model – here MPa). |
+| `*PLASTIC` | Begins the plastic block (optional). |
+| `400., 0.0` … | Yield stress – plastic strain pairs. Add as many points as required. |
+| `*EXPANSION, ZERO=0.0` | Begins the thermal‑expansion block and explicitly sets the reference temperature to **0 °C**. |
+| `12.0E-6` | Coefficient of thermal expansion **α = 12 × 10⁻⁶ /°C**. |
+
+If you **do not need plasticity**, simply omit the `*PLASTIC` section:
+
+```abaqus
+*ELASTIC
+210000., 0.30
+*EXPANSION, ZERO=20.0
+12.0E-6
+```
+
+---
+
+## 4. Assign the material to a region  
+
+After the material block, you must create a section and attach it to an element set:
+
+```abaqus
+*SOLID SECTION, ELSET=ALL_ELEMS, MATERIAL=MY_MATERIAL
+```
+
+`ALL_ELEMS` (or any name you choose) must be defined earlier in the input file, e.g.:
+
+```abaqus
+*ELEMENT, TYPE=C3D8, ELSET=ALL_ELEMS
+1, 1,2,3,4,5,6,7,8
+...
+```
+
+---
+
+## 5. Quick checklist before you run the job  
+
+| # | Item | How to verify |
+|---|------|---------------|
+| 1 | **Elastic card present** | Search for `*ELASTIC` inside the material block. |
+| 2 | **Reference temperature supplied** | The `*EXPANSION` line must contain `ZERO=` (e.g., `ZERO=0.0`). |
+| 3 | **Correct order** | The first line after `*MATERIAL` must be `*ELASTIC`; `*PLASTIC` (if any) follows; `*EXPANSION` is last. |
+| 4 | **No data on the same line as a keyword** | Keywords (`*ELASTIC`, `*PLASTIC`, `*EXPANSION`) must be on a line by themselves. |
+| 5 | **Section assigned** | A `*SOLID SECTION` (or `*SHELL SECTION`) referencing the material name must exist. |
+| 6 | **Units consistency** | Ensure that the units used for **E**, **σ**, **α**, and temperature match the rest of the model (e.g., MPa, °C). |
+| 7 | **Temperature field defined (if needed)** | If you intend to use thermal expansion, a temperature field (initial or step) must be prescribed. |
+
+If **all** the items above are satisfied, Abaqus will **not** issue the “reference temperature for expansion” warning and the material will be fully usable in static, dynamic, or thermal‑mechanical analyses.
+
+---
+
+## 6. Common pitfalls & how to avoid them  
+
+| Pitfall | Symptom | Fix |
+|---------|----------|-----|
+| `*EXPANSION` without `ZERO=` | Warning appears, reference temperature defaults to 0 °C (may be wrong). | Add `ZERO=` with the temperature at which α was measured. |
+| `*PLASTIC` present but **no** `*ELASTIC` | Abaqus aborts with “material definition incomplete”. | Insert an `*ELASTIC` card before `*PLASTIC`. |
+| `*ELASTIC` placed **after** `*PLASTIC` or `*EXPANSION` | Warning or error on some Abaqus versions. | Re‑order the cards as shown above. |
+| Using **different units** for temperature (K vs °C) | Wrong thermal strain because α is tied to the reference temperature unit. | Keep temperature units consistent throughout the model; if you use Kelvin, set `ZERO=273.15` for a 0 °C reference. |
+| Forgetting to assign the material to a section | Model runs, but elements have “no material” and the job aborts. | Add a `*SOLID SECTION` (or appropriate section) that references the material name. |
+
+---
+
+## 7. TL;DR – One‑line recipe  
+
+```abaqus
+*ELASTIC
+<E>, <ν>
+*PLASTIC               (optional)
+<σ1>, <εp1>
+...
+*EXPANSION, ZERO=<Tref>
+<α>
+*SOLID SECTION, ELSET=<your_elset>, MATERIAL=<your_material_name>
+```
+
+Replace `<E>`, `<ν>`, `<σi>`, `<εpi>`, `<α>`, `<Tref>`, `<your_elset>` and `<your_material_name>` with your actual numbers and names.  
+
+With this exact structure the warning disappears and the material is fully defined for any Abaqus analysis that involves plasticity and/or thermal expansion.
+
+=== 2026-04-18 14:44:46 ===
+Q: **Why the warning appears**
+
+`*EXPANSION` (thermal‑expansion) must contain a **reference temperature** (`ZERO=`).  
+If the keyword is written without `ZERO=` (or with a typo) Abaqus assumes a default value of 0 °C and prints  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+In addition, any material that also contains `*PLASTIC` (or `*EXPANSION`) **must** have a linear‑elastic part (`*ELASTIC`).  
+Without an elastic definition the material is incomplete and the job will abort.
+
+---
+
+### What a complete material definition must contain
+
+| Card | Required? | What it supplies | Remarks |
+|------|-----------|------------------|---------|
+| `*ELASTIC` | **Yes** (for any material that also has plastic or expansion data) | Young’s modulus **E** and Poisson’s ratio **ν** (linear‑elastic constants) | Must be the **first** card after `*MATERIAL`. |
+| `*PLASTIC` | Optional (only if a yield curve is needed) | σ‑εp pairs (yield stress – plastic strain) | Can be omitted for a purely elastic‑thermal material. |
+| `*EXPANSION, ZERO=<Tref>` | **Yes** if thermal expansion is used | Coefficient of thermal expansion **α** and the temperature at which α was measured (`Tref`) | `ZERO=` can be any temperature (0 °C → `ZERO=0.0`). |
+| `*SOLID SECTION` (or `*SHELL SECTION`, …) | Yes – to assign the material to an element set | Links the material name to a region of the model. |
+
+**Required order (safest for all Abaqus versions)**  
+
+```
+*ELASTIC
+*PLASTIC   (if present)
+*EXPANSION (if present)
+```
+
+---
+
+### Ready‑to‑copy material block
+
+Replace the numbers with the actual data for your alloy (or other material).
+
+```abaqus
+*MATERIAL, NAME=MY_MATERIAL
+*ELASTIC
+2.10E5, 0.30                ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800., 0.0                   ! σ (MPa) , εp (plastic strain)
+1600., 0.10
+*EXPANSION, ZERO=0.0        ! Reference temperature = 0 °C
+12.0E-6                     ! Coefficient of thermal expansion (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=MY_MATERIAL
+```
+
+**Explanation**
+
+* `*ELASTIC` supplies the mandatory linear‑elastic constants.  
+* `*PLASTIC` defines the yield curve (optional).  
+* `*EXPANSION, ZERO=0.0` gives an explicit reference temperature (here 0 °C), so the warning about a missing reference temperature disappears.  
+* `*SOLID SECTION` attaches the material to the element set `EALL`.
+
+---
+
+### Quick checklist before running
+
+1. **Elastic entry present?** – Yes (`*ELASTIC`).  
+2. **Reference temperature supplied?** – Yes (`ZERO=0.0` or your chosen value).  
+3. **Cards in correct order?** – `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **No data on the same line as a keyword** (e.g., `*BOUNDARY` must be on its own line).  
+
+If all items above are satisfied, the material definition is **valid** and Abaqus will run **without** the “reference temperature for expansion” warning, correctly using the thermal‑expansion data in your analysis.
+A: **Why the warning is printed**
+
+`*EXPANSION` tells Abaqus how the material length changes with temperature.  
+For every expansion definition Abaqus must know the temperature at which the
+coefficient of thermal expansion (CTE) was measured – the **reference
+temperature**.  
+If the keyword is written without the optional field `ZERO=` (or the field is
+miss‑spelled) Abaqus cannot find that temperature, assumes a default value of
+0 °C and issues the message  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+The message is only a *warning* when a reference temperature is supplied
+implicitly (0 °C).  It becomes an *error* when the material also contains a
+plasticity definition (`*PLASTIC`) **and** no linear‑elastic part (`*ELASTIC`)
+is present – a material that can yield must first be defined as elastic.
+
+---
+
+## What a *complete* material definition must contain
+
+| Card (keyword)                     | Required? | What it provides                              | Remarks |
+|------------------------------------|-----------|----------------------------------------------|---------|
+| `*ELASTIC`                         | **Yes** (if the material also has `*PLASTIC` or `*EXPANSION`) | Young’s modulus **E** and Poisson’s ratio **ν** (linear‑elastic constants) | Must be the **first** card after `*MATERIAL`. |
+| `*PLASTIC`                         | Optional (only when a yield curve is needed) | σ‑εp pairs (yield stress – plastic strain) | Can be omitted for a purely elastic‑thermal material. |
+| `*EXPANSION, ZERO=<Tref>`          | **Yes** when thermal expansion is used | Coefficient of thermal expansion **α** and the temperature at which α was measured (`Tref`) | `ZERO=` may be any temperature (commonly 0 °C → `ZERO=0.0`). |
+| `*SOLID SECTION`, `*SHELL SECTION`, … | Yes – to assign the material to a region of the model | Links the material name to an element set (`ELSET=`) | Must appear after the material cards. |
+
+### Recommended order (works for every Abaqus version)
+
+```
+*ELASTIC
+*PLASTIC   (if you have it)
+*EXPANSION (if you have it)
+```
+
+Keeping this order avoids the “material definition incomplete” error that can
+appear when Abaqus reads the cards out of sequence.
+
+---
+
+## Ready‑to‑copy example
+
+Replace the numerical values with those that belong to your alloy (or any
+other material).  The example uses SI units (MPa, °C) – adapt the units to the
+system you are using.
+
+```abaqus
+*MATERIAL, NAME=MY_MATERIAL
+*ELASTIC
+210000., 0.30                ! E (MPa)  , ν
+*PLASTIC
+800.,   0.0                  ! σy (MPa) , εp
+1600.,  0.10                 ! σ2 (MPa) , εp2
+*EXPANSION, ZERO=0.0         ! Reference temperature = 0 °C
+12.0E-6                      ! α (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=MY_MATERIAL
+```
+
+**What each line does**
+
+| Line | Purpose |
+|------|---------|
+| `*MATERIAL, NAME=…` | Starts a new material definition. |
+| `*ELASTIC` | Supplies the mandatory linear‑elastic constants. |
+| `*PLASTIC` | Gives the yield curve (optional – remove if not needed). |
+| `*EXPANSION, ZERO=0.0` | Provides the CTE **and** an explicit reference temperature, eliminating the warning. |
+| `*SOLID SECTION …` | Assigns the material to the element set `EALL`. |
+
+---
+
+## Quick pre‑run checklist
+
+1. **Elastic card present?** – Yes (`*ELASTIC`).  
+2. **Reference temperature supplied?** – Yes (`ZERO=`).  
+3. **Cards are in the correct order?** – `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **No data on the same line as a keyword** (e.g., `*BOUNDARY` must be on its own line).  
+5. **Units are consistent** (E in MPa if stresses are in MPa, temperature in °C).  
+6. **Material name matches the name used in the section definition** (`MATERIAL=MY_MATERIAL`).  
+
+If every item above is satisfied, Abaqus will read the material without
+producing the “reference temperature for expansion” warning and the job will
+run correctly.
+
+=== 2026-04-18 14:45:19 ===
+Q: **Why the warning is printed**
+
+`*EXPANSION` tells Abaqus how the material length changes with temperature.  
+For every expansion definition Abaqus must know the temperature at which the
+coefficient of thermal expansion (CTE) was measured – the **reference
+temperature**.  
+If the keyword is written without the optional field `ZERO=` (or the field is
+miss‑spelled) Abaqus cannot find that temperature, assumes a default value of
+0 °C and issues the warning  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+In addition, any material that also contains a plasticity definition
+(`*PLASTIC`) **must** have a linear‑elastic part (`*ELASTIC`).  
+If the elastic part is missing the material is considered incomplete and the
+analysis will abort.
+
+---------------------------------------------------------------------
+
+## What a *complete* material definition must contain
+
+| Keyword | Required? | What it supplies | Remarks |
+|---------|-----------|------------------|---------|
+| `*ELASTIC` | **Yes** (for any material that also has `*PLASTIC` or `*EXPANSION`) | Young’s modulus **E** and Poisson’s ratio **ν** (linear‑elastic constants) | Must be the **first** card after `*MATERIAL`. |
+| `*PLASTIC` | Optional (only if a yield curve is needed) | σ‑εp pairs (yield stress – plastic strain) | Can be omitted for a purely elastic‑thermal material. |
+| `*EXPANSION, ZERO=<Tref>` | **Yes** when thermal expansion is used | Coefficient of thermal expansion **α** and the temperature at which α was measured (`Tref`) | `ZERO=` may be any temperature (commonly 0 °C → `ZERO=0.0`). |
+| `*SOLID SECTION` (or `*SHELL SECTION`, …) | Yes – to assign the material to a region of the model | Links the material name to an element set (`ELSET=`) | Must appear after the material cards. |
+
+**Recommended order (works for every Abaqus version)**  
+
+```
+*ELASTIC
+*PLASTIC   (if you have it)
+*EXPANSION (if you have it)
+```
+
+Keeping this order avoids the “material definition incomplete” error that can
+appear when Abaqus reads the cards out of sequence.
+
+---------------------------------------------------------------------
+
+## Ready‑to‑copy example
+
+Replace the numbers with the actual data for your alloy (or any other
+material).  The example uses MPa for stresses and °C for temperature – adapt
+the units to the system you are using.
+
+```abaqus
+*MATERIAL, NAME=MY_MATERIAL
+*ELASTIC
+210000., 0.30                ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800.,   0.0                  ! σy (MPa) , εp (plastic strain)
+1600.,  0.10                 ! σ2 (MPa) , εp2
+*EXPANSION, ZERO=0.0         ! Reference temperature = 0 °C (change if needed)
+12.0E-6                      ! Coefficient of thermal expansion α (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=MY_MATERIAL
+```
+
+**What each line does**
+
+| Line | Purpose |
+|------|---------|
+| `*MATERIAL, NAME=…` | Starts a new material definition. |
+| `*ELASTIC` | Supplies the mandatory linear‑elastic constants. |
+| `*PLASTIC` | Gives the yield curve (optional – delete if not needed). |
+| `*EXPANSION, ZERO=0.0` | Provides the CTE **and** an explicit reference temperature, eliminating the warning. |
+| `*SOLID SECTION …` | Assigns the material to the element set `EALL`. |
+
+---------------------------------------------------------------------
+
+## Quick pre‑run checklist
+
+1. **Elastic card present?** – Yes (`*ELASTIC`).  
+2. **Reference temperature supplied?** – Yes (`ZERO=`).  
+3. **Cards are in the correct order?** – `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **No data on the same line as a keyword** (e.g., `*BOUNDARY` must be on its own line).  
+5. **Units are consistent** (E in MPa if stresses are in MPa, temperature in °C).  
+6. **Material name matches the name used in the section definition** (`MATERIAL=MY_MATERIAL`).  
+
+If every item above is satisfied, Abaqus will read the material without
+producing the “reference temperature for expansion” warning and the job will
+run correctly, using the thermal‑expansion data as intended.
+A: **Why the warning is printed**
+
+`*EXPANSION` tells Abaqus how the material length changes with temperature.  
+For every expansion definition Abaqus must know the temperature at which the
+coefficient of thermal expansion (CTE) was measured – the **reference
+temperature**.  
+
+If the keyword is written without the optional field `ZERO=` (or the field is
+miss‑spelled) Abaqus cannot find that temperature, assumes a default value of
+0 °C and issues the warning  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+The warning disappears as soon as a valid `ZERO=` value is supplied.
+
+---
+
+## What a **complete** material definition must contain
+
+| Keyword (order) | Required? | What it supplies | Remarks |
+|-----------------|-----------|------------------|---------|
+| `*MATERIAL, NAME=` | Yes | Starts a new material block | Name must be used later in the section definition |
+| `*ELASTIC` | **Yes** (for any material that also has `*PLASTIC` or `*EXPANSION`) | Young’s modulus **E** and Poisson’s ratio **ν** | Must be the first card after `*MATERIAL` |
+| `*PLASTIC` | Optional (only if a yield curve is needed) | σ‑εp pairs (yield stress – plastic strain) | Can be omitted for a purely elastic‑thermal material |
+| `*EXPANSION, ZERO=<Tref>` | **Yes** when thermal expansion is used | Coefficient of thermal expansion **α** and the temperature at which α was measured (`Tref`) | `ZERO=` may be any temperature (commonly 0 °C → `ZERO=0.0`) |
+| `*SOLID SECTION` (or `*SHELL SECTION`, `*MEMBRANE SECTION`, …) | Yes – to assign the material to a region of the model | Links the material name to an element set (`ELSET=`) | Must appear after the material cards |
+
+**Recommended order (works for every Abaqus version)**  
+
+```
+*ELASTIC
+*PLASTIC   (if you need it)
+*EXPANSION (if you need it)
+```
+
+Keeping this order avoids the “material definition incomplete” error that can
+appear when Abaqus reads the cards out of sequence.
+
+---
+
+## Ready‑to‑copy example
+
+Replace the numbers with the actual data for your alloy (or any other
+material).  The example uses MPa for stresses and °C for temperature – adapt
+the units to the system you are using.
+
+```abaqus
+*MATERIAL, NAME=MY_MATERIAL
+*ELASTIC
+210000., 0.30                ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800.,   0.0                  ! σy (MPa) , εp (plastic strain)
+1600.,  0.10                 ! σ2 (MPa) , εp2
+*EXPANSION, ZERO=0.0         ! Reference temperature = 0 °C (change if needed)
+12.0E-6                      ! Coefficient of thermal expansion α (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=MY_MATERIAL
+```
+
+### What each line does
+
+| Line | Purpose |
+|------|---------|
+| `*MATERIAL, NAME=…` | Starts a new material definition. |
+| `*ELASTIC` | Supplies the mandatory linear‑elastic constants. |
+| `*PLASTIC` | Gives the yield curve (optional – delete if not needed). |
+| `*EXPANSION, ZERO=0.0` | Provides the CTE **and** an explicit reference temperature, eliminating the warning. |
+| `*SOLID SECTION …` | Assigns the material to the element set `EALL`. |
+
+---
+
+## Quick pre‑run checklist
+
+1. **Elastic card present?** – Yes (`*ELASTIC`).  
+2. **Reference temperature supplied?** – Yes (`ZERO=`).  
+3. **Cards are in the correct order?** – `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **No data on the same line as a keyword** (e.g., `*BOUNDARY` must be on its own line).  
+5. **Units are consistent** (E in MPa if stresses are in MPa, temperature in °C).  
+6. **Material name matches the name used in the section definition** (`MATERIAL=MY_MATERIAL`).  
+
+If every item above is satisfied, Abaqus will read the material without
+producing the “reference temperature for expansion” warning and the job will
+run correctly, using the thermal‑expansion data as intended.
+
+=== 2026-04-18 14:45:53 ===
+Q: **Why the warning is printed**
+
+`*EXPANSION` tells Abaqus how the material length changes with temperature.  
+For every expansion definition Abaqus must know the temperature at which the
+coefficient of thermal expansion (CTE) was measured – the **reference
+temperature**.  
+
+If the keyword is written without the optional field `ZERO=` (or the field is
+miss‑spelled) Abaqus cannot find that temperature, assumes a default value of
+0 °C and prints  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```  
+
+The message is only a *warning* when a reference temperature is supplied
+implicitly (0 °C).  It becomes an *error* when the material also contains a
+plasticity definition (`*PLASTIC`) **and** no linear‑elastic part (`*ELASTIC`)
+is present – a material that can yield must first be defined as elastic.
+
+---
+
+## What a **complete** material definition must contain
+
+| Keyword (order)                     | Required? | What it supplies                                   | Remarks |
+|-------------------------------------|-----------|----------------------------------------------------|---------|
+| `*MATERIAL, NAME=`                  | Yes       | Starts a new material block                        | The name is used later in the section definition |
+| `*ELASTIC`                          | **Yes** (if the material also has `*PLASTIC` or `*EXPANSION`) | Young’s modulus **E** and Poisson’s ratio **ν** (linear‑elastic constants) | Must be the **first** card after `*MATERIAL` |
+| `*PLASTIC`                          | Optional (only when a yield curve is needed) | σ‑εp pairs (yield stress – plastic strain)        | Can be omitted for a purely elastic‑thermal material |
+| `*EXPANSION, ZERO=<Tref>`           | **Yes** when thermal expansion is used | Coefficient of thermal expansion **α** and the temperature at which α was measured (`Tref`) | `ZERO=` may be any temperature (commonly 0 °C → `ZERO=0.0`) |
+| `*SOLID SECTION` (or `*SHELL SECTION`, …) | Yes – to assign the material to a region of the model | Links the material name to an element set (`ELSET=`) | Must appear after the material cards |
+
+**Recommended order (works for every Abaqus version)**  
+
+```
+*ELASTIC
+*PLASTIC   (if you need it)
+*EXPANSION (if you need it)
+```
+
+Keeping this order avoids the “material definition incomplete” error that can
+appear when Abaqus reads the cards out of sequence.
+
+---
+
+## Ready‑to‑copy example
+
+Replace the numbers with the actual data for your alloy (or any other
+material).  The example uses MPa for stresses and °C for temperature – adapt
+the units to the system you are using.
+
+```abaqus
+*MATERIAL, NAME=MY_MATERIAL
+*ELASTIC
+210000., 0.30                ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800.,   0.0                  ! σy (MPa) , εp (plastic strain)
+1600.,  0.10                 ! σ2 (MPa) , εp2
+*EXPANSION, ZERO=0.0         ! Reference temperature = 0 °C (change if needed)
+12.0E-6                      ! Coefficient of thermal expansion α (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=MY_MATERIAL
+```
+
+### What each line does
+
+| Line | Purpose |
+|------|---------|
+| `*MATERIAL, NAME=…` | Starts a new material definition. |
+| `*ELASTIC` | Supplies the mandatory linear‑elastic constants. |
+| `*PLASTIC` | Gives the yield curve (optional – delete if not needed). |
+| `*EXPANSION, ZERO=0.0` | Provides the CTE **and** an explicit reference temperature, eliminating the warning. |
+| `*SOLID SECTION …` | Assigns the material to the element set `EALL`. |
+
+---
+
+## Quick pre‑run checklist
+
+1. **Elastic card present?** – Yes (`*ELASTIC`).  
+2. **Reference temperature supplied?** – Yes (`ZERO=`).  
+3. **Cards are in the correct order?** – `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **No data on the same line as a keyword** (e.g., `*BOUNDARY` must be on its own line).  
+5. **Units are consistent** (E in MPa if stresses are in MPa, temperature in °C).  
+6. **Material name matches the name used in the section definition** (`MATERIAL=MY_MATERIAL`).  
+
+If every item above is satisfied, Abaqus will read the material without
+producing the “reference temperature for expansion” warning and the job will
+run correctly, using the thermal‑expansion data as intended.
+A: **Why the warning is printed**
+
+`*EXPANSION` tells Abaqus how the material length changes with temperature.  
+For every expansion definition Abaqus must know the temperature at which the
+coefficient of thermal expansion (CTE) was measured – the **reference
+temperature** (`ZERO=`).  
+
+If the keyword is written without the optional field `ZERO=` (or the field is
+miss‑spelled) Abaqus cannot find that temperature, assumes a default value of
+0 °C and prints  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```  
+
+The message is only a *warning* when the reference temperature is supplied
+implicitly (0 °C). It becomes an *error* when the material also contains a
+plasticity definition (`*PLASTIC`) **and** no linear‑elastic part (`*ELASTIC`)
+is present – a material that can yield must first be defined as elastic.
+
+---
+
+## Complete material definition that will never generate the warning
+
+| Keyword (order)                     | Required? | What it supplies                                   | Remarks |
+|-------------------------------------|-----------|----------------------------------------------------|---------|
+| `*MATERIAL, NAME=`                  | Yes       | Starts a new material block                        | Name is later used in the section definition |
+| `*ELASTIC`                          | **Yes** (if the material also has `*PLASTIC` or `*EXPANSION`) | Young’s modulus **E** and Poisson’s ratio **ν** | Must be the **first** card after `*MATERIAL` |
+| `*PLASTIC`                          | Optional (only when a yield curve is needed) | σ‑εp pairs (yield stress – plastic strain)        | Omit for a purely elastic‑thermal material |
+| `*EXPANSION, ZERO=<Tref>`           | **Yes** when thermal expansion is used | Coefficient of thermal expansion **α** and the temperature at which α was measured (`Tref`) | `ZERO=` may be any temperature (commonly 0 °C → `ZERO=0.0`) |
+| `*SOLID SECTION` (or `*SHELL SECTION`, …) | Yes – to assign the material to a region of the model | Links the material name to an element set (`ELSET=`) | Must appear after the material cards |
+
+**Recommended order (works for every Abaqus version)**  
+
+```
+*ELASTIC
+*PLASTIC   (if you need it)
+*EXPANSION (if you need it)
+```
+
+Keeping this order avoids the “material definition incomplete” error that can
+appear when Abaqus reads the cards out of sequence.
+
+---
+
+## Ready‑to‑copy example
+
+Replace the numbers with the actual data for your alloy (or any other
+material).  The example uses MPa for stresses and °C for temperature – adapt
+the units to the system you are using.
+
+```abaqus
+*MATERIAL, NAME=MY_MATERIAL
+*ELASTIC
+210000., 0.30                ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800.,   0.0                  ! σy (MPa) , εp (plastic strain)
+1600.,  0.10                 ! σ2 (MPa) , εp2
+*EXPANSION, ZERO=0.0         ! Reference temperature = 0 °C (change if needed)
+12.0E-6                      ! Coefficient of thermal expansion α (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=MY_MATERIAL
+```
+
+### What each line does
+
+| Line | Purpose |
+|------|---------|
+| `*MATERIAL, NAME=…` | Starts a new material definition. |
+| `*ELASTIC` | Supplies the mandatory linear‑elastic constants. |
+| `*PLASTIC` | Gives the yield curve (optional – delete if not needed). |
+| `*EXPANSION, ZERO=0.0` | Provides the CTE **and** an explicit reference temperature, eliminating the warning. |
+| `*SOLID SECTION …` | Assigns the material to the element set `EALL`. |
+
+---
+
+## Quick pre‑run checklist
+
+1. **Elastic card present?** – Yes (`*ELASTIC`).  
+2. **Reference temperature supplied?** – Yes (`ZERO=`).  
+3. **Cards are in the correct order?** – `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **No data on the same line as a keyword** (e.g., `*BOUNDARY` must be on its own line).  
+5. **Units are consistent** (E in MPa if stresses are in MPa, temperature in °C).  
+6. **Material name matches the name used in the section definition** (`MATERIAL=MY_MATERIAL`).  
+
+If every item above is satisfied, Abaqus will read the material without
+producing the “reference temperature for expansion” warning and the job will
+run correctly, using the thermal‑expansion data as intended.
+
+=== 2026-04-18 14:46:27 ===
+Q: **Why the warning appears**
+
+`*EXPANSION` defines the coefficient of thermal expansion (CTE) of a material.  
+For every expansion entry Abaqus must know the temperature at which that CTE
+was measured – the **reference temperature**.  
+If the keyword is written without the optional field  
+
+```
+*EXPANSION, ZERO = <reference‑temperature>
+```
+
+Abaqus cannot find a reference temperature, assumes 0 °C and prints  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+The message disappears as soon as a valid `ZERO=` value is supplied.
+
+---
+
+### What a complete material definition must contain
+
+| Keyword (order)                     | Required? | What it supplies                                   | Remarks |
+|-------------------------------------|-----------|----------------------------------------------------|---------|
+| `*MATERIAL, NAME=`                  | Yes       | Starts a new material block                        | The name is later used in the section definition |
+| `*ELASTIC`                          | **Yes** (if the material also has `*PLASTIC` or `*EXPANSION`) | Young’s modulus **E** and Poisson’s ratio **ν** (linear‑elastic constants) | Must be the **first** card after `*MATERIAL` |
+| `*PLASTIC`                          | Optional (only when a yield curve is needed) | σ‑εp pairs (yield stress – plastic strain)        | Omit for a purely elastic‑thermal material |
+| `*EXPANSION, ZERO=<Tref>`           | **Yes** when thermal expansion is used | Coefficient of thermal expansion **α** and the temperature at which α was measured (`Tref`) | `ZERO=` may be any temperature (commonly 0 °C → `ZERO=0.0`) |
+| `*SOLID SECTION` (or `*SHELL SECTION`, …) | Yes – to assign the material to a region of the model | Links the material name to an element set (`ELSET=`) | Must appear after the material cards |
+
+**Recommended order (works for every Abaqus version)**  
+
+```
+*ELASTIC
+*PLASTIC   (if needed)
+*EXPANSION (if needed)
+```
+
+Keeping this order avoids the “material definition incomplete” error that can
+appear when the cards are read out of sequence.
+
+---
+
+### Ready‑to‑copy example
+
+Replace the numbers with the actual data for your alloy (units can be MPa for
+stresses and °C for temperature, or any consistent system).
+
+```abaqus
+*MATERIAL, NAME=MY_MATERIAL
+*ELASTIC
+210000., 0.30                ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+800.,   0.0                  ! σy (MPa) , εp (plastic strain)
+1600.,  0.10                 ! σ2 (MPa) , εp2
+*EXPANSION, ZERO=0.0         ! Reference temperature = 0 °C (change if needed)
+12.0E-6                      ! Coefficient of thermal expansion α (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=MY_MATERIAL
+```
+
+**Explanation of each line**
+
+| Line                              | Purpose |
+|-----------------------------------|---------|
+| `*MATERIAL, NAME=…`               | Starts a new material block. |
+| `*ELASTIC`                        | Supplies the mandatory linear‑elastic constants. |
+| `*PLASTIC`                        | Gives the yield curve (optional – delete if not needed). |
+| `*EXPANSION, ZERO=0.0`            | Provides the CTE **and** an explicit reference temperature, eliminating the warning. |
+| `*SOLID SECTION …`                | Assigns the material to the element set `EALL`. |
+
+---
+
+### Quick pre‑run checklist
+
+1. **Elastic card present?** – Yes (`*ELASTIC`).  
+2. **Reference temperature supplied?** – Yes (`ZERO=`).  
+3. **Cards are in the correct order?** – `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **No data on the same line as a keyword** (e.g., `*BOUNDARY` must be on its own line).  
+5. **Units are consistent** (E in MPa if stresses are in MPa, temperature in °C).  
+6. **Material name matches the name used in the section definition** (`MATERIAL=MY_MATERIAL`).  
+
+When all of the above are satisfied, Abaqus reads the material without
+producing the “reference temperature for expansion” warning, and the analysis
+runs correctly using the thermal‑expansion data.
+A: **Why the warning appears**
+
+`*EXPANSION` tells Abaqus the coefficient of thermal expansion (CTE) of a material.  
+For every expansion entry Abaqus also needs the **reference temperature** at which that CTE was measured.  
+If the keyword is written without the optional field  
+
+```text
+*EXPANSION, ZERO = <reference‑temperature>
+```
+
+Abaqus cannot find a reference temperature, assumes **0 °C** and prints  
+
+```
+THE USER HAS NOT DEFINED A REFERENCE TEMPERATURE FOR EXPANSION.
+THE REFERENCE TEMPERATURE IS SET TO 0.0.
+```
+
+The message disappears as soon as a valid `ZERO=` value is supplied.
+
+---
+
+## What a *complete* material definition must contain
+
+| Keyword (order)                     | Required? | What it supplies                                   | Remarks |
+|-------------------------------------|-----------|----------------------------------------------------|---------|
+| `*MATERIAL, NAME=`                  | Yes       | Starts a new material block                        | The name is later used in the section definition |
+| `*ELASTIC`                          | **Yes** (if the material also has `*PLASTIC` or `*EXPANSION`) | Young’s modulus **E** and Poisson’s ratio **ν** (linear‑elastic constants) | Must be the **first** card after `*MATERIAL` |
+| `*PLASTIC`                          | Optional (only when a yield curve is needed) | σ‑εp pairs (yield stress – plastic strain)        | Omit for a purely elastic‑thermal material |
+| `*EXPANSION, ZERO=<Tref>`           | **Yes** when thermal expansion is used | Coefficient of thermal expansion **α** and the temperature at which α was measured (`Tref`) | `ZERO=` may be any temperature (commonly 0 °C → `ZERO=0.0`) |
+| `*SOLID SECTION` (or `*SHELL SECTION`, …) | Yes – to assign the material to a region of the model | Links the material name to an element set (`ELSET=`) | Must appear after the material cards |
+
+**Recommended order (works for every Abaqus version)**  
+
+```
+*ELASTIC
+*PLASTIC   (if needed)
+*EXPANSION (if needed)
+```
+
+Keeping this order avoids the “material definition incomplete” error that can appear when the cards are read out of sequence.
+
+---
+
+## Ready‑to‑copy example
+
+Replace the numbers with the actual data for your alloy (units can be MPa for stresses and °C for temperature, or any consistent system).
+
+```abaqus
+*MATERIAL, NAME=MY_MATERIAL
+*ELASTIC
+210000., 0.30                ! Young’s modulus (MPa) and Poisson’s ratio
+*PLASTIC
+  800.,   0.0                ! σy (MPa) , εp (plastic strain)
+ 1600.,   0.10               ! σ2 (MPa) , εp2
+*EXPANSION, ZERO=0.0         ! Reference temperature = 0 °C (change if needed)
+12.0E-6                      ! Coefficient of thermal expansion α (1/°C)
+*SOLID SECTION, ELSET=EALL, MATERIAL=MY_MATERIAL
+```
+
+### Explanation of each line
+
+| Line                              | Purpose |
+|-----------------------------------|---------|
+| `*MATERIAL, NAME=…`               | Starts a new material block. |
+| `*ELASTIC`                        | Supplies the mandatory linear‑elastic constants. |
+| `*PLASTIC`                        | Gives the yield curve (optional – delete if not needed). |
+| `*EXPANSION, ZERO=0.0`            | Provides the CTE **and** an explicit reference temperature, eliminating the warning. |
+| `*SOLID SECTION …`                | Assigns the material to the element set `EALL`. |
+
+---
+
+## Quick pre‑run checklist
+
+1. **Elastic card present?** – Yes (`*ELASTIC`).  
+2. **Reference temperature supplied?** – Yes (`ZERO=`).  
+3. **Cards are in the correct order?** – `*ELASTIC → *PLASTIC → *EXPANSION`.  
+4. **No data on the same line as a keyword** (e.g., `*BOUNDARY` must be on its own line).  
+5. **Units are consistent** (E in MPa if stresses are in MPa, temperature in °C).  
+6. **Material name matches the name used in the section definition** (`MATERIAL=MY_MATERIAL`).  
+
+When all of the above are satisfied, Abaqus reads the material without producing the “reference temperature for expansion” warning, and the analysis runs correctly using the thermal‑expansion data.
+

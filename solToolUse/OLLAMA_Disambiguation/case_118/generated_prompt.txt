@@ -1,0 +1,73 @@
+**Why the error appears**  
+`*MPC, TYPE=BEAM` creates a *beam* multi‑point constraint.  
+A beam MPC can be attached **only to nodes that belong to at least one beam element** (B31, B31R, B32 …).  
+
+In your model every element is a solid (`C3D20R`).  
+Consequently the two nodes you are trying to tie together (105 and 125) are connected **only** to solid elements, so Abaqus cannot find a beam element that contains either node and stops with  
+
+```
+*** ERROR:  BEAM MPC requires a beam element
+```
+
+---
+
+## Two ways to get rid of the error
+
+### 1️⃣ Replace the beam‑type MPC with a constraint that does **not** need a beam element  
+
+| Constraint | What it does | Example for nodes 105 ↔ 125 |
+|------------|--------------|-----------------------------|
+| **Tie** | Forces all six DOFs (U1‑U3, UR1‑UR3) of the two nodes to be identical. | `*Tie, NAME=Tie_105_125, POSITION=AVERAGE`<br>`105, 125` |
+| **Equation MPC** (`TYPE=EQUATION`) | Same effect as a tie, but the equations are written explicitly. | `*MPC, TYPE=EQUATION`<br>`3, 105, 1, -1, 125, 1   ! U1`<br>`3, 105, 2, -1, 125, 2   ! U2`<br>`3, 105, 3, -1, 125, 3   ! U3`<br>`3, 105, 4, -1, 125, 4   ! UR1`<br>`3, 105, 5, -1, 125, 5   ! UR2`<br>`3, 105, 6, -1, 125, 6   ! UR3` |
+| **Kinematic Coupling** | One master node controls the motion of one (or many) slave nodes or a slave surface. | `*Coupling, CONSTRAINT=KINEMATIC, REF NODE=105, SURFACE=Surf_125`<br>`*Surface, TYPE=NODE, NAME=Surf_125`<br>`125` |
+| **Rigid Body** | All nodes that belong to the same rigid body share the same motion. | `*Rigid Body, REF NODE=105`<br>`*Rigid Body, NODE=125` (adds node 125 to the same rigid body) |
+
+**How to apply**
+
+1. Delete (or comment out) the line that contains `*MPC, TYPE=BEAM …`.  
+2. Insert one of the alternatives above (the `*Tie` statement is usually the quickest).  
+3. Run a short test step and check that the displacement/rotation of node 105 equals that of node 125 (within numerical tolerance).  
+4. Verify that the message *“BEAM MPC requires a beam element”* no longer appears in the log file.
+
+---
+
+### 2️⃣ Keep a **BEAM‑type** MPC by adding a dummy beam element  
+
+If you must retain a `TYPE=BEAM` MPC (e.g., you are reproducing a legacy input file), create a *dummy* beam element that contains one of the constrained nodes. Give it a negligible cross‑section or a very low Young’s modulus so it does not affect the global stiffness.
+
+```abaqus
+*Node
+200, 0., 0., 0.          ! dummy node – any coordinates are fine
+
+*Element, type=B31, elset=BEAM_ELEMS
+5001, 105, 200           ! a B31 beam element that uses node 105
+
+*MPC, TYPE=BEAM, ELSET=BEAM_ELEMS
+105, 125                ! now legal because node 105 belongs to a B31 element
+```
+
+---
+
+## Which approach to choose?
+
+| Modeling situation | Recommended fix |
+|--------------------|-----------------|
+| You only need the two nodes to move together (most common) | **Option 1** – use `*Tie`, `*MPC, TYPE=EQUATION`, `*Coupling`, or `*Rigid Body`. |
+| You are following a tutorial or legacy input that explicitly calls for `*MPC, TYPE=BEAM` | **Option 2** – add the dummy B31 beam element. |
+| Many nodes must share the same motion | Use a **Coupling** constraint with a master node or define a **Rigid Body**. |
+| Nodes are already part of a rigid body | Simply add the second node to that rigid body (`*Rigid Body, NODE=…`). |
+
+---
+
+## Quick sanity‑check before re‑running the job
+
+1. **Remove** the offending `*MPC, TYPE=BEAM` line (or comment it).  
+2. **Insert** the chosen alternative (Tie, Equation, Coupling, Rigid Body, or dummy beam).  
+3. **Run** a short analysis step.  
+4. **Verify** that the displacement/rotation histories of nodes 105 and 125 are identical (or within tolerance).  
+5. **Inspect** the `.log` file – the error message should no longer appear.
+
+---
+
+### Bottom line
+A beam‑type MPC can be applied only to nodes that belong to a beam element. Because your model contains only solid elements, Abaqus correctly reports the error. Replace the beam‑type MPC with a `*Tie`, `*MPC, TYPE=EQUATION`, `*Coupling`, or `*Rigid Body` constraint (the simplest and most robust solution), or add a dummy B31 beam element that includes one of the constrained nodes if you must keep a beam MPC. After making either change the analysis will run without the “BEAM MPC requires a beam element” error.

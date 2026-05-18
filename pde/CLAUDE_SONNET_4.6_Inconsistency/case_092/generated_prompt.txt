@@ -1,0 +1,122 @@
+Solve the 2D wave equation u_tt = (1.0)**2 * (u_xx + u_yy) + sin(pi*x)*sin(pi*y)*cos(2*pi*t) numerically on the domain (x,y) in [0,1]x[0,1], t in [0,1.0].
+The unknown field is u(x,y,t).
+The wave speed parameter c = 2 appears in the CFL condition but the PDE coefficient is written as (1.0)**2; use 1.0 as the PDE wave speed coefficient and c=2 only for the CFL stability criterion.
+Use a uniform grid with Nx=Ny=120 intervals, giving 121x121 grid points including both endpoints.
+Set dx = 1/120 and dy = 1/120.
+Compute dt0 = 0.9 / (c * sqrt(1/dx**2 + 1/dy**2)) with c=2.
+Set Nt = ceil(1.0 / dt0) and then dt = 1.0 / Nt so the final time T=1.0 is hit exactly.
+Apply Dirichlet boundary conditions u=0 on all four boundaries at every time step.
+Set initial condition u(x,y,0) = 0 and u_t(x,y,0) = 0.
+Use the 5-point Laplacian stencil for the spatial second derivatives: (u[i+1,j] - 2*u[i,j] + u[i-1,j])/dx**2 + (u[i,j+1] - 2*u[i,j] + u[i,j-1])/dy**2.
+Use 2nd-order central difference in time: u_new = 2*u_cur - u_old + dt**2 * (laplacian(u_cur) + source(x,y,t_cur)).
+Initialize the first time step using a Taylor expansion: u(x,y,dt) = u(x,y,0) + dt*u_t(x,y,0) + 0.5*dt**2*(laplacian(u(x,y,0)) + source(x,y,0)).
+Since u(x,y,0)=0 and u_t(x,y,0)=0, the first step simplifies to u1 = 0.5*dt**2*source(x,y,0) for interior points, with boundary nodes set to zero.
+The source term is sin(pi*x)*sin(pi*y)*cos(2*pi*t), evaluated at each interior grid point and the current time.
+March the solution forward from t=0 to t=T=1.0 using Nt steps.
+After completing all time steps, collect the solution u at T=1.0 on the full 121x121 grid.
+Store x as a 1D array of length 121 with x[i] = i*dx for i=0..120.
+Store y as a 1D array of length 121 with y[j] = j*dy for j=0..120.
+Store u as a 2D array of shape (121, 121) where u[j,i] = u(x[i], y[j]) at T=1.0.
+Save a file named "solution_agent_wave_11.npz" containing arrays x, y, u and scalar metadata T, dx, dy, dt.
+Save a heatmap or filled-contour plot of u(x,y,T) as "solution_agent_wave_11.png" with labeled axes and a colorbar.
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2)*dx*dy) evaluated over the full grid at T=1.0.
+
+Here is the complete Python code to implement this specification:
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from math import ceil, sqrt, pi
+
+# ── parameters ────────────────────────────────────────────────────────────────
+c   = 2.0          # used only for CFL
+pde_c2 = 1.0**2   # PDE coefficient (=1.0)
+T   = 1.0
+Nx  = Ny = 120
+
+# ── grid ──────────────────────────────────────────────────────────────────────
+dx = 1.0 / Nx
+dy = 1.0 / Ny
+x  = np.linspace(0.0, 1.0, Nx + 1)   # shape (121,)
+y  = np.linspace(0.0, 1.0, Ny + 1)   # shape (121,)
+X, Y = np.meshgrid(x, y)              # shape (121,121), X[j,i]=x[i], Y[j,i]=y[j]
+
+# ── time step (CFL ≤ 0.9) ─────────────────────────────────────────────────────
+dt0 = 0.9 / (c * sqrt(1.0/dx**2 + 1.0/dy**2))
+Nt  = ceil(T / dt0)
+dt  = T / Nt
+print(f"Nt={Nt}, dt={dt:.6e}, CFL={c*dt*sqrt(1/dx**2+1/dy**2):.4f}")
+
+# ── source function ───────────────────────────────────────────────────────────
+def source(t):
+    return np.sin(pi * X) * np.sin(pi * Y) * np.cos(2.0 * pi * t)
+
+# ── 5-point Laplacian (interior only, boundaries stay 0) ─────────────────────
+def laplacian(u):
+    lap = np.zeros_like(u)
+    lap[1:-1, 1:-1] = (
+        (u[1:-1, 2:] - 2.0*u[1:-1, 1:-1] + u[1:-1, :-2]) / dx**2 +
+        (u[2:, 1:-1] - 2.0*u[1:-1, 1:-1] + u[:-2, 1:-1]) / dy**2
+    )
+    return lap
+
+# ── initialise arrays ─────────────────────────────────────────────────────────
+u_old = np.zeros((Ny + 1, Nx + 1))   # u at t=0  (all zero)
+u_cur = np.zeros((Ny + 1, Nx + 1))   # u at t=dt  (Taylor start)
+
+# Taylor start: u1 = 0 + 0*dt + 0.5*dt^2*(lap(u0) + src(0))
+# lap(u0)=0 everywhere since u0=0
+u_cur[1:-1, 1:-1] = 0.5 * dt**2 * source(0.0)[1:-1, 1:-1]
+# boundaries remain 0 (Dirichlet)
+
+# ── time march ────────────────────────────────────────────────────────────────
+for n in range(1, Nt):          # we already have u at t=dt (n=1); march to Nt
+    t_cur = n * dt
+    lap   = laplacian(u_cur)
+    src   = source(t_cur)
+
+    u_new = np.zeros_like(u_cur)
+    u_new[1:-1, 1:-1] = (
+        2.0 * u_cur[1:-1, 1:-1]
+        - u_old[1:-1, 1:-1]
+        + dt**2 * (pde_c2 * lap[1:-1, 1:-1] + src[1:-1, 1:-1])
+    )
+    # Dirichlet BC: boundaries stay 0 (already zero from np.zeros)
+
+    u_old = u_cur
+    u_cur = u_new
+
+# u_cur now holds u at t = Nt*dt = T
+u_final = u_cur
+
+# ── diagnostics ───────────────────────────────────────────────────────────────
+u_min  = u_final.min()
+u_max  = u_final.max()
+l2norm = sqrt(np.sum(u_final**2) * dx * dy)
+print(f"min(u)  = {u_min:.6e}")
+print(f"max(u)  = {u_max:.6e}")
+print(f"L2 norm = {l2norm:.6e}")
+
+# ── save npz ──────────────────────────────────────────────────────────────────
+np.savez(
+    "solution_agent_wave_11.npz",
+    x=x, y=y, u=u_final,
+    T=np.float64(T),
+    dx=np.float64(dx),
+    dy=np.float64(dy),
+    dt=np.float64(dt),
+)
+print("Saved solution_agent_wave_11.npz")
+
+# ── save plot ─────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(6, 5))
+cf = ax.contourf(X, Y, u_final, levels=50, cmap="RdBu_r")
+fig.colorbar(cf, ax=ax, label="u(x,y,T)")
+ax.set_xlabel("x")
+ax.set_ylabel("y")
+ax.set_title(f"Wave equation solution at T={T}")
+plt.tight_layout()
+plt.savefig("solution_agent_wave_11.png", dpi=150)
+plt.close()
+print("Saved solution_agent_wave_11.png")
+```

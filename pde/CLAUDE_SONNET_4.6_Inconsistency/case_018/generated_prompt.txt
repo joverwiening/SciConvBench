@@ -1,0 +1,121 @@
+Solve the PDE u_t = d/dx( D(x) * u_x ) where D(x) = 0.01 + 0.09*x**2.
+The spatial domain is x in [0,1] (closed interval) and time domain is t in [0,0.2].
+Use Nx=400 uniform intervals giving 401 grid points including both endpoints, with dx=1/400 and x_i = i*dx for i=0..400.
+Use dt=0.0005 and take 480 time steps to reach T=0.2.
+Apply Dirichlet boundary conditions u(0,t)=0 and u(1,t)=0 for all t.
+Set initial condition u(x,0) = x*(1-x).
+Define D_i = 0.01 + 0.09*x_i**2 at each grid point i.
+Define face diffusion coefficients by arithmetic averaging: D_{i+1/2} = 0.5*(D_i + D_{i+1}) for i=0..Nx-1.
+For interior points i=1..Nx-1, discretize the diffusion operator as: L_i(u) = (1/dx**2) * [ D_{i+1/2}*(u_{i+1}-u_i) - D_{i-1/2}*(u_i-u_{i-1}) ].
+Enforce Dirichlet BCs by fixing u_0=0 and u_{Nx}=0 at every time step (rows 0 and Nx in the linear system are identity rows with right-hand side 0).
+Use Implicit Euler time integration: at each step solve the sparse linear system (I - dt*L) u^{n+1} = u^n.
+Assemble the tridiagonal sparse matrix (I - dt*L) using scipy.sparse in CSR format and solve with scipy.sparse.linalg.spsolve at each of the 480 steps.
+After completing all time steps, extract the solution array u of length 401 at T=0.2.
+Print min(u), max(u), and the discrete L2 norm computed as sqrt(sum(u**2)*dx).
+Save a file named "solution_agent_diffusion_02.npz" containing: array x (1D, length 401), array u (1D, length 401), scalar T=0.2, scalar dx=1/400, scalar dt=0.0005.
+Save a line plot of u vs x at T=0.2 as "solution_agent_diffusion_02.png" with labeled axes.
+
+```python
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+
+# ── Grid ──────────────────────────────────────────────────────────────────────
+Nx = 400
+x  = np.linspace(0.0, 1.0, Nx + 1)          # 401 points, x_i = i*dx
+dx = x[1] - x[0]
+
+# ── Parameters ────────────────────────────────────────────────────────────────
+dt     = 0.0005
+Nsteps = 480                                  # 480 * 0.0005 = 0.2
+T      = Nsteps * dt                          # exactly 0.2
+
+# ── Diffusion coefficient ─────────────────────────────────────────────────────
+D = 0.01 + 0.09 * x**2                        # D_i at every grid point
+
+# Face values by arithmetic averaging: D_{i+1/2} = 0.5*(D_i + D_{i+1})
+# indices: D_half[i] = D_{i+1/2}  for i = 0 .. Nx-1  (length Nx)
+D_half = 0.5 * (D[:-1] + D[1:])              # length 400
+
+# ── Build discrete diffusion operator L (interior rows only, but we build
+#    the full (Nx+1)×(Nx+1) matrix and then enforce BCs via identity rows) ────
+#
+# For interior node i (1 <= i <= Nx-1):
+#   L_i u = (1/dx^2)*[ D_{i+1/2}*(u_{i+1}-u_i) - D_{i-1/2}*(u_i-u_{i-1}) ]
+#         = (1/dx^2)*[ D_{i-1/2}*u_{i-1}
+#                    - (D_{i-1/2}+D_{i+1/2})*u_i
+#                    + D_{i+1/2}*u_{i+1} ]
+#
+# D_half[i-1] = D_{i-1/2},  D_half[i] = D_{i+1/2}
+
+N = Nx + 1   # total number of unknowns = 401
+
+# sub-diagonal, main diagonal, super-diagonal for interior rows
+# interior indices: 1 .. Nx-1  (399 rows)
+i_int = np.arange(1, Nx)                      # length 399
+
+lower = D_half[i_int - 1] / dx**2            # coeff of u_{i-1}
+upper = D_half[i_int]     / dx**2            # coeff of u_{i+1}
+mid   = -(lower + upper)                      # coeff of u_i
+
+# Assemble sparse matrix for L
+rows_l = i_int;       cols_l = i_int - 1
+rows_u = i_int;       cols_u = i_int + 1
+rows_m = i_int;       cols_m = i_int
+
+data = np.concatenate([lower, upper, mid])
+rows = np.concatenate([rows_l, rows_u, rows_m])
+cols = np.concatenate([cols_l, cols_u, cols_m])
+
+L = sp.csr_matrix((data, (rows, cols)), shape=(N, N))
+
+# ── Build system matrix A = I - dt*L, then enforce Dirichlet BCs ─────────────
+I  = sp.eye(N, format='csr')
+A  = I - dt * L                               # (Nx+1)×(Nx+1)
+
+# Enforce u_0 = 0 and u_Nx = 0:
+# Replace rows 0 and Nx with identity rows (zero RHS handled during solve)
+A  = A.tolil()
+A[0,  :]  = 0.0;  A[0,  0]  = 1.0
+A[Nx, :]  = 0.0;  A[Nx, Nx] = 1.0
+A  = A.tocsr()
+
+# ── Initial condition ─────────────────────────────────────────────────────────
+u = x * (1.0 - x)                             # u(x,0) = x*(1-x)
+u[0]  = 0.0                                   # enforce BCs explicitly
+u[Nx] = 0.0
+
+# ── Time integration (Implicit Euler) ─────────────────────────────────────────
+for _ in range(Nsteps):
+    rhs      = u.copy()
+    rhs[0]   = 0.0    # Dirichlet BC
+    rhs[Nx]  = 0.0    # Dirichlet BC
+    u        = spla.spsolve(A, rhs)
+
+# ── Diagnostics ───────────────────────────────────────────────────────────────
+u_min  = np.min(u)
+u_max  = np.max(u)
+l2norm = np.sqrt(np.sum(u**2) * dx)
+
+print(f"min(u)       = {u_min:.6e}")
+print(f"max(u)       = {u_max:.6e}")
+print(f"L2 norm(u)   = {l2norm:.6e}")
+
+# ── Save .npz ─────────────────────────────────────────────────────────────────
+np.savez("solution_agent_diffusion_02.npz",
+         x=x, u=u, T=T, dx=dx, dt=dt)
+print("Saved solution_agent_diffusion_02.npz")
+
+# ── Save plot ─────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.plot(x, u, linewidth=1.8, color='steelblue')
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T)")
+ax.set_title(f"Diffusion solution at T={T}  (Nx={Nx}, dt={dt})")
+ax.grid(True, linestyle='--', alpha=0.5)
+fig.tight_layout()
+fig.savefig("solution_agent_diffusion_02.png", dpi=150)
+plt.close(fig)
+print("Saved solution_agent_diffusion_02.png")
+```

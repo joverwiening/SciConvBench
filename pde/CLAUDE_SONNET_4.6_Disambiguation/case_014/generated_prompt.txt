@@ -1,0 +1,117 @@
+Solve the 1D viscous Burgers equation numerically and save the results as specified below.
+
+PDE is u_t + u*u_x = 0.005*u_xx, written in conservative form as u_t + (0.5*u**2)_x = 0.005*u_xx.
+
+Domain is x in [0,1) periodic, t in [0, 0.2].
+
+Parameter nu = 0.005.
+
+Initial condition is u(x,0) = 0.5 + sin(2*pi*x).
+
+Use Nx=1200 grid points on [0,1) with no duplicated endpoint. Set dx = 1.0/1200. Grid points are x_i = i*dx for i=0,1,...,1199.
+
+Use dt = 5e-5 and Nt = 4000 time steps so that T = 0.2 is hit exactly.
+
+Discretize convection using the Rusanov (local Lax-Friedrichs) flux in conservative finite-difference form.
+Compute F_{i+1/2} = 0.5*(f(u_i) + f(u_{i+1})) - 0.5*alpha_{i+1/2}*(u_{i+1} - u_i) where f(u) = 0.5*u**2 and alpha_{i+1/2} = max(|u_i|, |u_{i+1}|).
+Compute the convection term at cell i as conv_i = (F_{i+1/2} - F_{i-1/2}) / dx.
+Apply periodic boundary indexing so that index -1 wraps to Nx-1 and index Nx wraps to 0.
+
+Discretize diffusion using 2nd-order central differences: u_xx at i is (u_{i+1} - 2*u_i + u_{i-1}) / dx**2.
+Apply periodic boundary indexing for diffusion as well.
+
+Use 1st-order IMEX time integration: treat convection explicitly and diffusion implicitly.
+Each time step solves (I - dt*nu*L) u^{n+1} = u^n - dt*conv^n, where L is the Nx-by-Nx sparse tridiagonal matrix representing the periodic second-difference operator (L_{i,i}=-2/dx**2, L_{i,i+1}=1/dx**2, L_{i,i-1}=1/dx**2 with periodic wrap-around).
+Build L as a scipy sparse matrix and solve the linear system each step using scipy.sparse.linalg.spsolve.
+
+After Nt steps, compute u(x, T=0.2) on the 1200-point grid.
+
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2)*dx) at T=0.2.
+
+Save a file named "solution_agent_burgers_02.npz" containing: array x (shape 1200,), array u (shape 1200,), scalar T=0.2, scalar dx=1/1200, scalar dt=5e-5.
+
+Save a line plot of u(x, T=0.2) as "solution_agent_burgers_02.png" with x on the horizontal axis and u on the vertical axis.
+
+Use Python with numpy, scipy, and matplotlib. Use the exponentiation operator ** for powers in code.
+
+```python
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+
+# ── parameters ────────────────────────────────────────────────────────────────
+nu   = 0.005
+Nx   = 1200
+dx   = 1.0 / Nx
+dt   = 5e-5
+Nt   = 4000
+T    = dt * Nt          # = 0.2 exactly
+
+# ── grid ──────────────────────────────────────────────────────────────────────
+x = np.arange(Nx) * dx  # x_i = i*dx, i = 0 … Nx-1
+
+# ── initial condition ─────────────────────────────────────────────────────────
+u = 0.5 + np.sin(2.0 * np.pi * x)
+
+# ── implicit diffusion matrix  (I - dt*nu*L) ─────────────────────────────────
+# L is the periodic second-difference operator / dx**2
+diag_main = np.full(Nx, -2.0 / dx**2)
+diag_off  = np.full(Nx,  1.0 / dx**2)
+
+L = (sp.diags([diag_off, diag_main, diag_off], [-1, 0, 1], shape=(Nx, Nx), format='lil'))
+# periodic wrap-around corners
+L[0,  Nx-1] = 1.0 / dx**2
+L[Nx-1, 0]  = 1.0 / dx**2
+L = L.tocsr()
+
+A = sp.eye(Nx, format='csr') - dt * nu * L   # system matrix (constant each step)
+
+# ── time integration (IMEX, 1st-order) ───────────────────────────────────────
+for _ in range(Nt):
+    # --- explicit convection (Rusanov flux) ---
+    f  = 0.5 * u**2                          # f(u_i)
+
+    ip = np.roll(u, -1)                      # u_{i+1}  (periodic)
+    im = np.roll(u,  1)                      # u_{i-1}  (periodic)
+    fp = np.roll(f, -1)                      # f(u_{i+1})
+    fm = np.roll(f,  1)                      # f(u_{i-1})
+
+    alpha_p = np.maximum(np.abs(u), np.abs(ip))   # alpha_{i+1/2}
+    alpha_m = np.maximum(np.abs(u), np.abs(im))   # alpha_{i-1/2}
+
+    F_p = 0.5*(f + fp) - 0.5*alpha_p*(ip - u)    # F_{i+1/2}
+    F_m = 0.5*(fm + f) - 0.5*alpha_m*(u - im)    # F_{i-1/2}
+
+    conv = (F_p - F_m) / dx                       # (F_{i+1/2}-F_{i-1/2})/dx
+
+    # --- implicit solve for diffusion ---
+    rhs = u - dt * conv
+    u   = spla.spsolve(A, rhs)
+
+# ── diagnostics ───────────────────────────────────────────────────────────────
+u_min  = u.min()
+u_max  = u.max()
+l2     = np.sqrt(np.sum(u**2) * dx)
+
+print(f"min(u)  = {u_min:.6f}")
+print(f"max(u)  = {u_max:.6f}")
+print(f"L2 norm = {l2:.6f}")
+
+# ── save npz ──────────────────────────────────────────────────────────────────
+np.savez("solution_agent_burgers_02.npz",
+         x=x, u=u, T=np.float64(T), dx=np.float64(dx), dt=np.float64(dt))
+
+# ── save plot ─────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u, lw=1.2)
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T)")
+ax.set_title(f"Viscous Burgers – solution at T = {T}")
+ax.grid(True, lw=0.4)
+fig.tight_layout()
+fig.savefig("solution_agent_burgers_02.png", dpi=150)
+plt.close(fig)
+
+print("Files saved: solution_agent_burgers_02.npz, solution_agent_burgers_02.png")
+```

@@ -1,0 +1,303 @@
+# 📚 Complete Copy‑and‑Paste‑Ready README (or Cheat‑Sheet)
+
+*Everything you need to run a CalculiX simulation and turn the raw `.dat` output into a tidy `results.json` file.*
+
+---
+
+## 1️⃣ Create a job folder  
+
+```bash
+# Pick any name you like – e.g. “my_calculix_job”
+mkdir my_calculix_job
+cd my_calculix_job
+```
+
+---
+
+## 2️⃣ Drop the four files into the folder  
+
+| File name            | What it is                                            | Where to put it |
+|----------------------|-------------------------------------------------------|-----------------|
+| `model.inp`          | CalculiX input deck (geometry, material, loads, etc.)| `my_calculix_job/` |
+| `run_calculix.sh`    | Bash launcher (Linux/macOS)                           | `my_calculix_job/` |
+| `run_calculix.bat`   | Batch‑file launcher (Windows)                         | `my_calculix_job/` |
+| `convert_to_json.py` | Python post‑processor that reads `model.dat` and writes `results.json` | `my_calculix_job/` |
+
+> **⚠️ Keep the exact filenames** – the scripts look for them by name.
+
+---
+
+## 3️⃣ Make the launchers executable (only needed on *nix)
+
+```bash
+chmod +x run_calculix.sh          # Bash script
+chmod +x convert_to_json.py       # optional – lets you run “./convert_to_json.py”
+```
+
+---
+
+## 4️⃣ The actual scripts (copy‑paste them into the files)
+
+### `run_calculix.sh`  (Linux / macOS)
+
+```bash
+#!/usr/bin/env bash
+# ---------------------------------
+# run_calculix.sh – simple wrapper around CalculiX
+# -----------------------------------
+
+# Abort on any error
+set -euo pipefail
+
+# Name of the input deck (without extension)
+INP="model"
+
+# ---------------------------------
+# 1️⃣ Run CalculiX (ccx must be on your PATH)
+# ---------------------------------
+echo "▶️  Running CalculiX on ${INP}.inp ..."
+if command -v ccx >/dev/null 2>&1; then
+    ccx "${INP}"
+else
+    echo "❌  Error: CalculiX (ccx) not found in PATH."
+    echo "    Install it from https://www.calculix.de or add its bin directory to PATH."
+    exit 1
+fi
+
+# ---------------------------------
+# 2️⃣ Convert the .dat file to JSON
+# ---------------------------------
+DAT="${INP}.dat"
+if [[ -f "${DAT}" ]]; then
+    echo "▶️  Converting ${DAT} → results.json ..."
+    python3 convert_to_json.py "${DAT}"
+    echo "✅  Done! results.json is ready."
+else
+    echo "❌  Error: ${DAT} not found – something went wrong with the solver."
+    exit 1
+fi
+```
+
+### `run_calculix.bat`  (Windows Command Prompt)
+
+```bat
+@echo off
+rem ---------------------------------
+rem run_calculix.bat – simple wrapper around CalculiX
+rem -----------------------------------
+
+setlocal enabledelayedexpansion
+
+rem ---------------------------------
+rem 1️⃣ Run CalculiX (ccx must be on your PATH)
+rem ---------------------------------
+echo ▶️  Running CalculiX on model.inp ...
+where ccx >nul 2>&1
+if errorlevel 1 (
+    echo ❌  Error: CalculiX (ccx) not found in PATH.
+    echo     Install it from https://www.calculix.de or add its bin directory to PATH.
+    exit /b 1
+)
+
+ccx model
+if errorlevel 1 (
+    echo ❌  CalculiX terminated with an error.
+    exit /b 1
+)
+
+rem ---------------------------------
+rem 2️⃣ Convert the .dat file to JSON
+rem ---------------------------------
+if exist model.dat (
+    echo ▶️  Converting model.dat → results.json ...
+    python convert_to_json.py model.dat
+    if errorlevel 1 (
+        echo ❌  Python script failed.
+        exit /b 1
+    )
+    echo ✅  Done! results.json is ready.
+) else (
+    echo ❌  model.dat not found – something went wrong with the solver.
+    exit /b 1
+)
+
+endlocal
+```
+
+### `convert_to_json.py`  (Python 3.8+)
+
+```python
+#!/usr/bin/env python3
+"""
+convert_to_json.py – Parse a CalculiX *.dat file and write a tidy JSON file.
+
+Usage:
+    python convert_to_json.py <input.dat>   # writes results.json in the same folder
+"""
+
+import json
+import re
+import sys
+from pathlib import Path
+
+# ----------------------------------
+# Helper regexes – adjust if your .dat headings differ
+# ----------------------------------
+RE_DISP   = re.compile(r"^\s*DISPLACEMENT\s+NODAL\s+COORDINATES\s*$", re.I)
+RE_STRESS = re.compile(r"^\s*STRESS\s+ELEMENT\s+NODES\s*$", re.I)
+RE_REACT  = re.compile(r"^\s*REACTION\s+FORCES\s*$", re.I)
+
+def parse_section(lines, start_idx):
+    """Read a numeric table until a blank line or a line that does not start with a digit."""
+    data = []
+    i = start_idx
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line or not line[0].isdigit():
+            break
+        row = [float(val) for val in line.split()]
+        data.append(row)
+        i += 1
+    return data, i
+
+def read_dat(dat_path: Path):
+    """Return a dict with parsed sections."""
+    with dat_path.open("r", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+
+    out = {}
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if RE_DISP.match(line):
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("1"):
+                i += 1
+            disp, i = parse_section(lines, i)
+            out["displacements"] = disp
+        elif RE_STRESS.match(line):
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("1"):
+                i += 1
+            stress, i = parse_section(lines, i)
+            out["stresses"] = stress
+        elif RE_REACT.match(line):
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("1"):
+                i += 1
+            react, i = parse_section(lines, i)
+            out["reactions"] = react
+        else:
+            i += 1
+    return out
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python convert_to_json.py <model.dat>")
+        sys.exit(1)
+
+    dat_file = Path(sys.argv[1])
+    if not dat_file.is_file():
+        print(f"❌  File not found: {dat_file}")
+        sys.exit(1)
+
+    print(f"🔎  Parsing {dat_file.name} …")
+    data = read_dat(dat_file)
+
+    json_path = dat_file.with_name("results.json")
+    with json_path.open("w", encoding="utf-8") as jf:
+        json.dump(data, jf, indent=2, ensure_ascii=False)
+
+    print(f"✅  JSON written to {json_path}")
+
+if __name__ == "__main__":
+    main()
+```
+
+> **Tip:** If your `.dat` headings differ (e.g., “NODAL DISPLACEMENTS” instead of “DISPLACEMENT NODAL COORDINATES”), edit the three regular‑expression patterns at the top of `convert_to_json.py`.
+
+---
+
+## 5️⃣ Run the job  
+
+### Linux / macOS  
+
+```bash
+cd /full/path/to/my_calculix_job
+./run_calculix.sh
+```
+
+### Windows (Command Prompt)  
+
+```cmd
+cd \full\path\to\my_calculix_job
+run_calculix.bat
+```
+
+### PowerShell  
+
+```powershell
+cd C:\full\path\to\my_calculix_job
+.\run_calculix.bat
+```
+
+The launcher will:
+
+1. Call **CalculiX** (`ccx`) on `model.inp` → creates `model.dat`.  
+2. Immediately invoke `convert_to_json.py` → reads `model.dat` and writes `results.json`.
+
+---
+
+## 6️⃣ What you get  
+
+| File            | Content                                                               | Location |
+|-----------------|-----------------------------------------------------------------------|----------|
+| `model.dat`     | Raw CalculiX output (nodal displacements, stresses, reaction forces…)| Same folder |
+| `results.json`  | Structured JSON version of the data (ready for pandas, MATLAB, JS…) | Same folder |
+
+You can now load `results.json` in any language you prefer (Python, R, JavaScript, MATLAB, etc.).
+
+---
+
+## ⚡ One‑liner (if **CalculiX** (`ccx`) **and Python** are already on your `PATH`)
+
+```bash
+# Linux / macOS
+ccx model && python3 convert_to_json.py model.dat
+
+# Windows
+ccx model && python convert_to_json.py model.dat
+```
+
+---
+
+## ❗ Quick‑Fix Checklist  
+
+| Symptom | Likely cause | How to fix |
+|---------|--------------|------------|
+| `ccx: command not found` | CalculiX not installed or not on `PATH` | Install CalculiX (https://www.calculix.de) and add its `bin` directory to your system `PATH`. |
+| Solver aborts with “*ERROR*” in `model.dat` | Invalid input (missing material, wrong element type, etc.) | Open `model.inp`, locate the line mentioned in the error, and correct the offending section. |
+| `results.json` is empty / missing fields | Parser didn’t recognise the headings in `model.dat` | Open `model.dat`, verify the exact headings (e.g. “DISPLACEMENT NODAL COORDINATES”). If they differ, edit the regexes in `convert_to_json.py`. |
+| Python crashes with `UnicodeDecodeError` | `.dat` contains non‑ASCII characters | Re‑save the `.dat` file as UTF‑8 (or run `python -X utf8 convert_to_json.py model.dat`). |
+| Permission denied when running `run_calculix.sh` | Script not executable | Re‑run `chmod +x run_calculix.sh` and try again. |
+| `model.dat` never appears | `ccx` failed silently (often due to missing material definitions) | Run `ccx model` manually in a terminal to see the full console output. |
+
+---
+
+## 📋 TL;DR – 4‑step workflow  
+
+1. **Folder** – `my_calculix_job` (or any name you prefer).  
+2. **Files** – `model.inp`, `run_calculix.sh`, `run_calculix.bat`, `convert_to_json.py`.  
+3. **Make executable** – `chmod +x run_calculix.sh` (Linux/macOS).  
+4. **Run** – `./run_calculix.sh` (Linux/macOS) **or** `run_calculix.bat` (Windows).  
+
+When the script finishes, you’ll find `results.json` ready for downstream analysis.
+
+---
+
+# 🎉 That’s it!
+
+* Edit `model.inp` whenever you need a new geometry, material, or load case – the launchers stay unchanged.  
+* The whole pipeline (`.inp → .dat → .json`) is now fully automated.
+
+**Happy simulating!** 🚀

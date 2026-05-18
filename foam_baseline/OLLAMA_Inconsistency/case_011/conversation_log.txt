@@ -1,0 +1,288 @@
+=== 2026-03-27 18:16:15 ===
+Q: What settings should be used for the buoyantKEpsilon turbulence model in the RASProperties file?
+A: Use the buoyant k‑ε model in **RASProperties**. A minimal, standard set of entries is:
+
+```foam
+RASModel        buoyantKEpsilon;
+turbulence      on;
+printCoeffs     on;
+
+# optional – typical defaults for buoyant k‑ε
+k               k;
+epsilon         epsilon;
+nut             nut;
+```
+
+If you need to adjust model‑specific coefficients (e.g., Cμ, Cε1, Cε2, σk, σε), use the default values supplied with the buoyantKEpsilon model unless you have a reason to change them.
+
+=== 2026-03-27 18:16:28 ===
+Q: What should be the exact entries in the transportProperties file for the sludge and water phases?
+A: ```foam
+transportProperties
+{
+    phases (sludge water);
+
+    //--- Sludge phase (Bingham‑Plastic) -----------------
+    sludge
+    {
+        transportModel BinghamPlastic;
+        rho            1996;          // density [kg/m³]
+        coeff          0.00023143;    // Bingham plastic coefficient
+        exponent       179.26;        // Bingham plastic exponent
+    }
+
+    //--- Water phase (Newtonian) -------------------------
+    water
+    {
+        transportModel Newtonian;
+        rho            996;           // density [kg/m³]
+        nu             1.7871e-06;    // kinematic viscosity [m²/s]
+    }
+
+    //--- Gravity -----------------------------------------
+    g               (0 -9.81 0);
+
+    //--- Relative velocity model -------------------------
+    relativeVelocityModel simple;
+    Vc              2.241e-4;
+}
+```
+
+=== 2026-03-27 18:16:43 ===
+Q: What should be the initial condition entry for the velocity field U?
+A: The initial condition for **U** should set a uniform x‑velocity of 0.0191 m s⁻¹, e.g.:
+
+```foam
+internalField   uniform (0.0191 0 0);
+```
+
+=== 2026-03-27 18:16:54 ===
+Q: What should be the initial condition entry for the sludge volume fraction field alpha.sludge?
+A: ```foam
+internalField   uniform 0.001;
+```
+
+=== 2026-03-27 18:17:04 ===
+Q: What should be the initial condition entry for the turbulent kinetic energy field k?
+A: ```foam
+internalField   uniform 0.00015;
+```
+
+=== 2026-03-27 18:17:13 ===
+Q: What should be the initial condition entry for the turbulent dissipation rate field epsilon?
+A: ```foam
+internalField   uniform 1.50919e-06;
+```
+
+=== 2026-03-27 18:17:22 ===
+Q: What should be the boundary condition entry for the pressure field p?
+A: **p** – pressure field  
+
+```foam
+boundaryField
+{
+    inlet
+    {
+        type            zeroGradient;
+    }
+
+    outlet
+    {
+        type            fixedValue;
+        value           uniform 0;
+    }
+
+    bottomWall
+    {
+        type            zeroGradient;
+    }
+
+    endWall
+    {
+        type            zeroGradient;
+    }
+
+    top
+    {
+        type            zeroGradient;
+    }
+
+    frontAndBack
+    {
+        type            empty;
+    }
+}
+```
+
+=== 2026-03-27 18:17:34 ===
+Q: What should be the boundary condition entry for the sludge volume fraction field alpha.sludge on each patch?
+A: ```foam
+boundaryField
+{
+    inlet
+    {
+        type            fixedValue;
+        value           uniform 0.001;
+    }
+
+    outlet
+    {
+        type            zeroGradient;
+    }
+
+    bottomWall
+    {
+        type            zeroGradient;
+    }
+
+    endWall
+    {
+        type            zeroGradient;
+    }
+
+    top
+    {
+        type            zeroGradient;
+    }
+
+    frontAndBack
+    {
+        type            empty;
+    }
+}
+```
+
+=== 2026-03-27 18:17:46 ===
+Q: What entries should be included in the controlDict file for this simulation?
+A: **controlDict (minimal set required by the complete specification)**  
+
+```foam
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+\*---------------------------------------------------------------------------*/
+
+application     driftFluxFoam;
+
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         6400;
+
+deltaT          0.1;
+adjustTimeStep  yes;
+maxCo           5;
+maxDeltaT       1;          // optional upper bound for Δt
+
+writeControl    timeStep;
+writeInterval   50;
+purgeWrite      0;
+runTimeModifiable yes;
+
+/*-------------------------- PIMPLE algorithm -----------------------------*/
+PIMPLE
+{
+    nCorrectors          3;      // three correctors as required
+    nNonOrthogonalCorrectors 0;
+    nOuterCorrectors    1;
+    pRefCell            0;
+    pRefValue           0;
+}
+```
+
+*Only the entries shown are needed to satisfy the complete requirement (application, time‑stepping, Courant control, output interval, and the PIMPLE settings with three correctors).*
+
+=== 2026-03-27 18:18:01 ===
+Q: What entries should be included in the fvSolution file for this simulation?
+A: Make a reasonable assumption based on best practices. A typical **fvSolution** for this type of drift‑flux, PIMPLE‑based simulation could be:
+
+```foam
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+\*---------------------------------------------------------------------------*/
+
+solvers
+{
+    // Pressure (p) – GAMG solver
+    p
+    {
+        solver          GAMG;
+        tolerance       1e-6;
+        relTol          0.1;
+        smoother        DICGaussSeidel;
+        nPreSweeps      0;
+        nPostSweeps     2;
+        nFinestSweeps   2;
+        cacheAgglomeration true;
+        nCellsInCoarsestLevel 10;
+        agglomerator    faceAreaPair;
+        mergeLevels     1;
+    }
+
+    // Velocity (U) – smoothSolver (Gauss‑Seidel)
+    U
+    {
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        tolerance       1e-5;
+        relTol          0.1;
+    }
+
+    // Turbulent kinetic energy (k)
+    k
+    {
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        tolerance       1e-5;
+        relTol          0.1;
+    }
+
+    // Turbulent dissipation (epsilon)
+    epsilon
+    {
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        tolerance       1e-5;
+        relTol          0.1;
+    }
+
+    // Sludge volume fraction (alpha.sludge)
+    alpha.sludge
+    {
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        tolerance       1e-6;
+        relTol          0.1;
+    }
+
+    // Phase fraction (alpha.water) – automatically computed, but include for completeness
+    alpha.water
+    {
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        tolerance       1e-6;
+        relTol          0.1;
+    }
+}
+
+PIMPLE
+{
+    nCorrectors          3;      // as required
+    nNonOrthogonalCorrectors 0;
+    nOuterCorrectors    1;
+    momentumPredictor   yes;
+    transonic           no;
+    residualControl
+    {
+        p               1e-5;
+        U               1e-5;
+        k               1e-5;
+        epsilon         1e-5;
+        alpha.sludge    1e-6;
+    }
+}
+```
+
+These entries satisfy the complete requirement (PIMPLE with three correctors, adjustable time‑step, etc.) while using standard solver settings commonly employed for drift‑flux, buoyant k‑ε simulations. Adjust tolerances or solvers as needed for your specific case.
+

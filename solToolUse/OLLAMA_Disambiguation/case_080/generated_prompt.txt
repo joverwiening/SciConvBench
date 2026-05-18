@@ -1,0 +1,107 @@
+**Why the error appears**
+
+`*AMPLITUDE` is read by Abaqus as a **piece‑wise linear list of (time, amplitude) pairs**.  
+When the amplitude is used (directly or through a user sub‑routine such as UAMP, USDFLD, UMAT, …) Abaqus calls an internal interpolation routine that **requires the first column – the “time” or “step‑fraction” – to be strictly increasing** (no repeated values and no decreasing values).  
+
+The line you wrote
+
+```abaqus
+*AMPLITUDE,NAME=A1
+0.,1.,1.e-4,1.
+```
+
+is interpreted as four pairs
+
+| Time (or step‑fraction) | Amplitude |
+|--------------------------|-----------|
+| 0.0                      | 1.0       |
+| 1.0                      | 1·10⁻⁴    |
+| 1·10⁻⁴                   | 1.0       |
+
+The “time” values go **0 → 1 → 1·10⁻⁴ → 1** – they decrease from 1 to 1·10⁻⁴, which violates the monotonic‑increasing requirement. Consequently the interpolation routine aborts and Abaqus prints
+
+```
+THE USER SUBROUTINE HAS BEEN CALLED WITH AN ILLEGAL VALUE FOR A FIELD VARIABLE
+```
+
+---
+
+**How to fix it**
+
+1. **Make the first column strictly increasing** (or delete the amplitude if it is never referenced).  
+2. Keep the second column as the amplitude values you actually need.  
+3. Write the card as a list of (time, amplitude) pairs – one pair per line (or separated by commas; any whitespace or comma works as a separator).
+
+Below are a few correct ways to define the amplitude, depending on what you need.
+
+---
+
+### a) Constant amplitude of 1 for the whole step  
+
+```abaqus
+*AMPLITUDE,NAME=A1
+0.,1.
+```
+
+A single pair means “value = 1 from the start of the step to its end”.
+
+---
+
+### b) Piece‑wise linear amplitude reproducing the intended shape  
+
+| Time (or step‑fraction) | Amplitude |
+|--------------------------|-----------|
+| 0.0                      | 0.0       |
+| 0.1                      | 1.0       |
+| 0.2                      | 0.01      |
+| 1.0                      | 1.0       |
+
+```abaqus
+*AMPLITUDE,NAME=A1
+0.,0.,          ! start at 0
+0.1,1.,         ! rise to 1 at 10 % of the step
+0.2,0.01,       ! drop to 0.01 at 20 % of the step
+1.,1.           ! back to 1 at the end of the step
+```
+
+Now the first column (0, 0.1, 0.2, 1) is strictly increasing, so the routine can interpolate without error.
+
+---
+
+### c) Simple ramp from 0 to 1 and then hold at 1  
+
+```abaqus
+*AMPLITUDE,NAME=A1
+0.,0.,          ! 0 at the beginning of the step
+0.5,1.,         ! reach 1 at the middle of the step
+1.,1.           ! stay at 1 until the end
+```
+
+---
+
+### d) Remove the amplitude entirely (if it is never used)  
+
+If no load, boundary condition, or interaction references `A1`, simply delete the card (or comment it out).
+
+```abaqus
+*AMPLITUDE,NAME=A1   ← delete this line and any reference to A1
+```
+
+---
+
+**Quick checklist before re‑running**
+
+| ✔ | Item |
+|---|------|
+| 1 | First column of every `*AMPLITUDE` definition is **strictly increasing** (no repeats, no decreasing values). |
+| 2 | Second column contains real numbers (no `NaN`, no undefined expressions). |
+| 3 | The amplitude name used in loads, BCs, etc., matches the `*AMPLITUDE` card **exactly** (case‑sensitive). |
+| 4 | If the amplitude is not used, **remove the card**. |
+| 5 | Re‑run the job – the “illegal value for a field variable” error should disappear. |
+
+---
+
+**Bottom line**
+
+The error is caused by the non‑monotonic time values in the original line
+`0.,1.,1.e-4,1.`. Rewrite the `*AMPLITUDE` card so that the **first column is strictly increasing** (or delete the card if it isn’t needed). Any of the corrected examples above will eliminate the error and allow the analysis to run successfully.

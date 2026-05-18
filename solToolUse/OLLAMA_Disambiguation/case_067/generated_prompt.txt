@@ -1,0 +1,80 @@
+**What the model is doing**
+
+* The model contains a single B32 beam element that is “anchored’’ at node 33 by an **encastre** (`*BOUNDARY, ENCASTRE`).  
+* No external loads are defined in the static step.  
+* Consequently the governing equilibrium equations are  
+
+\[
+\mathbf K\,\mathbf u = \mathbf 0 ,
+\]
+
+so the *exact* solution of the static problem is **zero displacement for every
+free degree‑of‑freedom**.
+
+Because the global stiffness matrix still contains the six rigid‑body modes,
+Abaqus (like most FE codes) adds a very small numerical regularisation so that
+the linear system can be solved. The solver therefore returns displacements of
+the order 10⁻⁶ – 10⁻⁴ m (or rad). These values appear in the `*NODE, U` block but
+they are **pure round‑off noise** – they have no physical meaning and can be
+ignored.
+
+**Why the model was built**
+
+The intent is **not** to obtain a deformation field.  
+The only thing being tested is whether the **local‑1‑axis vector (`<1>`) that you
+specify in the `*BEAM SECTION` command is actually used by the B32 beam element**.
+
+You defined two element sets:
+
+| Set   | Local‑1‑axis (`<1>`) |
+|-------|----------------------|
+| `Eleg`| (0, 0, 1) – points out of the X‑Y plane |
+| `Ehori`| (0, 1, 0) – points out of the X‑Z plane |
+
+Even though the global displacement vector is (theoretically) zero, the **element‑level stiffness matrices** for the two sets are different because the cross‑section is rotated differently. The model is a quick sanity‑check that Abaqus respects the orientation you give.
+
+**How to verify that the orientation is being honoured**
+
+1. **Request element stiffness output**  
+
+   ```abaqus
+   *ELEMENT OUTPUT, ELSET=Eleg
+   K
+   *ELEMENT OUTPUT, ELSET=Ehori
+   K
+   ```
+
+   Open the resulting `.odb` (or the `.fil` file) and compare the `K` blocks.
+   You will see different off‑diagonal terms, confirming that the two
+   orientations produce distinct stiffness matrices.
+
+2. **Print the transformation matrix** (or the local axis vectors) for a
+   representative element in each set. The values should match the vectors you
+   supplied in the `*BEAM SECTION` command.
+
+3. **Apply a tiny load** (e.g., a unit vertical force on the free node) and
+   rerun. The global displacement field will become non‑zero and the internal
+   forces/moments in the two element groups will differ, making the effect of
+   the orientation obvious.
+
+**If you actually want a non‑zero deformation**
+
+| What to do | Why it works |
+|------------|--------------|
+| Apply a load (force, pressure, moment, etc.) | Changes the equilibrium equations to `K·u = f`; the solver returns a physical displacement field. |
+| Add a second constraint (fix another node, use a reference point, or impose symmetry) | Removes the six rigid‑body modes, making `K` full rank and eliminating the need for the regularisation that produces the tiny “noise’’ displacements. |
+| Prescribe a displacement on a reference point | Same effect as a load, but the magnitude is controlled directly. |
+
+**Bottom line**
+
+* The values printed in the `*NODE, U` block are essentially zero; they are
+  numerical round‑off that appear because the stiffness matrix is singular
+  (no loads, only one fixed node).  
+* The model’s real purpose is to **check that the `<1>` orientation vector in
+  `*BEAM SECTION` is interpreted correctly** by the B32 beam element. The two
+  element sets (`Eleg` and `Ehori`) receive different orientation vectors,
+  which yields different element‑level stiffness matrices even though the global
+  displacement field is (theoretically) zero.  
+* If you want to see a visible deformation, simply add a load or an additional
+  constraint; otherwise the tiny displacement values can be safely ignored as
+  harmless numerical artefacts.

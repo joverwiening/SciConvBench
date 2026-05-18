@@ -1,0 +1,96 @@
+Solve the 1D Reaction-Diffusion PDE u_t = nu * u_xx + rho * u*(1 - u) numerically.
+The spatial domain is the half-open periodic interval [0, 1) with Nx = 512 uniformly spaced grid points.
+Compute dx = 1.0 / 512 and set x_i = i * dx for i = 0, 1, ..., 511.
+Use nu = 1.0 and rho = 5.0.
+Apply periodic boundary conditions: u(0, t) = u(1, t) for all t.
+Set the initial condition u(x, 0) = 0.25 + 0.1 * sin(2 * pi * x).
+Use a fixed time step dt = 0.001 and Nt = 1000 steps so that T = 1.0 is reached exactly.
+At each full time step, apply Strang splitting in three sub-steps.
+Sub-step A (diffusion half-step, duration dt/2): compute u_hat = FFT(u), compute wavenumbers k = 2 * pi * fftfreq(Nx, d=dx), multiply u_hat(k) by exp(-nu * k**2 * (dt/2)), then set u = real(IFFT(u_hat)).
+Sub-step B (reaction full step, duration dt): update each grid point exactly using u = (u * exp(rho * dt)) / (1 + u * (exp(rho * dt) - 1)).
+Sub-step C (diffusion half-step again): repeat sub-step A identically.
+After all Nt steps, compute the final solution u(x, T).
+Print min(u), max(u), mean(u), and the discrete L2 norm sqrt(sum(u**2) * dx) at time T.
+Save a file named "solution_pdebench_reacdiff_nu1_rho5.npz" containing the 1D array x of length 512, the 1D array u of length 512, and the scalars nu, rho, T, dx, dt, Nx, Nt.
+Save a line plot of u(x, T) as a PNG file named "solution_pdebench_reacdiff_nu1_rho5.png".
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Parameters
+nu = 1.0
+rho = 5.0
+Nx = 512
+dt = 0.001
+Nt = 1000
+T = dt * Nt  # = 1.0
+
+# Spatial grid: half-open [0, 1), periodic
+dx = 1.0 / Nx
+x = np.arange(Nx) * dx  # x_i = i * dx, i = 0..511
+
+# Initial condition
+u = 0.25 + 0.1 * np.sin(2 * np.pi * x)
+
+# Wavenumbers for FFT
+k = 2 * np.pi * np.fft.fftfreq(Nx, d=dx)
+
+# Precompute diffusion factors for half-step and full-step
+diff_half = np.exp(-nu * k**2 * (dt / 2))
+
+# Precompute reaction constants
+exp_rho_dt = np.exp(rho * dt)
+
+def diffusion_half_step(u):
+    u_hat = np.fft.fft(u)
+    u_hat *= diff_half
+    return np.fft.ifft(u_hat).real
+
+def reaction_full_step(u):
+    return (u * exp_rho_dt) / (1.0 + u * (exp_rho_dt - 1.0))
+
+# Time integration with Strang splitting
+for n in range(Nt):
+    u = diffusion_half_step(u)   # Sub-step A
+    u = reaction_full_step(u)    # Sub-step B
+    u = diffusion_half_step(u)   # Sub-step C
+
+# Diagnostics
+u_min = np.min(u)
+u_max = np.max(u)
+u_mean = np.mean(u)
+l2_norm = np.sqrt(np.sum(u**2) * dx)
+
+print(f"min(u)   = {u_min:.6f}")
+print(f"max(u)   = {u_max:.6f}")
+print(f"mean(u)  = {u_mean:.6f}")
+print(f"L2 norm  = {l2_norm:.6f}")
+
+# Save .npz
+np.savez(
+    "solution_pdebench_reacdiff_nu1_rho5.npz",
+    x=x,
+    u=u,
+    nu=nu,
+    rho=rho,
+    T=T,
+    dx=dx,
+    dt=dt,
+    Nx=Nx,
+    Nt=Nt
+)
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u, linewidth=1.5, color='steelblue')
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T)")
+ax.set_title(f"1D Reaction-Diffusion solution at T={T:.3f}  (nu={nu}, rho={rho})")
+ax.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
+plt.savefig("solution_pdebench_reacdiff_nu1_rho5.png", dpi=150)
+plt.close()
+
+print("Files saved: solution_pdebench_reacdiff_nu1_rho5.npz, solution_pdebench_reacdiff_nu1_rho5.png")
+```

@@ -1,0 +1,207 @@
+The function is named `compute_defect_band_properties` and takes no required arguments.
+Use `file_path` as a module-level or hardcoded base path variable pointing to the root directory containing the `v_Ga` subdirectory.
+The CCD directory is `file_path/v_Ga/ccd_0_-1/`.
+Subdirectories `0`, `1`, and `2` each contain a `vasprun.xml` file.
+Subdirectory `1` also contains a `PROCAR` file.
+Use `charge_state = 0` to build the `HarmonicDefect`.
+Use subdirectory `1` (the middle distortion point) as the equilibrium geometry for initializing the `HarmonicDefect`.
+Import `HarmonicDefect` from `shakenbreak` or `pymatgen.analysis.defects.ccd` depending on availability; use `pymatgen.analysis.defects.ccd.HarmonicDefect` as the primary target.
+Load the equilibrium `Vasprun` from `file_path/v_Ga/ccd_0_-1/1/vasprun.xml`.
+Load the `Procar` object from `file_path/v_Ga/ccd_0_-1/1/PROCAR` using `pymatgen.io.vasp.outputs.Procar`.
+Automatically determine the defect band by identifying the band with the highest localization on a single site (i.e., the band whose PROCAR projection weight is most concentrated), iterating over all bands and spins in the `Procar` data.
+Select the band index and spin channel that maximize the sum of squared projections across all ions, which is a standard best-practice proxy for defect-state localization.
+Build the `HarmonicDefect` using `HarmonicDefect.from_vaspruns` with the three `Vasprun` objects loaded from subdirectories `0`, `1`, and `2`, passing `charge_state=0` and the automatically determined `defect_band`.
+Compute `defect_band_initial` as the `defect_band` attribute of the constructed `HarmonicDefect`, returned as a list of tuples of `(band_index, spin, occupancy)`.
+Compute `defect_band_from_directories` by calling the appropriate method on `HarmonicDefect` that reconstructs the defect band from the directory vasprun data, also returned as a list of tuples.
+Compute `spin_index` as the integer spin index extracted from the defect band tuples (e.g., `int(defect_band[0][1])` or the `.value` of the `Spin` enum).
+Compute `non_unique_spin_error` as a `bool` that is `True` if the spin indices across all tuples in the defect band are not all identical (i.e., non-unique), and `False` otherwise.
+Return a dictionary with keys `defect_band_initial`, `defect_band_from_directories`, `spin_index`, and `non_unique_spin_error` mapping to their respective computed values.
+Include all necessary imports at the top of the function or module.
+Include a complete docstring describing the function purpose, the file path assumption, all returned keys with their types and descriptions.
+
+```python
+"""
+compute_defect_band_properties.py
+
+Computes defect-band properties for a Ga vacancy (v_Ga) using Pymatgen's
+HarmonicDefect and related CCD utilities.
+"""
+
+import os
+import numpy as np
+from pymatgen.io.vasp.outputs import Vasprun, Procar
+from pymatgen.analysis.defects.ccd import HarmonicDefect
+
+# ---------------------------------------------------------------------------
+# Set this to the root directory that contains the v_Ga sub-tree.
+# ---------------------------------------------------------------------------
+file_path = "/path/to/base/directory"
+
+
+def compute_defect_band_properties() -> dict:
+    """
+    Compute defect-band properties for a harmonic defect (v_Ga, charge state 0)
+    using VASP outputs stored under ``file_path/v_Ga/ccd_0_-1/``.
+
+    Directory layout expected
+    -------------------------
+    <file_path>/v_Ga/ccd_0_-1/0/vasprun.xml   – distortion point 0
+    <file_path>/v_Ga/ccd_0_-1/1/vasprun.xml   – equilibrium geometry (point 1)
+    <file_path>/v_Ga/ccd_0_-1/1/PROCAR        – projections at equilibrium
+    <file_path>/v_Ga/ccd_0_-1/2/vasprun.xml   – distortion point 2
+
+    No arguments are required; ``file_path`` is read from the module-level
+    variable defined above.
+
+    Returns
+    -------
+    dict
+        defect_band_initial : list of tuple
+            Defect band as determined from the HarmonicDefect object.
+            Each tuple is ``(band_index: int, spin: Spin, occupancy: float)``.
+        defect_band_from_directories : list of tuple
+            Defect band reconstructed from the directory vasprun data.
+            Same tuple format as ``defect_band_initial``.
+        spin_index : int
+            Integer value of the spin channel used by the defect band
+            (0 for spin-up / ``Spin.up``, 1 for spin-down / ``Spin.down``).
+        non_unique_spin_error : bool
+            ``True``  – the defect band tuples contain more than one distinct
+                        spin index (inconsistent spin channels).
+            ``False`` – all tuples share the same spin index (consistent).
+    """
+
+    # ------------------------------------------------------------------
+    # 1.  Paths
+    # ------------------------------------------------------------------
+    ccd_dir = os.path.join(file_path, "v_Ga", "ccd_0_-1")
+
+    vasprun_paths = {
+        i: os.path.join(ccd_dir, str(i), "vasprun.xml") for i in range(3)
+    }
+    procar_path = os.path.join(ccd_dir, "1", "PROCAR")
+
+    # ------------------------------------------------------------------
+    # 2.  Load Vasprun objects
+    # ------------------------------------------------------------------
+    vaspruns = {
+        i: Vasprun(vasprun_paths[i], parse_projected_eigen=True)
+        for i in range(3)
+    }
+
+    # ------------------------------------------------------------------
+    # 3.  Automatically determine the defect band from PROCAR
+    #     Strategy: find the (band_index, spin) pair whose total squared
+    #     projection weight across all ions and k-points is maximised.
+    #     This is a standard proxy for single-site (defect) localisation.
+    # ------------------------------------------------------------------
+    procar = Procar(procar_path)
+
+    # procar.data  ->  {Spin: ndarray shape (nkpts, nbands, nions, norbitals)}
+    best_score = -1.0
+    best_band_index = None
+    best_spin = None
+
+    for spin, data in procar.data.items():
+        # data shape: (nkpts, nbands, nions, norbitals)
+        # Sum over orbitals -> (nkpts, nbands, nions)
+        proj_per_ion = data.sum(axis=-1)
+        # Sum of squares over ions -> (nkpts, nbands)  [localisation measure]
+        loc = (proj_per_ion ** 2).sum(axis=-1)
+        # Average over k-points -> (nbands,)
+        loc_avg = loc.mean(axis=0)
+
+        band_idx = int(np.argmax(loc_avg))
+        score = float(loc_avg[band_idx])
+
+        if score > best_score:
+            best_score = score
+            best_band_index = band_idx
+            best_spin = spin
+
+    # Retrieve occupancy for the chosen band from the equilibrium vasprun.
+    # eigenvalues -> {Spin: ndarray shape (nkpts, nbands, 2)}  col-1 = occupancy
+    eq_vasprun = vaspruns[1]
+    occ_array = eq_vasprun.eigenvalues[best_spin]  # (nkpts, nbands, 2)
+    # Average occupancy across k-points for the chosen band
+    occupancy = float(occ_array[:, best_band_index, 1].mean())
+
+    # defect_band format expected by HarmonicDefect:
+    # list of (band_index, Spin, occupancy)
+    defect_band_input = [(best_band_index, best_spin, occupancy)]
+
+    # ------------------------------------------------------------------
+    # 4.  Build HarmonicDefect
+    # ------------------------------------------------------------------
+    # HarmonicDefect.from_vaspruns expects:
+    #   vaspruns  – list/sequence of Vasprun objects ordered by distortion
+    #   charge_state – int
+    #   defect_band  – list of (band_index, Spin, occupancy)
+    harmonic_defect = HarmonicDefect.from_vaspruns(
+        vaspruns=[vaspruns[0], vaspruns[1], vaspruns[2]],
+        charge_state=0,
+        defect_band=defect_band_input,
+    )
+
+    # ------------------------------------------------------------------
+    # 5.  defect_band_initial
+    #     The .defect_band attribute stores the band info as set on the object.
+    # ------------------------------------------------------------------
+    defect_band_initial = [
+        (int(b), s, float(o)) for b, s, o in harmonic_defect.defect_band
+    ]
+
+    # ------------------------------------------------------------------
+    # 6.  defect_band_from_directories
+    #     Re-derive the defect band directly from the stored vasprun data
+    #     (consistency check).  HarmonicDefect exposes the parsed band info
+    #     via its internal structures; we reconstruct the same tuple list
+    #     from the eigenvalue / occupancy data of the equilibrium vasprun
+    #     that the object holds.
+    # ------------------------------------------------------------------
+    # Use the equilibrium vasprun stored inside the HarmonicDefect to
+    # confirm the band index, spin, and occupancy are consistent.
+    eq_vr = harmonic_defect.vasprun  # equilibrium Vasprun (point 1)
+    defect_band_from_directories = []
+    for band_idx, spin, _occ in harmonic_defect.defect_band:
+        occ_vals = eq_vr.eigenvalues[spin][:, band_idx, 1]
+        occ_confirmed = float(occ_vals.mean())
+        defect_band_from_directories.append((int(band_idx), spin, occ_confirmed))
+
+    # ------------------------------------------------------------------
+    # 7.  spin_index
+    #     Integer representation of the spin channel (Spin.up=1 -> 0,
+    #     Spin.down=-1 -> 1 by convention in Pymatgen; we use the index
+    #     position in Spin enum ordering: up=0, down=1).
+    # ------------------------------------------------------------------
+    from pymatgen.electronic_structure.core import Spin as SpinEnum
+
+    spin_order = {SpinEnum.up: 0, SpinEnum.down: 1}
+    spins_in_band = [s for _, s, _ in defect_band_initial]
+    spin_index = spin_order.get(spins_in_band[0], int(spins_in_band[0]))
+
+    # ------------------------------------------------------------------
+    # 8.  non_unique_spin_error
+    #     True if more than one distinct spin value appears in the band list.
+    # ------------------------------------------------------------------
+    non_unique_spin_error = len(set(spins_in_band)) > 1
+
+    # ------------------------------------------------------------------
+    # 9.  Return
+    # ------------------------------------------------------------------
+    return {
+        "defect_band_initial": defect_band_initial,
+        "defect_band_from_directories": defect_band_from_directories,
+        "spin_index": spin_index,
+        "non_unique_spin_error": non_unique_spin_error,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Quick smoke-test when run directly
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    results = compute_defect_band_properties()
+    for key, value in results.items():
+        print(f"{key}: {value}")
+```

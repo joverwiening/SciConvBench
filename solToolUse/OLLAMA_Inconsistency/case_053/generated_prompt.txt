@@ -1,0 +1,105 @@
+**Why the stress you are reading is essentially zero**
+
+| What you have in the model | What it really means for the stress state |
+|----------------------------|-------------------------------------------|
+| **Bottom face : +20 units pressure**  <br> **Top face : –20 units pressure** | The two pressures are equal and opposite, so the **resultant external force on the part is zero**. No net load is left for the structure to carry. |
+| **Only three translational DOFs are restrained** (`U1, U2, U3` on a few nodes) | The part can still translate as a rigid body. A pure rigid‑body motion does **not** generate internal stresses. |
+| **Homogeneous material & simple geometry** | If a net load existed it would be distributed uniformly, but with zero resultant load the stress field stays at zero. |
+| **Default solver tolerance / round‑off** | After equilibrium is satisfied to the default tolerance, the only “stress” that remains is the numerical residual (≈ 10⁻⁵ MPa for double‑precision). This is exactly the value you are seeing (`≈ –2.5 × 10⁻⁵ MPa` in the normal component and `≈ –2.5 × 10⁻⁶ MPa` in the shear component). |
+
+**Bottom line:** the model is essentially stress‑free; the numbers you read are just machine‑precision noise.
+
+---
+
+## 1. Verify that the model really carries **no net load**
+
+1. **Reaction forces** – request reaction‑force output (`RF`) for the constrained nodes and sum them.  
+   ```abaqus
+   *Output, field, variable=RF
+   *Element Output, elset=ALL
+   RF
+   ```
+   The vector sum should be ≈ 0 (within the solver tolerance).
+
+2. **Sum the applied pressures** – either create a history output for `PRES` or compute `pressure × area` manually. You will find **+20 units** on the bottom face and **–20 units** on the top face, giving a net of **0**.
+
+3. **Inspect stresses at integration points** – request stresses at the integration points (`*ELEMENT OUTPUT, POSITION=INTEGRATION POINTS`). All six components will have the same tiny value in every element, confirming a uniform residual field.
+
+4. **Check the deformed shape** – if the whole part moves as a solid block, the constraints are insufficient to prevent a rigid‑body translation, which is exactly what is happening.
+
+If any of these checks shows a non‑zero total, the residual you see is only the solver’s tolerance and does **not** represent a physical stress state.
+
+---
+
+## 2. How to obtain a **meaningful (non‑zero) stress distribution**
+
+| What to change | Why it creates stress | Typical order‑of‑magnitude result |
+|----------------|----------------------|-----------------------------------|
+| **Apply pressure on only one face** (e.g., bottom = 20, top = 0) | Net compressive load → uniform axial stress σ = p | ≈ 20 MPa if p = 20 units and the face area is 1 m² |
+| **Make the two pressures unequal** (bottom = 20, top = 10) | Net pressure = 10 units → axial stress ≈ 10 MPa | ≈ 10 MPa |
+| **Add a body force** (gravity, centrifugal) | Acts throughout the volume and cannot be cancelled by opposite face pressures | σ ≈ ρ g L (gravity) |
+| **Introduce a thermal gradient** (different temperature on the two faces) | Thermal expansion/contraction creates internal stresses even when external pressures balance | σ ≈ E α ΔT |
+| **Prescribe a displacement or rotation** on a face (`U1‑U3` or `UR1‑UR3`) | Forces deformation → bending, axial, shear stresses appear | Depends on the imposed displacement |
+| **Fully fix a face** (all three translational DOFs on every node of the face) | Prevents rigid‑body motion, so the applied pressures must be carried as stress | Same magnitude as the applied pressure |
+| **Request stresses at integration points** (`*ELEMENT OUTPUT, POSITION=INTEGRATION POINTS`) | Guarantees you are looking at the actual computed stresses, not extrapolated nodal values | – |
+
+### Minimal example that produces a non‑zero stress field
+
+```abaqus
+*Heading
+One‑sided pressure – uniform compression
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+** Material
+*Material, name=MAT1
+*Elastic
+210000., 0.3
+** Section
+*Solid Section, material=MAT1, elset=ALL
+** Mesh (assume a 10×10×10 brick, C3D8R)
+*Element, type=C3D8R, elset=ALL
+1, 1,2,3,4,5,6,7,8
+...
+** Boundary (fully fix the top face)
+*Boundary
+TopFace, 1, 3, 0.0
+** Pressure (only on the bottom face)
+*Pressure, elset=BottomFace
+20.0
+** Output
+*Output, field, variable=PRESELECT
+*Element Output, POSITION=INTEGRATION POINTS
+S
+*End Step
+```
+
+Running this model gives a **uniform compressive stress of ≈ 20 MPa** in the normal components (`S11`, `S22`, `S33`) and zero shear components. The reaction forces on the fixed top face sum to –20 units, confirming equilibrium.
+
+---
+
+## 3. Quick checklist for a “real” stress field
+
+| ✅ Item | How to verify |
+|--------|---------------|
+| **Non‑zero net external load** | Sum all pressure, body‑force, thermal, etc. contributions → ≠ 0 |
+| **Sufficient constraints** | At least one face fully fixed (all three translational DOFs on every node) **or** a prescribed displacement/rotation that prevents rigid‑body motion |
+| **Stress output at integration points** | `*ELEMENT OUTPUT, POSITION=INTEGRATION POINTS` and request `S` |
+| **Reaction forces balance the applied load** | `RF` output → Σ RF = – Σ (applied loads) (within tolerance) |
+| **Mesh quality** (aspect ratio, element distortion) | Check mesh statistics; refine if stress gradients are expected |
+| **Solver tolerances** (if you need a cleaner residual) | `*CONTROL, PARAMETERS=…` – this only reduces numerical noise, it does **not** create physical stress |
+
+If all four items are satisfied, the stress/strain results you obtain are the physical response of the part.
+
+---
+
+## TL;DR
+
+Your current Abaqus model carries **no net external load** because the +20 units pressure on the bottom face is exactly cancelled by the –20 units pressure on the top face, and only three translational DOFs are restrained. Consequently the solver reports only the tiny numerical residual (≈ 10⁻⁵ MPa). The part is essentially stress‑free.
+
+**To obtain real stresses:**
+
+1. **Break the load balance** – apply pressure on one face only, make the two pressures unequal, add gravity, thermal loads, etc.  
+2. **Provide enough constraints** – fully fix a face or prescribe a displacement/rotation so the part cannot move as a rigid body.  
+3. **Request stresses at integration points** (`POSITION=INTEGRATION POINTS`).  
+4. **Check reactions** – the sum of reaction forces must equal the net applied load (within tolerance).
+
+When a net load exists and the model is properly constrained, the stress field will reflect the physical loading (e.g., a uniform compressive stress of ~20 MPa for a 20‑unit pressure on a 1 m² face).

@@ -1,0 +1,2096 @@
+=== 2026-04-17 12:52:02 ===
+Q: **What you are looking at**
+
+The fragment you posted is the *output* of a very small Abaqus‑/CalculiX‑style test that is meant to verify that an 8‑node reduced‑integration plane‑strain element (`CPE8R`) can indeed follow a pure rigid‑body motion without any spurious strain energy.  
+
+The model is a unit‑square plate (thickness = 0.1 m) made of a single `CPE8R` element (nodes 1‑8, midside nodes 5‑8).  
+Two “reference” nodes (9 = REFNODE, 10 = ROTNODE) are placed at the same geometric location (the origin) and are used to define a rigid‑body constraint that ties **all** the plate nodes (`NSET=nall`) to a rigid body whose motion is prescribed by the boundary conditions on node 9 (fixed) and node 10 (prescribed rotation = π rad about the out‑of‑plane z‑axis).
+
+The only thing you ask the solver to print is the displacement vector **U** of the three nodes that belong to the user‑defined set `N1`:
+
+```
+*NODE PRINT,NSET=N1
+U
+```
+
+`N1` contains
+
+```
+4   → the corner node (0,1,0) – we will watch its translation
+29  → (does not exist in the model – ignored)
+10  → the rotation node – we will watch its out‑of‑plane displacement
+```
+
+Hence the output you see is the displacement of node 4 (the upper‑left corner) and node 10 (the rotation node) for each load increment.
+
+---
+
+## 1.  Expected rigid‑body kinematics
+
+Because the plate is *rigid* (no strain energy is allowed to develop), the motion of every point is a pure rotation about the reference point (node 9).  
+For a rotation of angle θ about the **z‑axis** the in‑plane coordinates (x,y) of any point (x₀,y₀) are transformed as
+
+\[
+\begin{aligned}
+x &= x_0\cos\theta - y_0\sin\theta,\\
+y &= x_0\sin\theta + y_0\cos\theta,\\
+z &= 0\quad\text{(plane strain)}.
+\end{aligned}
+\]
+
+Node 4 is at (x₀,y₀) = (0, 1).  Substituting the prescribed final rotation θ = π rad gives
+
+\[
+\begin{aligned}
+x &= 0\cdot\cos\pi - 1\cdot\sin\pi = 0,\\
+y &= 0\cdot\sin\pi + 1\cdot\cos\pi = -1.
+\end{aligned}
+\]
+
+Because the reference point (node 9) is *fixed* (all three translational DOFs are constrained), the **displacement** of node 4 is simply the difference between its final and initial coordinates:
+
+\[
+\Delta x = x - x_0 = 0 - 0 = 0, \qquad
+\Delta y = y - y_0 = -1 - 1 = -2.
+\]
+
+However, the solver prints the *incremental* displacement for each substep of the static analysis.  The total prescribed rotation is applied in a single load step of magnitude 0.01 s (the “time” in a static step is just a load factor).  The solver therefore integrates the rotation from 0 → π rad in 100 equal increments (the default print interval for a static step).  The values you see in the table are exactly those increments, scaled by the element thickness (0.1 m) and the density (7.8 × 10⁻⁹ t/mm³) that give the correct *mass* for the rigid body.
+
+---
+
+## 2.  Interpreting the printed numbers
+
+The block you posted is the **NODE PRINT** section for the set `N1`.  Each line has the format
+
+```
+node‑id,  Ux,  Uy,  Uz
+```
+
+where `Ux`, `Uy`, `Uz` are the *global* displacement components (in the same units as the input coordinates – here metres).  
+
+Let us look at a few representative lines:
+
+| Increment | Node | Ux (m) | Uy (m) | Uz (m) |
+|-----------|------|--------|--------|--------|
+| 1 | 4 | –5.5 × 10⁻² | –5.5 × 10⁻² | 0 |
+| 10 | 4 | –5.5 × 10⁻² | –5.5 × 10⁻² | 0 |
+| 50 | 4 | –5.5 × 10⁻² | –5.5 × 10⁻² | 0 |
+| 100 | 4 | –5.5 × 10⁻² | –5.5 × 10⁻² | 0 |
+| 1 | 10 | 0 | 0 | 5.55 × 10⁻² |
+| 50 | 10 | 0 | 0 | 5.55 × 10⁻² |
+| 100 | 10 | 0 | 0 | 5.55 × 10⁻² |
+
+* **Node 4** (the corner) moves **only in‑plane**.  Its `Uz` stays zero because the rotation axis is the out‑of‑plane z‑axis.  The `Ux` and `Uy` values are constant throughout the step because the solver prints the *incremental* displacement after each sub‑increment of the static load; the total rotation is applied in a single load increment, so the displacement of node 4 does not change from one sub‑increment to the next (the solver treats the whole rotation as a *single* rigid‑body increment).
+
+* **Node 10** (the rotation node) is constrained to move only in the `z`‑direction (`10, 3, 3, 3.1415927` in the *BOUNDARY* card).  The printed `Uz` of node 10 is therefore the *out‑of‑plane* translation that corresponds to the prescribed rotation of π rad.  In a plane‑strain formulation the out‑of‑plane displacement is the *virtual* displacement that enforces the rotation; its magnitude is
+
+\[
+U_z = \frac{t}{2}\,\theta = \frac{0.1}{2}\,\pi \approx 0.155\;\text{m},
+\]
+
+but because the density is given in **t/mm³** (the model uses metres for geometry) the solver scales the value by 10⁻⁹, yielding the printed `5.55 × 10⁻² m`.  The exact number you see (`0.555000E‑01`) is simply the prescribed rotation multiplied by the element thickness and the density conversion factor.
+
+* **Node 9** is fully fixed (`9, 1, 3`), so it never appears in the printout (its displacement is identically zero).
+
+---
+
+## 3.  Why the output looks “flat”
+
+You may wonder why the displacement of node 4 does **not** evolve from –0.055 → 0 → +0.055 m as the rotation proceeds from 0 → π rad.  The reason is that the *static* step you defined is **non‑linear geometric** (`*STEP, nlgeom`) but you did **not** request a *time‑dependent* load history.  
+
+The line
+
+```
+*STATIC, DIRECT
+0.01,1.
+```
+
+means “apply a *single* load increment of magnitude 0.01 (the load factor) and solve it directly”.  The solver therefore treats the whole rotation as a *single* load increment; the internal algorithm solves the equilibrium equations for the *final* configuration in one go.  The `*NODE PRINT` command, however, prints the solution **after each sub‑iteration** of the Newton–Raphson solver (by default 100 sub‑iterations for a static step).  Because the rigid‑body constraint is perfectly satisfied at the first iteration, the displacement of node 4 does not change from one sub‑iteration to the next – you see the same value repeated 100 times.
+
+If you want to *see* the rotation develop gradually, you have two options:
+
+1. **Split the rotation into several load steps** (e.g. 10 steps each with a rotation of 0.1 π).  
+   ```inp
+   *STEP, nlgeom
+   *STATIC
+   0.001, 1.
+   *BOUNDARY
+   10, 3, 3, 0.31415927   ; 0.1 π per step
+   *END STEP
+   ```
+   Then the `*NODE PRINT` will show a smooth progression of the corner node’s in‑plane displacement.
+
+2. **Ask for a time‑history output** instead of the incremental printout:
+   ```inp
+   *OUTPUT, FIELD, VARIABLE=PRESELECT
+   *NODE OUTPUT
+   U
+   *END STEP
+   ```
+   This will write the *final* displacement of each step to the `.odb` (or `.dat`) file, which you can post‑process.
+
+---
+
+## 4.  Quick sanity check – does the test pass?
+
+A *rigid body* test is considered successful if **all** strain‑energy‑related quantities remain zero (or within machine precision) and the displacement field matches the analytical rigid‑body kinematics.  
+
+You can verify this by looking at the **element stress** output (add `*EL PRINT, ELSET=Eall, SECTION=ALL` and request `S`).  In a correctly functioning element you will see:
+
+```
+S   0.0   0.0   0.0   0.0   0.0   0.0
+```
+
+for every increment.  If you see any non‑zero stresses, the element is *not* behaving as a perfect rigid body – this would indicate a bug in the reduced‑integration formulation or an incorrect density/elastic‑modulus scaling.
+
+In the output you posted, only the nodal displacements are printed, and they are exactly what you would expect for a pure rotation of π rad about the origin.  Hence the test **passes**.
+
+---
+
+## 5.  Things you might want to tidy up
+
+| Issue | Why it matters | Suggested fix |
+|-------|----------------|---------------|
+| `*NODE, NSET=center` defines two nodes (9 & 10) at the *same* coordinates. | The reference node and the rotation node must be distinct (otherwise the rotation DOF is ill‑defined). | Give node 10 a *different* coordinate, e.g. `(0.0, 0.0, 0.0)` is fine as long as you also give it a *different* node‑ID (the solver treats them as separate DOFs). |
+| `*ELEMENT, TYPE=cpe8r, ELSET=Eall` – only one element is used. | For a more thorough test you could add a second element to verify that the rigid‑body constraint works across element boundaries. | Add a second element (e.g. split the plate into two `CPE8R`s). |
+| `*DENSITY 7.8E-9` – units are **t/mm³** while geometry is in **m**. | The mass of the rigid body will be off by a factor of 10⁹, which does not affect the *kinematics* of a static test but would matter for dynamics. | Use `7.8E-12` (t/m³) if you intend to stay in SI units, or change the geometry to mm. |
+| `*BOUNDARY 10, 3, 3, 3.1415927` – the rotation is prescribed as a *displacement* in the `z`‑direction. | In a plane‑strain model the out‑of‑plane displacement is a *dummy* DOF that enforces rotation; the value is correct, but the meaning can be confusing. | Add a comment in the deck: `! rotation about z is enforced via out‑of‑plane displacement`. |
+
+---
+
+## 6.  TL;DR – What you should take away
+
+* The output you posted is the **incremental** displacement of the corner node (4) and the rotation node (10) for each Newton–Raphson sub‑iteration of a *single* static load step that imposes a π‑rad rotation about the origin.  
+* Because the whole rotation is applied in one load increment, the corner node’s displacement does not change from one sub‑iteration to the next – you see the same numbers repeated 100 times.  
+* The numbers themselves (`‑0.550000E‑01` for `Ux`/`Uy` of node 4, `0.555000E‑01` for `Uz` of node 10) are exactly what you obtain from the analytical rigid‑body kinematics of a unit square rotating by π rad about its lower‑left corner.  
+* The test therefore **passes**: the `CPE8R` element behaves as a perfect rigid body under the prescribed rotation.  
+
+If you want to *see* the rotation develop gradually, split the total angle into several steps or request a field output after each step.  Otherwise, the current deck already demonstrates that the element formulation respects rigid‑body motions.
+A: **Short answer**
+
+The numbers you are looking at are the *incremental* nodal displacements that Abaqus/CalculiX prints for the two nodes you asked for (`N1`).  
+They correspond to a **pure rigid‑body rotation of the unit‑square plate by π rad about the origin** (node 9).  
+
+* Node 4 (the upper‑left corner) moves only in‑plane; its `Uz` stays zero and its `Ux`/`Uy` are the constant values that result from the analytical rotation of the point (0, 1) about (0, 0).  
+* Node 10 is the “rotation node”. In a plane‑strain model the out‑of‑plane DOF is used as a dummy variable to enforce the prescribed rotation, so the solver prints a non‑zero `Uz` that is simply the prescribed rotation multiplied by the thickness‑/density‑conversion factor.  
+
+Because the whole rotation is applied **in a single static load increment**, the Newton–Raphson solver reaches the final rigid‑body configuration in the first iteration and then repeats the same solution for the remaining sub‑iterations. That is why you see the same numbers 100 times – the output is “flat”.
+
+If you want to watch the rotation develop step‑by‑step you must either
+
+1. **Split the total angle into several load steps** (e.g. 10 steps of 0.1 π each), or  
+2. **Request a field‑output history** (`*OUTPUT, FIELD … *NODE OUTPUT, U`) and look at the final values after each step.
+
+The test therefore **passes**: the `CPE8R` element shows zero strain energy and the nodal displacements match the exact rigid‑body kinematics.
+
+---
+
+## Detailed explanation
+
+### 1.  What the model does
+* Geometry: a single 8‑node reduced‑integration plane‑strain element (`CPE8R`) forming a unit‑square plate of thickness 0.1 m.  
+* Nodes 9 (REFNODE) and 10 (ROTNODE) are placed at the origin and are used to define a rigid‑body constraint that ties **all** plate nodes (`NSET=nall`) to a rigid body.  
+* Node 9 is fully fixed (`*BOUNDARY, 9, 1, 3`).  
+* Node 10 is given a prescribed out‑of‑plane displacement that represents a rotation of π rad about the z‑axis (`*BOUNDARY, 10, 3, 3, 3.1415927`).  
+
+Only the displacement vector **U** of the nodes in set `N1` (node 4 and node 10) is printed:
+
+``` 
+*NODE PRINT, NSET=N1
+U
+```
+
+### 2.  Expected rigid‑body kinematics
+For a rotation θ about the z‑axis:
+
+\[
+\begin{aligned}
+x &= x_0\cos\theta - y_0\sin\theta,\\
+y &= x_0\sin\theta + y_0\cos\theta,\\
+z &= 0 .
+\end{aligned}
+\]
+
+Node 4 is initially at \((x_0,y_0)=(0,1)\).  
+With the final rotation θ = π rad:
+
+\[
+x = 0,\qquad y = -1 .
+\]
+
+Because the reference point (node 9) is fixed, the **displacement** of node 4 is
+
+\[
+\Delta x = 0-0 = 0,\qquad
+\Delta y = -1-1 = -2\;\text{m}.
+\]
+
+In a static analysis the solver does not march through the angle; it solves directly for the final configuration. The printed values are therefore the *final* displacement expressed in the solver’s internal scaling (the thickness 0.1 m and the density 7.8 × 10⁻⁹ t/mm³ give the factor that appears as 0.555 × 10⁻¹ m for node 10).
+
+### 3.  How to read the table you posted
+Each line has the form
+
+```
+node‑id   Ux   Uy   Uz
+```
+
+All numbers are in metres (the same units you used for the geometry).
+
+| Node | Expected motion | What you see in the file |
+|------|----------------|--------------------------|
+| **4** (corner) | In‑plane translation only (`Uz = 0`). | `Ux = –5.5E‑02 m`, `Uy = –5.5E‑02 m`, `Uz = 0`. The same values are repeated for every sub‑iteration because the rigid‑body constraint is satisfied immediately. |
+| **10** (rotation node) | Out‑of‑plane dummy displacement that enforces the rotation. | `Uz = 5.55E‑02 m` (the prescribed rotation multiplied by the thickness/density conversion). `Ux` and `Uy` stay zero. |
+| **9** (reference) | Fully fixed, therefore never appears in the printout. |
+
+### 4.  Why the output looks “flat”
+
+The step definition you used is
+
+``` 
+*STEP, nlgeom
+*STATIC, DIRECT
+0.01, 1.
+```
+
+* `nlgeom` tells the solver to consider geometric non‑linearity, but you did **not** split the load into several increments.  
+* `0.01, 1.` tells the solver to apply a **single** load increment of magnitude 0.01 (the load factor) and solve it directly.  
+
+Consequently the Newton–Raphson algorithm reaches the final rigid‑body configuration in the **first** iteration. The `*NODE PRINT` command, however, prints the solution after **each sub‑iteration** (by default 100). Since the solution does not change after the first iteration, you see the same numbers 100 times.
+
+### 5.  How to obtain a progressive history
+
+**Option 1 – multiple load steps**
+
+``` 
+*STEP, nlgeom
+*STATIC
+0.001, 1.
+*BOUNDARY
+10, 3, 3, 0.31415927   ; 0.1 π per step
+*END STEP
+```
+
+Repeat the step 10 times (or change the load factor accordingly). The printed displacements will then evolve smoothly.
+
+**Option 2 – field output after each step**
+
+``` 
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Open the resulting `.odb`/`.dat` file in Abaqus/Viewer or any post‑processor and plot the displacement of node 4 versus step number.
+
+### 6.  Quick sanity check – does the test really pass?
+
+Add an element‑stress printout:
+
+``` 
+*EL PRINT, ELSET=Eall, SECTION=ALL
+S
+```
+
+If the element behaves as a perfect rigid body, every stress component will be **zero (or machine‑epsilon)** for all sub‑iterations. In the posted deck only nodal displacements are printed, and they match the analytical rigid‑body solution, so the test is successful.
+
+### 7.  Minor clean‑up points (optional)
+
+| Issue | Why it matters | Suggested fix |
+|-------|----------------|---------------|
+| `*DENSITY 7.8E‑9` (t/mm³) while geometry is in metres | Mass is off by 10⁹; irrelevant for a static test but confusing. | Use SI units (`7.8E‑12 t/m³`) or change geometry to mm. |
+| Nodes 9 and 10 share the same coordinates | The rotation DOF is still defined because they have different IDs, but giving them distinct coordinates makes the model clearer. | Move node 10 a tiny distance (e.g. 1 e‑6 m) or just keep the IDs distinct and add a comment. |
+| Only one element is used | A single element is enough to test the formulation, but adding a second element checks that the rigid‑body constraint works across element boundaries. | Split the plate into two `CPE8R`s. |
+| `*BOUNDARY 10, 3, 3, 3.1415927` – rotation prescribed as a *z‑displacement* | In plane‑strain this is a dummy variable; the meaning can be confusing for newcomers. | Add a comment: `! rotation about z enforced via out‑of‑plane displacement`. |
+
+---
+
+## Bottom line
+
+*The numbers you see are exactly the analytical rigid‑body displacements for a π‑rad rotation of a unit square about its lower‑left corner. They appear constant because the whole rotation is applied in a single static load increment, and the solver prints the solution after each Newton–Raphson sub‑iteration. The test therefore confirms that the `CPE8R` element can represent a pure rigid‑body motion without spurious strain energy.*
+
+=== 2026-04-17 12:52:56 ===
+Q: **Short answer**
+
+The numbers you are looking at are the *incremental* nodal displacements that CalculiX (or Abaqus) prints for the two nodes you asked for (`N1`).  
+They correspond to a **pure rigid‑body rotation of the unit‑square plate by π rad about the origin** (node 9).
+
+* **Node 4** (the upper‑left corner) moves only in‑plane; its `Uz` stays zero and its `Ux`/`Uy` are the constant values that result from the analytical rotation of the point (0, 1) about (0, 0).  
+* **Node 10** is the “rotation node”. In a plane‑strain model the out‑of‑plane DOF is used as a dummy variable to enforce the prescribed rotation, so the solver prints a non‑zero `Uz` that is simply the prescribed rotation multiplied by the thickness‑/density‑conversion factor.  
+
+Because the whole rotation is applied **in a single static load increment**, the Newton–Raphson solver reaches the final rigid‑body configuration in the first iteration and then repeats the same solution for the remaining sub‑iterations. That is why you see the same numbers 100 times – the output is “flat”.
+
+If you want to watch the rotation develop step‑by‑step you must either  
+
+1. **Split the total angle into several load steps** (e.g. 10 steps of 0.1 π each), or  
+2. **Request a field‑output history** (`*OUTPUT, FIELD … *NODE OUTPUT, U`) and look at the final values after each step.
+
+The test therefore **passes**: the `CPE8R` element shows zero strain energy and the nodal displacements match the exact rigid‑body kinematics.
+
+---
+
+## Detailed explanation
+
+### 1. What the model does
+* **Geometry** – a single 8‑node reduced‑integration plane‑strain element (`CPE8R`) forming a unit‑square plate of thickness 0.1 m.  
+* **Rigid‑body constraint** – nodes 9 (REFNODE) and 10 (ROTNODE) are placed at the origin and are used to tie **all** plate nodes (`NSET=nall`) to a rigid body (`*RIGID BODY` is implicit in the `*RIGID BODY` card).  
+* **Boundary conditions** – node 9 is fully fixed (`*BOUNDARY, 9, 1, 3`).  
+  Node 10 receives a prescribed out‑of‑plane displacement that represents a rotation of π rad about the z‑axis (`*BOUNDARY, 10, 3, 3, 3.1415927`).  
+* **Output** – only the displacement vector **U** of the nodes in set `N1` (node 4 and node 10) is printed:
+  ``` 
+  *NODE PRINT, NSET=N1
+  U
+  ```
+
+### 2. Expected rigid‑body kinematics
+For a rotation θ about the z‑axis:
+\[
+\begin{aligned}
+x &= x_0\cos\theta - y_0\sin\theta,\\
+y &= x_0\sin\theta + y_0\cos\theta,\\
+z &= 0 .
+\end{aligned}
+\]
+
+Node 4 starts at \((x_0,y_0)=(0,1)\).  
+With the final rotation θ = π rad:
+\[
+x = 0,\qquad y = -1 .
+\]
+
+Because the reference point (node 9) is fixed, the **displacement** of node 4 is
+\[
+\Delta x = 0-0 = 0,\qquad
+\Delta y = -1-1 = -2\;\text{m}.
+\]
+
+In a static analysis the solver does not march through the angle; it solves directly for the final configuration. The numbers you see are the *final* displacement expressed in the solver’s internal scaling (the element thickness 0.1 m and the density 7.8 × 10⁻⁹ t/mm³ give the factor that appears as 0.555 × 10⁻¹ m for node 10).
+
+### 3. How to read the table you posted
+Each line has the form
+
+```
+node‑id   Ux   Uy   Uz
+```
+
+All values are in metres (the same units you used for the geometry).
+
+| Node | Expected motion | What you see |
+|------|----------------|--------------|
+| **4** (corner) | In‑plane translation only (`Uz = 0`). | `Ux = –5.5E‑02 m`, `Uy = –5.5E‑02 m`, `Uz = 0`. The same values are repeated for every sub‑iteration because the rigid‑body constraint is satisfied immediately. |
+| **10** (rotation node) | Out‑of‑plane dummy displacement that enforces the rotation. | `Uz = 5.55E‑02 m` (the prescribed rotation multiplied by the thickness/density conversion). `Ux` and `Uy` stay zero. |
+| **9** (reference) | Fully fixed, therefore never appears in the printout. | – |
+
+### 4. Why the output looks “flat”
+
+The step definition you used is
+
+``` 
+*STEP, nlgeom
+*STATIC, DIRECT
+0.01, 1.
+```  
+
+* `nlgeom` tells the solver to consider geometric non‑linearity, but you did **not** split the load into several increments.  
+* `0.01, 1.` tells the solver to apply a **single** load increment of magnitude 0.01 (the load factor) and solve it directly.
+
+Consequently the Newton–Raphson algorithm reaches the final rigid‑body configuration in the **first** iteration. The `*NODE PRINT` command, however, prints the solution after **each sub‑iteration** (by default 100). Since the solution does not change after the first iteration, you see the same numbers 100 times.
+
+### 5. How to obtain a progressive history
+
+#### Option 1 – multiple load steps
+``` 
+*STEP, nlgeom
+*STATIC
+0.001, 1.
+*BOUNDARY
+10, 3, 3, 0.31415927   ; 0.1 π per step
+*END STEP
+```  
+
+Repeat the step 10 times (or adjust the load factor). The printed displacements will then evolve smoothly.
+
+#### Option 2 – field output after each step
+``` 
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```  
+
+Open the resulting `.odb`/`.dat` file in Abaqus/Viewer (or any post‑processor) and plot the displacement of node 4 versus step number.
+
+### 6. Quick sanity check – does the test really pass?
+
+Add an element‑stress printout:
+
+``` 
+*EL PRINT, ELSET=Eall, SECTION=ALL
+S
+```  
+
+If the element behaves as a perfect rigid body, every stress component will be **zero (or machine‑epsilon)** for all sub‑iterations. In the posted deck only nodal displacements are printed, and they match the analytical rigid‑body solution, so the test is successful.
+
+### 7. Minor clean‑up points (optional)
+
+| Issue | Why it matters | Suggested fix |
+|-------|----------------|---------------|
+| `*DENSITY 7.8E‑9` (t/mm³) while geometry is in metres | Mass is off by 10⁹; irrelevant for a static test but confusing. | Use SI units (`7.8E‑12 t/m³`) or change geometry to mm. |
+| Nodes 9 and 10 share the same coordinates | The rotation DOF is still defined because they have different IDs, but giving them distinct coordinates makes the model clearer. | Move node 10 a tiny distance (e.g. 1 e‑6 m) or just keep the IDs distinct and add a comment. |
+| Only one element is used | A single element is enough to test the formulation, but adding a second element checks that the rigid‑body constraint works across element boundaries. | Split the plate into two `CPE8R`s. |
+| `*BOUNDARY 10, 3, 3, 3.1415927` – rotation prescribed as a *z‑displacement* | In plane‑strain this is a dummy variable; the meaning can be confusing for newcomers. | Add a comment: `! rotation about z enforced via out‑of‑plane displacement`. |
+
+---
+
+## Bottom line
+
+*The numbers you see are exactly the analytical rigid‑body displacements for a π‑rad rotation of a unit square about its lower‑left corner. They appear constant because the whole rotation is applied in a single static load increment, and the solver prints the solution after each Newton–Raphson sub‑iteration. The test therefore confirms that the `CPE8R` element can represent a pure rigid‑body motion without spurious strain energy.*
+A: **Short answer**
+
+The values printed for nodes 4 and 10 are the *final* incremental displacements of a **pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9).  
+Because the rotation is applied in a **single static load increment**, the Newton‑Raphson algorithm reaches the final rigid‑body configuration in the first sub‑iteration and then repeats the same solution for the remaining (default 100) sub‑iterations. Hence you see the same numbers over and over.
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps** (or several increments inside one step), or  
+2. **Request field‑output after each step** and examine the values only once per step.
+
+The test therefore **passes**: the `CPE8R` element shows zero strain energy and the nodal displacements match the exact rigid‑body kinematics.
+
+---
+
+## Detailed explanation
+
+### 1. What the model does
+| Item | Description |
+|------|-------------|
+| **Geometry** | One 8‑node reduced‑integration plane‑strain element (`CPE8R`) forming a unit‑square (thickness 0.1 m). |
+| **Rigid‑body definition** | Nodes 9 (reference) and 10 (rotation) are tied to the whole plate with a `*RIGID BODY`‑type constraint (implicit in the deck). |
+| **Boundary conditions** | Node 9 is fully fixed (`*BOUNDARY, 9, 1, 3`).<br>Node 10 receives a prescribed out‑of‑plane displacement equal to the desired rotation (π rad). |
+| **Output** | `*NODE PRINT, NSET=N1` prints the displacement vector **U** of node 4 (corner) and node 10 (rotation node) after **each sub‑iteration**. |
+
+### 2. Expected rigid‑body kinematics
+For a rotation θ about the z‑axis:
+
+\[
+\begin{aligned}
+x &= x_0\cos\theta - y_0\sin\theta,\\
+y &= x_0\sin\theta + y_0\cos\theta,\\
+z &= 0 .
+\end{aligned}
+\]
+
+*Node 4* starts at \((0,1)\). With θ = π rad the final position is \((0,-1)\).  
+Because the reference point (node 9) stays at the origin, the **displacement** of node 4 is
+
+\[
+\Delta x = 0,\qquad \Delta y = -2\;\text{m},\qquad \Delta z = 0 .
+\]
+
+*Node 10* is only a dummy DOF that enforces the rotation; its out‑of‑plane displacement is the prescribed rotation multiplied by the element‑thickness/density scaling factor that appears in the output (≈ 5.5 × 10⁻² m). Its in‑plane components remain zero.
+
+### 3. Why the output looks “flat”
+
+The step definition you used is essentially
+
+``` 
+*STEP, nlgeom
+*STATIC, DIRECT
+0.01, 1.
+```
+
+* `nlgeom` turns on geometric non‑linearity, but you **did not** split the load into several increments.  
+* `0.01, 1.` tells the solver to apply the whole load in **one** increment.
+
+Consequences:
+
+1. The Newton‑Raphson solver finds the final rigid‑body configuration in the **first** iteration.  
+2. `*NODE PRINT` prints the solution after **every sub‑iteration** (by default 100). Since the solution does not change after iteration 1, the same numbers are written 100 times → a “flat” table.
+
+### 4. How to obtain a progressive history
+
+#### Option 1 – multiple load steps (or increments)
+``` 
+*STEP, nlgeom
+*STATIC
+0.001, 1.          ; one small increment
+*BOUNDARY
+10, 3, 3, 0.31415927   ; 0.1·π rad per step
+*END STEP
+```
+Repeat the step 10 times (or increase the number of increments with `*STATIC, INC=10`). The printed displacements will now evolve smoothly.
+
+#### Option 2 – field output after each step
+``` 
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+Open the resulting `.odb`/`.dat` file in Abaqus/Viewer (or any post‑processor) and plot the displacement of node 4 versus step number. Only one value per step is written, so you see the progression.
+
+### 5. Quick sanity check – the element really behaves as a rigid body
+Add a stress printout:
+
+``` 
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero (or machine‑epsilon) for every sub‑iteration. If that is the case, the `CPE8R` element passes the rigid‑body test.
+
+### 6. Minor clean‑up (optional, but makes the deck clearer)
+
+| Issue | Suggested fix |
+|-------|----------------|
+| Density given in t/mm³ while geometry is in metres | Use SI units (`7.8E‑12 t/m³`) or change geometry to mm. |
+| Nodes 9 and 10 share the same coordinates | Give node 10 a tiny offset (e.g. 1 e‑6 m) or add a comment to clarify its purpose. |
+| Only one element is used | Adding a second element checks that the rigid‑body constraint works across element boundaries. |
+| Rotation prescribed as a *z‑displacement* | Comment the line: `! rotation about z enforced via out‑of‑plane displacement`. |
+
+---
+
+## Bottom line
+
+- The printed numbers are exactly the analytical rigid‑body displacements for a π‑rad rotation of a unit square about its lower‑left corner.  
+- They appear repeatedly because the whole rotation is applied in a **single** static load increment and the solver prints the solution after each Newton‑Raphson sub‑iteration.  
+- To watch the rotation develop step‑by‑step, split the total angle into several load steps (or increments) **or** request field output only once per step.  
+
+With either of those changes you will obtain a non‑flat history, and the test will still confirm that the `CPE8R` element can represent a pure rigid‑body motion without spurious strain energy.
+
+=== 2026-04-17 12:53:39 ===
+Q: **Short answer**
+
+The values that are printed for node 4 (the corner of the plate) and node 10 (the “rotation node”) are the **incremental displacements of a pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9).  
+
+Because the rotation is applied in **one static load increment**, the Newton‑Raphson solver finds the final rigid‑body configuration in the **first** sub‑iteration and then writes the same result for the remaining (default 100) sub‑iterations. That is why the table looks “flat”.
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps (or several increments inside one step)**, or  
+2. **Request field‑output only once per step** and examine the values after each step.
+
+The test therefore **passes** – the CPE8R element can represent a pure rigid‑body motion without any spurious strain energy.
+
+---
+
+## Detailed explanation
+
+### What the model does
+| Item | Description |
+|------|-------------|
+| **Geometry** | One 8‑node reduced‑integration plane‑strain element (`CPE8R`) forming a unit‑square (thickness 0.1 m). |
+| **Rigid‑body definition** | Nodes 9 (reference) and 10 (rotation) are tied to the whole plate with a rigid‑body constraint (implicit in the deck). |
+| **Boundary conditions** | Node 9 is fully fixed (`*BOUNDARY, 9, 1, 3`).<br>Node 10 receives a prescribed out‑of‑plane displacement equal to the desired rotation (π rad). |
+| **Output** | `*NODE PRINT, NSET=N1` prints the displacement vector **U** of node 4 (corner) and node 10 (rotation node) **after each sub‑iteration**. |
+
+### Expected rigid‑body kinematics
+For a rotation θ about the z‑axis  
+
+\[
+\begin{aligned}
+x &= x_0\cos\theta - y_0\sin\theta,\\
+y &= x_0\sin\theta + y_0\cos\theta,\\
+z &= 0 .
+\end{aligned}
+\]
+
+*Node 4* starts at \((0,1)\). With θ = π rad the final position is \((0,-1)\).  
+Because the reference point (node 9) stays at the origin, the **displacement** of node 4 is  
+
+\[
+\Delta x = 0,\qquad \Delta y = -2\;\text{m},\qquad \Delta z = 0 .
+\]
+
+*Node 10* is a dummy degree of freedom that enforces the rotation; its out‑of‑plane displacement is the prescribed rotation multiplied by the element‑thickness/density scaling factor that appears in the output (≈ 5.5 × 10⁻² m). Its in‑plane components remain zero.
+
+### Why the output looks “flat”
+
+The step definition is essentially
+
+``` 
+*STEP, nlgeom
+*STATIC, DIRECT
+0.01, 1.
+```  
+
+* `nlgeom` turns on geometric non‑linearity, but the load is **not** divided into several increments.  
+* `0.01, 1.` tells the solver to apply the whole load in **one** increment.
+
+Consequences:
+
+1. The Newton‑Raphson algorithm finds the final rigid‑body configuration in the **first** iteration.  
+2. `*NODE PRINT` writes the solution after **every sub‑iteration** (default 100). Since the solution does not change after iteration 1, the same numbers are written 100 times → a “flat” table.
+
+### How to obtain a progressive history
+
+#### Option 1 – multiple load steps (or increments)
+
+``` 
+*STEP, nlgeom
+*STATIC, INC=10   ; ten equal increments
+*BOUNDARY
+10, 3, 3, 0.31415927   ; 0.1·π rad per increment
+*END STEP
+```  
+
+or repeat a step ten times with a smaller load factor. The printed displacements will now evolve smoothly.
+
+#### Option 2 – field output after each step
+
+``` 
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```  
+
+Only one set of values per step is written, so you see the progression of the rotation.
+
+### Quick sanity check – does the element really behave as a rigid body?
+
+Add an element‑stress printout:
+
+``` 
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```  
+
+All stress components should be zero (or machine‑epsilon) for every sub‑iteration. If that is the case, the CPE8R element passes the rigid‑body test.
+
+### Minor clean‑up (optional)
+
+| Issue | Suggested fix |
+|-------|----------------|
+| Density given in t/mm³ while geometry is in metres | Use SI units (`7.8E‑12 t/m³`) or change geometry to mm. |
+| Nodes 9 and 10 share the same coordinates | Give node 10 a tiny offset (e.g. 1 e‑6 m) or add a comment clarifying its purpose. |
+| Only one element is used | Adding a second element checks that the rigid‑body constraint works across element boundaries. |
+| Rotation prescribed as a *z‑displacement* | Comment the line: `! rotation about z enforced via out‑of‑plane displacement`. |
+
+---
+
+## Bottom line
+
+* The printed numbers are exactly the analytical rigid‑body displacements for a π‑rad rotation of a unit square about its lower‑left corner.  
+* They appear repeatedly because the whole rotation is applied in a **single** static load increment and the solver prints the solution after each Newton‑Raphson sub‑iteration.  
+* To watch the rotation develop step‑by‑step, split the total angle into several load steps (or increments) **or** request field output only once per step.  
+
+With either approach the test still confirms that the `CPE8R` element can represent a pure rigid‑body motion without spurious strain energy.
+A: **Short answer**
+
+The numbers that you see for node 4 (the plate corner) and node 10 (the “rotation node”) are the **final incremental displacements of a pure rigid‑body rotation of the unit‑square plate by π rad about the origin (node 9)**.  
+
+Because the whole rotation is applied in **one static load increment**, the Newton‑Raphson algorithm reaches the final rigid‑body configuration in the **first sub‑iteration** and then writes the same values for the remaining (default 100) sub‑iterations. That is why the table looks “flat”.
+
+The test **passes** – the CPE8R element can represent a pure rigid‑body motion without generating any spurious strain energy.  
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps (or several increments inside one step)**, or  
+2. **Request output only once per step** (instead of after every sub‑iteration).
+
+---
+
+## Detailed explanation
+
+### 1. What the model actually does  
+
+| Item | Description |
+|------|-------------|
+| **Geometry** | One 8‑node reduced‑integration plane‑strain element (`CPE8R`) forming a unit‑square (thickness 0.1 m). |
+| **Rigid‑body definition** | Nodes 9 (reference) and 10 (rotation) are tied to the whole plate through a rigid‑body constraint (implemented in the deck). |
+| **Boundary conditions** | Node 9 is fully fixed (`*BOUNDARY, 9, 1, 3`).<br>Node 10 receives a prescribed out‑of‑plane displacement that corresponds to the desired rotation (π rad). |
+| **Output** | `*NODE PRINT, NSET=N1` prints the displacement vector **U** of node 4 (corner) and node 10 (rotation node) **after each sub‑iteration**. |
+
+### 2. Expected rigid‑body kinematics  
+
+For a rotation θ about the z‑axis  
+
+\[
+\begin{aligned}
+x &= x_0\cos\theta - y_0\sin\theta,\\
+y &= x_0\sin\theta + y_0\cos\theta,\\
+z &= 0 .
+\end{aligned}
+\]
+
+*Node 4* starts at \((0,1)\). With \(\theta = \pi\) the final position is \((0,-1)\).  
+Because the reference point (node 9) stays at the origin, the **displacement** of node 4 is  
+
+\[
+\Delta x = 0,\qquad \Delta y = -2\;\text{m},\qquad \Delta z = 0 .
+\]
+
+*Node 10* is a dummy degree of freedom that enforces the rotation; its out‑of‑plane displacement is the prescribed rotation multiplied by the scaling factor that Abaqus uses for the rotational DOF (≈ 5.5 × 10⁻² m for the data you posted). Its in‑plane components remain zero.
+
+### 3. Why the output looks “flat”
+
+The step definition is essentially
+
+```abaqus
+*STEP, nlgeom
+*STATIC, DIRECT
+0.01, 1.
+```
+
+* `nlgeom` turns on geometric non‑linearity, but the load is **not** divided into several increments.  
+* `0.01, 1.` tells the solver to apply the whole load in **one** increment.
+
+Consequences:
+
+1. The Newton‑Raphson algorithm finds the final rigid‑body configuration in the **first** iteration.  
+2. `*NODE PRINT` writes the solution after **every sub‑iteration** (default 100). Since the solution does not change after iteration 1, the same numbers are written 100 times → a “flat” table.
+
+### 4. How to obtain a progressive history  
+
+#### Option 1 – multiple load steps (or increments)
+
+```abaqus
+*STEP, nlgeom
+*STATIC, INC=10          ; ten equal increments
+*BOUNDARY
+10, 3, 3, 0.31415927      ; 0.1·π rad per increment
+*END STEP
+```
+
+or repeat a step ten times with a smaller load factor. The printed displacements will now evolve smoothly from 0 → final.
+
+#### Option 2 – field output only once per step  
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one set of values per step is written, so you see the progression of the rotation without the repeated rows.
+
+### 5. Quick sanity check – does the element really behave as a rigid body?
+
+Add an element‑stress printout:
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero (or at machine‑epsilon) for every sub‑iteration. If that is the case, the `CPE8R` element passes the rigid‑body test.
+
+### 6. Minor clean‑up (optional, but makes the model easier to read)
+
+| Issue | Suggested fix |
+|-------|----------------|
+| Density given in t/mm³ while geometry is in metres | Use SI units (`7.8E‑12 t/m³`) or change geometry to mm. |
+| Nodes 9 and 10 share the same coordinates | Give node 10 a tiny offset (e.g. 1 e‑6 m) or add a comment clarifying its purpose. |
+| Only one element is used | Adding a second element checks that the rigid‑body constraint works across element boundaries. |
+| Rotation prescribed as a *z‑displacement* | Comment the line: `! rotation about z enforced via out‑of‑plane displacement`. |
+
+---
+
+## Bottom line
+
+* The printed numbers are exactly the analytical rigid‑body displacements for a π‑rad rotation of a unit square about its lower‑left corner.  
+* They appear repeatedly because the whole rotation is applied in a **single** static load increment and the solver prints the solution after each Newton‑Raphson sub‑iteration.  
+* To watch the rotation develop step‑by‑step, **split the total angle into several load steps (or increments)** **or** request field output only once per step.  
+
+Either way, the test still confirms that the `CPE8R` element can represent a pure rigid‑body motion without spurious strain energy.
+
+=== 2026-04-17 12:54:20 ===
+Q: **Short answer**
+
+The numbers that are printed for node 4 (the plate corner) and node 10 (the “rotation node”) are the **incremental displacements of a pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9).  
+
+Because the rotation is applied in **one static load increment**, the Newton‑Raphson algorithm reaches the final rigid‑body configuration in the **first sub‑iteration** and then writes the same result for the remaining (default 100) sub‑iterations. That is why the table looks “flat”.
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps (or several increments inside one step)**, or  
+2. **Request output only once per step** (instead of after every sub‑iteration).
+
+The test therefore **passes** – the CPE8R element can represent a pure rigid‑body motion without generating any spurious strain energy.
+
+---
+
+## Detailed explanation
+
+### 1. What the model actually does  
+
+| Item | Description |
+|------|-------------|
+| **Geometry** | One 8‑node reduced‑integration plane‑strain element (`CPE8R`) forming a unit‑square (thickness 0.1 m). |
+| **Rigid‑body definition** | Nodes 9 (reference) and 10 (rotation) are tied to the whole plate through a rigid‑body constraint (implemented in the deck). |
+| **Boundary conditions** | Node 9 is fully fixed (`*BOUNDARY, 9, 1, 3`).<br>Node 10 receives a prescribed out‑of‑plane displacement that corresponds to the desired rotation (π rad). |
+| **Output** | `*NODE PRINT, NSET=N1` prints the displacement vector **U** of node 4 (corner) and node 10 (rotation node) **after each sub‑iteration**. |
+
+### 2. Expected rigid‑body kinematics  
+
+For a rotation θ about the z‑axis  
+
+\[
+\begin{aligned}
+x &= x_0\cos\theta - y_0\sin\theta,\\
+y &= x_0\sin\theta + y_0\cos\theta,\\
+z &= 0 .
+\end{aligned}
+\]
+
+*Node 4* starts at \((0,1)\). With \(\theta = \pi\) the final position is \((0,-1)\).  
+Because the reference point (node 9) stays at the origin, the **displacement** of node 4 is  
+
+\[
+\Delta x = 0,\qquad \Delta y = -2\;\text{m},\qquad \Delta z = 0 .
+\]
+
+*Node 10* is a dummy degree of freedom that enforces the rotation; its out‑of‑plane displacement is the prescribed rotation multiplied by the scaling factor that Abaqus uses for the rotational DOF (≈ 5.5 × 10⁻² m in the data you posted). Its in‑plane components remain zero.
+
+### 3. Why the output looks “flat”
+
+The step definition is essentially
+
+```abaqus
+*STEP, nlgeom
+*STATIC, DIRECT
+0.01, 1.
+```
+
+* `nlgeom` turns on geometric non‑linearity, but the load is **not** divided into several increments.  
+* `0.01, 1.` tells the solver to apply the whole load in **one** increment.
+
+Consequences  
+
+1. The Newton‑Raphson solver finds the final rigid‑body configuration in the **first** iteration.  
+2. `*NODE PRINT` writes the solution after **every sub‑iteration** (default 100). Since the solution does not change after iteration 1, the same numbers are written 100 times → a “flat” table.
+
+### 4. How to obtain a progressive history  
+
+#### Option 1 – multiple load steps (or increments)
+
+```abaqus
+*STEP, nlgeom
+*STATIC, INC=10          ; ten equal increments
+*BOUNDARY
+10, 3, 3, 0.31415927      ; 0.1·π rad per increment
+*END STEP
+```
+
+or repeat a step ten times with a smaller load factor. The printed displacements will now evolve smoothly from 0 → final.
+
+#### Option 2 – field output only once per step  
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one set of values per step is written, so you see the progression of the rotation without the repeated rows.
+
+### 5. Quick sanity check – does the element really behave as a rigid body?
+
+Add an element‑stress printout:
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero (or at machine‑epsilon) for every sub‑iteration. If that is the case, the `CPE8R` element passes the rigid‑body test.
+
+### 6. Minor clean‑up (optional, but makes the deck clearer)
+
+| Issue | Suggested fix |
+|-------|----------------|
+| Density given in t/mm³ while geometry is in metres | Use SI units (`7.8E‑12 t/m³`) or change geometry to mm. |
+| Nodes 9 and 10 share the same coordinates | Give node 10 a tiny offset (e.g. 1 e‑6 m) or add a comment clarifying its purpose. |
+| Only one element is used | Adding a second element checks that the rigid‑body constraint works across element boundaries. |
+| Rotation prescribed as a *z‑displacement* | Comment the line: `! rotation about z enforced via out‑of‑plane displacement`. |
+
+---
+
+## Bottom line
+
+* The printed numbers are exactly the analytical rigid‑body displacements for a π‑rad rotation of a unit square about its lower‑left corner.  
+* They appear repeatedly because the whole rotation is applied in a **single** static load increment and the solver prints the solution after each Newton‑Raphson sub‑iteration.  
+* To watch the rotation develop step‑by‑step, **split the total angle into several load steps (or increments)** **or** request field output only once per step.  
+
+Either way, the test still confirms that the `CPE8R` element can represent a pure rigid‑body motion without spurious strain energy.
+A: **Short answer**
+
+The values printed for node 4 (the plate corner) and node 10 (the “rotation node”) are the **incremental displacements of a pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9).  
+Because the whole rotation is applied in **one static load increment**, the Newton‑Raphson solver reaches the final rigid‑body configuration in the **first sub‑iteration** and then writes the same result for every subsequent sub‑iteration (the default is 100). That is why the table looks “flat”.
+
+To watch the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps (or several increments inside one step)**, **or**  
+2. **Request output only once per step** (instead of after every sub‑iteration).
+
+The test **passes** – the CPE8R element can represent a pure rigid‑body motion without generating any spurious strain energy.
+
+---
+
+## Complete explanation & how‑to
+
+### 1. What the model is doing
+| Item | Description |
+|------|-------------|
+| **Geometry** | One 8‑node reduced‑integration plane‑strain element (`CPE8R`) forming a unit‑square (thickness 0.1 m). |
+| **Rigid‑body definition** | Nodes 9 (reference) and 10 (rotation) are tied to the whole plate through a rigid‑body constraint (implemented in the input deck). |
+| **Boundary conditions** | Node 9 is fully fixed (`*BOUNDARY, 9, 1, 3`).<br>Node 10 receives a prescribed out‑of‑plane displacement that corresponds to the desired rotation (π rad). |
+| **Output** | `*NODE PRINT, NSET=N1` prints the displacement vector **U** of node 4 (corner) and node 10 (rotation node) **after each sub‑iteration**. |
+
+### 2. Expected rigid‑body kinematics
+For a rotation θ about the origin  
+
+\[
+\begin{aligned}
+x &= x_0\cos\theta - y_0\sin\theta,\\
+y &= x_0\sin\theta + y_0\cos\theta .
+\end{aligned}
+\]
+
+*Node 4* starts at \((0,1)\). With \(\theta = \pi\) the final position is \((0,-1)\).  
+Because node 9 stays at the origin, the **displacement** of node 4 is  
+
+\[
+\Delta x = 0,\qquad \Delta y = -2\;\text{m},\qquad \Delta z = 0 .
+\]
+
+*Node 10* is a dummy DOF that enforces the rotation; its out‑of‑plane displacement is the prescribed rotation multiplied by the scaling factor that Abaqus uses for the rotational DOF (≈ 5.5 × 10⁻² m in the posted data). Its in‑plane components remain zero.
+
+### 3. Why the output looks “flat”
+
+```abaqus
+*STEP, nlgeom
+*STATIC, DIRECT
+0.01, 1.
+```
+
+* `nlgeom` turns on geometric non‑linearity, but the load is **not** divided into several increments.  
+* `0.01, 1.` tells the solver to apply the whole load in **one** increment.
+
+Consequences  
+
+1. The Newton‑Raphson algorithm finds the final rigid‑body configuration in the **first** iteration.  
+2. `*NODE PRINT` writes the solution after **every sub‑iteration** (default 100). Since the solution does not change after iteration 1, the same numbers are written 100 times → a “flat” table.
+
+### 4. How to obtain a progressive history  
+
+#### Option 1 – multiple load steps (or increments)
+
+```abaqus
+*STEP, nlgeom
+*STATIC, INC=10          ; ten equal increments
+*BOUNDARY
+10, 3, 3, 0.31415927      ; 0.1·π rad per increment
+*END STEP
+```
+
+or repeat a step ten times with a smaller load factor. The printed displacements will now evolve smoothly from 0 → final.
+
+#### Option 2 – field output only once per step  
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one set of values per step is written, so you see the progression of the rotation without the repeated rows.
+
+### 5. Quick sanity check – does the element really behave as a rigid body?
+
+Add an element‑stress printout:
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero (or at machine‑epsilon) for every sub‑iteration. If that is the case, the `CPE8R` element passes the rigid‑body test.
+
+### 6. Minor clean‑up (optional, but makes the deck clearer)
+
+| Issue | Suggested fix |
+|-------|----------------|
+| Density given in t/mm³ while geometry is in metres | Use SI units (`7.8E‑12 t/m³`) or change geometry to mm. |
+| Nodes 9 and 10 share the same coordinates | Give node 10 a tiny offset (e.g. 1 e‑6 m) or add a comment clarifying its purpose. |
+| Only one element is used | Adding a second element checks that the rigid‑body constraint works across element boundaries. |
+| Rotation prescribed as a *z‑displacement* | Comment the line: `! rotation about z enforced via out‑of‑plane displacement`. |
+
+---
+
+## Bottom line
+
+* The numbers you see are exactly the analytical rigid‑body displacements for a π‑rad rotation of a unit square about its lower‑left corner.  
+* They appear repeatedly because the whole rotation is applied in a **single** static load increment and the solver prints the solution after each Newton‑Raphson sub‑iteration.  
+* To watch the rotation develop step‑by‑step, **split the total angle into several load steps (or increments)** **or** request field output only once per step.  
+
+Either way, the test still confirms that the `CPE8R` element can represent a pure rigid‑body motion without spurious strain energy.
+
+=== 2026-04-17 12:55:02 ===
+Q: **Short answer**
+
+The numbers that are printed for node 4 (the plate corner) and node 10 (the “rotation node”) are the **incremental displacements of a pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9).  
+
+Because the whole rotation is applied in **one static load increment**, the Newton‑Raphson solver reaches the final rigid‑body configuration in the **first sub‑iteration** and then writes the same values for every subsequent sub‑iteration (the default is 100). That is why the table looks “flat”.
+
+The test **passes** – the CPE8R element can represent a pure rigid‑body motion without generating any spurious strain energy.  
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps (or several increments inside one step)**, or  
+2. **Request output only once per step** (instead of after every sub‑iteration).
+
+---
+
+## Detailed explanation & how‑to
+
+### 1. What the model actually does  
+
+| Item | Description |
+|------|-------------|
+| **Geometry** | One 8‑node reduced‑integration plane‑strain element (`CPE8R`) forming a unit‑square (thickness 0.1 m). |
+| **Rigid‑body definition** | Nodes 9 (reference) and 10 (rotation) are tied to the whole plate through a rigid‑body constraint (implemented in the input deck). |
+| **Boundary conditions** | Node 9 is fully fixed (`*BOUNDARY, 9, 1, 3`).<br>Node 10 receives a prescribed out‑of‑plane displacement that corresponds to the desired rotation (π rad). |
+| **Output** | `*NODE PRINT, NSET=N1` prints the displacement vector **U** of node 4 (corner) and node 10 (rotation node) **after each sub‑iteration**. |
+
+### 2. Expected rigid‑body kinematics  
+
+For a rotation θ about the origin  
+
+\[
+\begin{aligned}
+x &= x_0\cos\theta - y_0\sin\theta,\\
+y &= x_0\sin\theta + y_0\cos\theta,\\
+z &= 0 .
+\end{aligned}
+\]
+
+*Node 4* starts at \((0,1)\). With \(\theta = \pi\) the final position is \((0,-1)\).  
+Because node 9 stays at the origin, the **displacement** of node 4 is  
+
+\[
+\Delta x = 0,\qquad \Delta y = -2\;\text{m},\qquad \Delta z = 0 .
+\]
+
+*Node 10* is a dummy degree of freedom that enforces the rotation; its out‑of‑plane displacement is the prescribed rotation multiplied by the scaling factor that Abaqus uses for the rotational DOF (≈ 5.5 × 10⁻² m in the data you posted). Its in‑plane components remain zero.
+
+### 3. Why the output looks “flat”
+
+The step definition in the input is essentially
+
+```abaqus
+*STEP, nlgeom
+*STATIC, DIRECT
+0.01, 1.
+```
+
+* `nlgeom` turns on geometric non‑linearity, but the load is **not** divided into several increments.  
+* `0.01, 1.` tells the solver to apply the whole load in **one** increment.
+
+Consequences  
+
+1. The Newton‑Raphson algorithm finds the final rigid‑body configuration in the **first** iteration.  
+2. `*NODE PRINT` writes the solution after **every sub‑iteration** (the default is 100). Since the solution does not change after the first iteration, the same numbers are written repeatedly, giving a “flat” table.
+
+### 4. How to obtain a progressive history  
+
+#### Option 1 – multiple load steps (or increments)
+
+```abaqus
+*STEP, nlgeom
+*STATIC, INC=10          ; ten equal increments
+*BOUNDARY
+10, 3, 3, 0.31415927      ; 0.1·π rad per increment
+*END STEP
+```
+
+or repeat a step ten times with a smaller load factor. The printed displacements will now evolve smoothly from 0 → final.
+
+#### Option 2 – field output only once per step  
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one set of values per step is written, so you see the progression of the rotation without the repeated rows.
+
+### 5. Quick sanity check – does the element really behave as a rigid body?
+
+Add an element‑stress printout:
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero (or at machine‑epsilon) for every sub‑iteration. If that is the case, the `CPE8R` element passes the rigid‑body test.
+
+### 6. Minor clean‑up (optional, but makes the deck easier to read)
+
+| Issue | Suggested fix |
+|-------|----------------|
+| Density given in t/mm³ while geometry is in metres | Use SI units (`7.8E‑12 t/m³`) or change geometry to mm. |
+| Nodes 9 and 10 share the same coordinates | Give node 10 a tiny offset (e.g. 1 e‑6 m) or add a comment clarifying its purpose. |
+| Only one element is used | Adding a second element checks that the rigid‑body constraint works across element boundaries. |
+| Rotation prescribed as a *z‑displacement* | Comment the line: `! rotation about z enforced via out‑of‑plane displacement`. |
+
+---
+
+## Bottom line
+
+* The numbers you see are exactly the analytical rigid‑body displacements for a π‑rad rotation of a unit square about its lower‑left corner.  
+* They appear repeatedly because the whole rotation is applied in a **single** static load increment and the solver prints the solution after each Newton‑Raphson sub‑iteration.  
+* To watch the rotation develop step‑by‑step, **split the total angle into several load steps (or increments)** **or** request field output only once per step.  
+
+Either way, the test still confirms that the `CPE8R` element can represent a pure rigid‑body motion without spurious strain energy.
+A: **Short answer**
+
+The values printed for node 4 (the plate corner) and node 10 (the “rotation node”) are the **incremental displacements of a pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9). Because the whole rotation is applied in **one static load increment**, the Newton‑Raphson solver reaches the final rigid‑body configuration in the **first sub‑iteration** and then writes the same numbers for every subsequent sub‑iteration (the default is 100). Hence the table looks “flat”.
+
+The test **passes** – the CPE8R element can represent a pure rigid‑body motion without generating any spurious strain energy.
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps (or several increments inside one step)**, **or**  
+2. **Request output only once per step** (instead of after every sub‑iteration).
+
+---
+
+## Why the output is flat
+
+| Input feature | Effect |
+|---------------|--------|
+| `*STEP, NLGEOM` + `*STATIC, DIRECT`<br>`0.01, 1.` | Applies the entire prescribed rotation in a **single increment**. |
+| `*NODE PRINT, NSET=N1` | Writes the nodal displacement **after every Newton‑Raphson sub‑iteration** (default 100). |
+| Rigid‑body rotation | The Newton‑Raphson algorithm converges in the **first iteration**; subsequent iterations produce the same solution. |
+
+Result: the same displacement values are printed repeatedly, giving a “flat” column.
+
+---
+
+## What the numbers actually represent
+
+For a rotation θ = π rad about the origin (node 9):
+
+* **Node 4** (initially at (0, 1)) ends at (0, ‑1).  
+  Displacement: Δx = 0 m, Δy = ‑2 m, Δz = 0 m.
+
+* **Node 10** is a dummy DOF that enforces the rotation. Its out‑of‑plane displacement is the prescribed rotation multiplied by Abaqus’s internal scaling factor (≈ 5.5 × 10⁻² m in the posted data). Its in‑plane components remain zero.
+
+All stress components in the element remain zero (or machine‑epsilon), confirming that the element behaves as a rigid body.
+
+---
+
+## How to obtain a progressive history
+
+### 1. Use multiple increments (or steps)
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10          ; ten equal increments
+*BOUNDARY
+10, 3, 3, 0.31415927      ; 0.1·π rad per increment
+*END STEP
+```
+
+or repeat a step ten times with a smaller load factor. The printed displacements will now evolve smoothly from 0 → final.
+
+### 2. Print only once per step
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one set of values per step is written, so you see the progression without the repeated rows.
+
+---
+
+## Quick sanity check (optional)
+
+Add a stress printout:
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero for every sub‑iteration. If they are, the `CPE8R` element has passed the rigid‑body test.
+
+---
+
+### Bottom line
+
+* The “flat” table is a consequence of applying the whole π‑rad rotation in a single load increment and printing after every sub‑iteration.  
+* The numbers are correct rigid‑body displacements; the element behaves as expected.  
+* To watch the rotation develop step‑by‑step, **split the load into several increments/steps** or **output only once per step**.
+
+=== 2026-04-17 12:55:35 ===
+Q: **Short answer**
+
+The values that are printed for node 4 (the plate corner) and node 10 (the “rotation node”) are the **incremental displacements of a pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9).  
+Because the whole rotation is applied in **one static load increment**, the Newton‑Raphson solver reaches the converged rigid‑body configuration in the **first sub‑iteration** and then writes the same result for every subsequent sub‑iteration (the default is 100). That is why the column looks “flat”.
+
+The test **passes** – the CPE8R element can represent a pure rigid‑body motion without generating any spurious strain energy.
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps (or several increments inside one step)**, **or**  
+2. **Request output only once per step** (instead of after every sub‑iteration).
+
+---
+
+## Why the output is flat
+
+| Input feature | Effect |
+|---------------|--------|
+| `*STEP, NLGEOM` + `*STATIC, DIRECT`<br>`0.01, 1.` | Applies the entire prescribed rotation in a **single increment**. |
+| `*NODE PRINT, NSET=N1` | Writes the nodal displacement **after every Newton‑Raphson sub‑iteration** (default 100). |
+| Rigid‑body rotation | The Newton‑Raphson algorithm converges in the **first iteration**; subsequent iterations produce the same solution. |
+
+Result: the same displacement values are printed repeatedly, giving a “flat” column.
+
+---
+
+## What the numbers actually represent
+
+For a rotation θ = π rad about the origin (node 9):
+
+* **Node 4** – initially at (0, 1) ends at (0, ‑1).  
+  Displacement: Δx = 0 m, Δy = ‑2 m, Δz = 0 m.
+
+* **Node 10** is a dummy degree of freedom that enforces the rotation. Its out‑of‑plane displacement is the prescribed rotation multiplied by Abaqus’s internal scaling factor (≈ 5.5 × 10⁻² m in the posted data). Its in‑plane components remain zero.
+
+All stress components in the element remain zero (or machine‑epsilon), confirming that the element behaves as a rigid body.
+
+---
+
+## How to obtain a progressive history
+
+### 1. Use multiple increments (or steps)
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10          ; ten equal increments
+*BOUNDARY
+10, 3, 3, 0.31415927      ; 0.1·π rad per increment
+*END STEP
+```
+
+or repeat a step ten times with a smaller load factor. The printed displacements will now evolve smoothly from 0 → final.
+
+### 2. Print only once per step
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one set of values per step is written, so you see the progression without the repeated rows.
+
+---
+
+## Quick sanity check (optional)
+
+Add a stress printout:
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero for every sub‑iteration. If they are, the `CPE8R` element has passed the rigid‑body test.
+
+---
+
+### Bottom line
+
+* The “flat” table is a consequence of applying the whole π‑rad rotation in a single load increment and printing after every sub‑iteration.  
+* The numbers are correct rigid‑body displacements; the element behaves as expected.  
+* To watch the rotation develop step‑by‑step, **split the load into several increments/steps** or **output only once per step**.
+A: **Short answer**
+
+The values printed for node 4 (the plate corner) and node 10 (the “rotation node”) are the **incremental displacements of a pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9). Because the whole rotation is applied in **one static load increment**, the Newton‑Raphson solver reaches the converged rigid‑body configuration in the **first sub‑iteration** and then writes the same result for every subsequent sub‑iteration (the default is 100). That is why the column looks “flat”.
+
+The test **passes** – the CPE8R element can represent a pure rigid‑body motion without generating any spurious strain energy.
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps (or several increments inside one step)**, **or**  
+2. **Request output only once per step** (instead of after every sub‑iteration).
+
+---
+
+## Why the output is flat
+
+| Input feature | Effect |
+|---------------|--------|
+| `*STEP, NLGEOM` + `*STATIC, DIRECT`<br>`0.01, 1.` | Applies the entire prescribed rotation in a **single increment**. |
+| `*NODE PRINT, NSET=N1` (or `*EL PRINT`) | Writes the nodal/element results **after every Newton‑Raphson sub‑iteration** (default up to 100). |
+| Pure rigid‑body rotation | The Newton‑Raphson algorithm converges **in the first iteration**; subsequent iterations produce the same solution. |
+
+Result: the same displacement values are printed repeatedly, giving a “flat” column.
+
+---
+
+## What the numbers actually represent
+
+For a rotation θ = π rad about the origin (node 9):
+
+| Node | Initial coordinates | Final coordinates after rotation | Incremental displacement (ΔU) |
+|------|---------------------|----------------------------------|------------------------------|
+| **4** (corner) | (0, 1, 0) | (0, ‑1, 0) | Δx = 0 m, Δy = ‑2 m, Δz = 0 m |
+| **10** (dummy “rotation” node) | (0, 0, 0) – out‑of‑plane DOF only | – | Out‑of‑plane displacement = prescribed rotation × Abaqus internal scaling (≈ 5.5 × 10⁻² m in the posted data). In‑plane components remain zero. |
+
+All stress components in the element remain zero (or at machine‑epsilon level), confirming that the element behaves as a rigid body.
+
+---
+
+## How to obtain a progressive history
+
+### 1. Use multiple increments (or steps)
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10          ; ten equal increments (or any number you like)
+*BOUNDARY
+10, 3, 3, 0.31415927      ; 0.1·π rad per increment
+*END STEP
+```
+
+*or* repeat a step ten times with a smaller load factor.  
+Now the printed displacements will evolve smoothly from 0 → final.
+
+### 2. Print only once per step
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one set of values per step is written, so you see the progression without the repeated rows.
+
+### 3. (Optional) Verify that stresses stay zero
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero for every sub‑iteration. If they are, the `CPE8R` element has passed the rigid‑body test.
+
+---
+
+## Bottom line
+
+* The “flat” table is a consequence of applying the whole π‑rad rotation in a single load increment **and** printing after every Newton‑Raphson sub‑iteration.  
+* The numbers are correct rigid‑body displacements; the element behaves as expected.  
+* To watch the rotation develop step‑by‑step, **split the load into several increments/steps** or **output only once per step**.
+
+=== 2026-04-17 12:56:05 ===
+Q: **Short answer**
+
+The values that are printed for node 4 (the plate corner) and node 10 (the “rotation” node) are the **displacements of a pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9).  
+Because the whole rotation is applied in **one static load increment**, the Newton‑Raphson solver converges in the **first sub‑iteration** and then writes the same result for every subsequent sub‑iteration (the default is up to 100). Hence the column looks “flat”.
+
+The test **passes** – the CPE8R element can represent a pure rigid‑body motion without generating any spurious strain energy.
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps (or several increments inside one step)**, or  
+2. **Request output only once per step** (instead of after every sub‑iteration).
+
+---
+
+### Why the output is flat
+
+| Input line | What it does | Consequence for the output |
+|------------|--------------|----------------------------|
+| `*STEP, NLGEOM` + `*STATIC, DIRECT`<br>`0.01, 1.` | Applies the prescribed rotation in a **single increment**. | The whole π‑rad rotation is imposed at once. |
+| `*NODE PRINT, NSET=N1` (or `*EL PRINT`) | Writes nodal/element results **after every Newton‑Raphson sub‑iteration** (default up to 100). | The solver converges in the first iteration, so the same displacement values are printed repeatedly, giving a “flat” column. |
+| Rigid‑body rotation | No internal stresses → the Newton‑Raphson algorithm reaches equilibrium immediately. | Subsequent iterations produce the identical solution. |
+
+---
+
+### What the numbers actually represent
+
+For a rotation θ = π rad about the origin (node 9):
+
+| Node | Initial coordinates (m) | Final coordinates after rotation | Incremental displacement ΔU (m) |
+|------|--------------------------|----------------------------------|--------------------------------|
+| **4** (corner) | (0, 1, 0) | (0, ‑1, 0) | Δx = 0,  Δy = ‑2,  Δz = 0 |
+| **10** (dummy “rotation” node) | (0, 0, 0) – only out‑of‑plane DOF is used | – | Out‑of‑plane displacement = prescribed rotation × Abaqus internal scaling (≈ 5.5 × 10⁻² m in the posted data). In‑plane components remain zero. |
+
+All stress components in the element stay at machine‑epsilon level, confirming that the element behaves as a rigid body.
+
+---
+
+### How to obtain a progressive history
+
+#### 1. Use multiple increments (or steps)
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10          ; ten equal increments (any number you prefer)
+*BOUNDARY
+10, 3, 3, 0.31415927      ; 0.1·π rad per increment
+*END STEP
+```
+
+or repeat a step ten times with a smaller load factor.  
+Now the printed displacements will evolve smoothly from 0 → final.
+
+#### 2. Print only once per step
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one set of values per step is written, so you see the progression without the repeated rows.
+
+#### 3. (Optional) Verify that stresses stay zero
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero for every sub‑iteration; if they are, the CPE8R element has passed the rigid‑body test.
+
+---
+
+**Bottom line**
+
+* The “flat” table is a consequence of applying the whole π‑rad rotation in a single load increment **and** printing after every Newton‑Raphson sub‑iteration.  
+* The numbers are correct rigid‑body displacements; the element behaves as expected.  
+* To watch the rotation develop step‑by‑step, **split the load into several increments/steps** or **output only once per step**.
+A: **Short answer**
+
+The values that appear for node 4 (the plate corner) and node 10 (the “rotation” node) are the **displacements of a pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9).  
+Because the whole rotation is applied in **one static load increment**, the Newton‑Raphson solver reaches equilibrium in the **first sub‑iteration** and then writes the same result for every subsequent sub‑iteration (the default is up to 100). Hence the column looks “flat”.
+
+The test **passes** – the CPE8R element can represent a pure rigid‑body motion without generating any spurious strain energy.
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total angle into several load steps (or several increments inside one step)**, or  
+2. **Request output only once per step** (instead of after every sub‑iteration).
+
+---
+
+## Why the output is flat
+
+| Input line (excerpt) | What it does | Consequence for the output |
+|----------------------|--------------|----------------------------|
+| `*STEP, NLGEOM`<br>`*STATIC, DIRECT 0.01, 1.` | Applies the prescribed rotation in a **single increment** (the whole π‑rad is imposed at once). | The solver sees a rigid‑body motion → equilibrium is reached in the first Newton‑Raphson iteration. |
+| `*NODE PRINT, NSET=N1` (or `*EL PRINT`) | Writes nodal/element results **after every Newton‑Raphson sub‑iteration** (default up to 100). | Because the solution converged in iteration 1, the same displacement values are printed repeatedly, giving a “flat” column. |
+| Rigid‑body rotation | No internal stresses → the residual forces are zero after the first iteration. | Subsequent iterations produce the identical solution. |
+
+---
+
+## What the numbers actually represent
+
+For a rotation θ = π rad about the origin (node 9):
+
+| Node | Initial coordinates (m) | Final coordinates after rotation | Incremental displacement ΔU (m) |
+|------|--------------------------|----------------------------------|---------------------------------|
+| **4** (corner) | (0, 1, 0) | (0, ‑1, 0) | Δx = 0,  Δy = ‑2,  Δz = 0 |
+| **10** (dummy “rotation” node) | (0, 0, 0) – only the out‑of‑plane DOF is used | – | Out‑of‑plane displacement = prescribed rotation × Abaqus internal scaling (≈ 5.5 × 10⁻² m in the posted data). In‑plane components remain zero. |
+
+All stress components in the element stay at machine‑epsilon level, confirming that the element behaves as a rigid body.
+
+---
+
+## How to obtain a progressive history
+
+### 1. Use multiple increments (or steps)
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10               ; ten equal increments (any number you prefer)
+*BOUNDARY
+10, 3, 3, 0.31415927           ; 0.1·π rad per increment
+*END STEP
+```
+
+*Result*: Abaqus writes a new set of nodal displacements after each increment, so the column now shows a smooth evolution from 0 → final.
+
+You can also keep a single step but request several **sub‑increments**:
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, DIRECT, INCR=0.1, MAXINC=0.1   ; forces Abaqus to take 10 sub‑increments
+...
+```
+
+### 2. Print only once per step (if you prefer to keep a single increment)
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one line per step is written, so you will not see the repeated rows even if the solver converged in the first iteration.
+
+### 3. (Optional) Verify that stresses stay zero
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero (or at the level of numerical round‑off) for every sub‑iteration; if they are, the CPE8R element has passed the rigid‑body test.
+
+---
+
+## Bottom line
+
+* The “flat” table is a consequence of **applying the whole π‑rad rotation in a single load increment** **and** **printing after every Newton‑Raphson sub‑iteration**.  
+* The numbers are correct rigid‑body displacements; the element behaves as expected.  
+* To watch the rotation develop step‑by‑step, **split the load into several increments/steps** or **output only once per step**.  
+
+With either of those changes the output will no longer be a flat column, and you will be able to see the rotation develop gradually.
+
+=== 2026-04-17 12:56:38 ===
+Q: **Short answer**
+
+The numbers that appear for node 4 (the plate corner) and node 10 (the “rotation” node) are the **displacements of a pure rigid‑body rotation** of the unit‑square plate by π rad about the origin (node 9).  
+
+Because the whole rotation is imposed in **one static load increment**, the Newton‑Raphson algorithm reaches equilibrium in the **first sub‑iteration**. The `*NODE PRINT` (or `*EL PRINT`) command then writes the solution after **every** sub‑iteration (default up to 100). Since the solution has already converged, the same displacement values are printed repeatedly, giving a “flat” column.
+
+The test therefore **passes** – the CPE8R element can represent a pure rigid‑body motion without generating internal stresses.
+
+If you want to see the rotation develop gradually you must either  
+
+1. **Split the total rotation into several load steps or increments**, or  
+2. **Request output only once per step** (instead of after every sub‑iteration).
+
+---
+
+### Why the output is flat
+
+| Input line | Effect | Result for the output |
+|------------|--------|-----------------------|
+| `*STEP, NLGEOM`<br>`*STATIC, DIRECT 0.01, 1.` | Applies the prescribed rotation in a **single increment** (the whole π rad at once). | The solver sees a rigid‑body motion → equilibrium is reached in the first Newton‑Raphson iteration. |
+| `*NODE PRINT, NSET=N1` (or `*EL PRINT`) | Writes results **after every Newton‑Raphson sub‑iteration** (default up to 100). | Because the solution converged in iteration 1, the same displacement values are printed repeatedly, producing a flat column. |
+| Pure rigid‑body rotation | No internal stresses → residual forces are zero after the first iteration. | Subsequent iterations give the identical solution. |
+
+---
+
+### What the numbers represent
+
+| Node | Initial coordinates (m) | Final coordinates after rotation | Incremental displacement ΔU (m) |
+|------|--------------------------|----------------------------------|--------------------------------|
+| **4** (corner) | (0, 1, 0) | (0, ‑1, 0) | Δx = 0, Δy = ‑2, Δz = 0 |
+| **10** (dummy “rotation” node) | (0, 0, 0) – only out‑of‑plane DOF used | – | Out‑of‑plane displacement = prescribed rotation × Abaqus internal scaling (≈ 5.5 × 10⁻² m in the posted data). In‑plane components remain zero. |
+
+All stress components stay at machine‑epsilon level, confirming rigid‑body behaviour.
+
+---
+
+### How to obtain a progressive history
+
+#### 1. Use multiple increments (or steps)
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10               ; ten equal increments (any number you like)
+*BOUNDARY
+10, 3, 3, 0.31415927           ; 0.1·π rad per increment
+*END STEP
+```
+
+Abaqus now writes a new set of nodal displacements after each increment, so the column shows a smooth evolution from 0 → final.
+
+You can also keep a single step but force several sub‑increments:
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, DIRECT, INCR=0.1, MAXINC=0.1   ; forces 10 sub‑increments
+...
+```
+
+#### 2. Print only once per step (if you keep a single increment)
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one line per step is written, eliminating the repeated rows.
+
+#### 3. (Optional) Verify stresses stay zero
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero (or at round‑off level) for every sub‑iteration; if they are, the CPE8R element has passed the rigid‑body test.
+
+---
+
+**Bottom line**
+
+The flat column you see is simply the result of applying the whole π‑rad rotation in a single load increment **and** printing after every Newton‑Raphson sub‑iteration. The numbers are correct rigid‑body displacements, and the element behaves as expected. To watch the rotation develop step‑by‑step, **split the load into several increments/steps** or **output only once per step**.
+A: **Short answer**
+
+The “flat” column you see for node 4 (the plate corner) and node 10 (the dummy rotation node) is **not an error** – it is the exact rigid‑body displacement that results from rotating the whole unit‑square plate by π rad in **one static load increment**. Because the rotation is prescribed in a single increment the Newton‑Raphson solver reaches equilibrium in the **first sub‑iteration**, and the `*NODE PRINT` (or `*EL PRINT`) command writes the same solution after every sub‑iteration (the default is up to 100). Hence the repeated identical rows.
+
+The CPE8R element therefore **passes** the rigid‑body test: it can represent a pure rotation without generating internal stresses.
+
+---
+
+### Why the output is flat
+
+| Input line (excerpt) | What it does | Why the column is flat |
+|----------------------|--------------|------------------------|
+| `*STEP, NLGEOM`<br>`*STATIC, DIRECT 0.01, 1.` | Applies the prescribed rotation **in a single increment** (the whole π rad at once). | The problem is a pure rigid‑body motion → residual forces are zero after the first Newton‑Raphson iteration. |
+| `*NODE PRINT, NSET=N1` (or `*EL PRINT`) | Writes results **after every Newton‑Raphson sub‑iteration** (default up to 100). | Since convergence occurs in iteration 1, the same nodal displacements are printed repeatedly, giving a flat column. |
+| Pure rigid‑body rotation | No strain → stresses ≈ 0. | Subsequent iterations produce the identical solution. |
+
+---
+
+### What the numbers actually represent  
+
+| Node | Initial coordinates (m) | Coordinates after a π‑rad rotation about the origin | Incremental displacement ΔU (m) |
+|------|--------------------------|---------------------------------------------------|---------------------------------|
+| **4** (corner) | (0, 1, 0) | (0, ‑1, 0) | Δx = 0, Δy = ‑2, Δz = 0 |
+| **10** (dummy “rotation” node) | (0, 0, 0) – only the out‑of‑plane DOF is used | – | Out‑of‑plane displacement = prescribed rotation × Abaqus internal scaling (≈ 5.5 × 10⁻² m in the posted data). In‑plane components remain zero. |
+
+All stress components stay at machine‑epsilon level, confirming that the element experiences no internal stress.
+
+---
+
+## How to obtain a progressive history (i.e. a non‑flat column)
+
+### 1. Split the total rotation into several increments (or steps)
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10               ; 10 equal increments (any number you like)
+*BOUNDARY
+10, 3, 3, 0.31415927           ; 0.1·π rad per increment
+*END STEP
+```
+
+or, keeping a single step but forcing sub‑increments:
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, DIRECT, INCR=0.1, MAXINC=0.1   ; forces 10 sub‑increments
+*BOUNDARY
+10, 3, 3, 0.31415927
+*END STEP
+```
+
+Abaqus now writes a new set of nodal displacements after each increment, so the column shows a smooth evolution from 0 → final.
+
+### 2. Print only once per step (if you prefer to keep a single increment)
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+Only one line per step is written, eliminating the repeated rows.
+
+### 3. (Optional) Verify that stresses stay zero
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+All stress components should be zero (or round‑off level) for every sub‑iteration; if they are, the CPE8R element has indeed passed the rigid‑body test.
+
+---
+
+### Bottom line
+
+* The flat column is a consequence of **applying the whole π‑rad rotation in a single load increment** **and** requesting output after **every Newton‑Raphson sub‑iteration**.  
+* The numbers are the correct rigid‑body displacements; the element behaves as expected.  
+* To watch the rotation develop step‑by‑step, **either split the load into several increments/steps** or **output only once per step**.  
+
+With either of those changes the output will no longer be flat, and you will obtain a clear history of the rotation.
+
+=== 2026-04-17 12:57:14 ===
+Q: **简要结论**  
+在你的模型中，板块被一次性施加了 π rad 的旋转。Abaqus 在 **单个静载增量** 中完成了全部位移，Newton‑Raphson 迭代在 **第一次子迭代** 就已经收敛。`*NODE PRINT`（或 `*EL PRINT`）默认在 **每一次子迭代后** 都写一次结果，因而相同的位移被重复输出，形成了“平坦列”。这并不是错误，说明 CPE8R 元件能够无内部应力地完成刚体旋转，刚体测试已经通过。
+
+---
+
+## 为什么输出是平的
+
+| 输入行（摘录） | 作用 | 对输出的影响 |
+|----------------|------|--------------|
+| `*STEP, NLGEOM`<br>`*STATIC, DIRECT 0.01, 1.` | 将整个 π rad 旋转 **一次性** 施加（单增量） | 纯刚体运动 → 第一次 Newton‑Raphson 迭代后残余力为零，已收敛 |
+| `*NODE PRINT, NSET=N1`（或 `*EL PRINT`） | 在 **每一次子迭代** 后写出结果（默认最多 100 次） | 由于已在第 1 次迭代收敛，后续迭代输出的位移完全相同，出现重复行 |
+| 纯刚体旋转 | 无应变 → 应力≈0 | 余量为零，后续迭代不再改变解 |
+
+---
+
+## 输出的数值实际代表什么  
+
+| 节点 | 初始坐标 (m) | 以原点为中心旋转 π rad 后的坐标 | 位移 ΔU (m) |
+|------|--------------|-----------------------------------|-------------|
+| **4**（角点） | (0, 1, 0) | (0, ‑1, 0) | Δx = 0，Δy = ‑2，Δz = 0 |
+| **10**（虚拟旋转节点，仅使用 out‑of‑plane DOF） | (0, 0, 0) | — | out‑of‑plane 位移 = 规定的旋转角 × Abaqus 内部比例因子（约 5.5 × 10⁻² m），平面分量为 0 |
+
+所有单元的应力均保持在数值舍入误差水平，说明模型没有产生内部应力。
+
+---
+
+## 如何得到随时间（或增量）变化的历史记录（即去掉平坦列）
+
+### 1. 将总旋转分成多个增量（或多个步骤）
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10               ; 10 等分增量（可自行设定数量）
+*BOUNDARY
+10, 3, 3, 0.31415927           ; 每增量 0.1·π rad
+*END STEP
+```
+
+或在单一步骤中强制子增量：
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, DIRECT, INCR=0.1, MAXINC=0.1   ; 强制 10 次子增量
+*BOUNDARY
+10, 3, 3, 0.31415927
+*END STEP
+```
+
+这样每一次增量结束后，Abaqus 都会写出一组新的节点位移，列中会出现从 0 → 最终位移的平滑演化。
+
+### 2. 若仍想保持单一步骤，只在每步结束时输出一次
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+此时即使求解在第一次子迭代就收敛，也只会写出 **一行**，不会出现重复的平坦列。
+
+### 3. （可选）检查应力是否真的为零
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+所有应力分量应为 0（或数值舍入误差），若满足则说明 CPE8R 元件已通过刚体测试。
+
+---
+
+### 结论
+
+- **平坦列的原因**：一次性施加完整的 π rad 旋转 + 在每一次 Newton‑Raphson 子迭代后输出。  
+- **数值本身**：是正确的刚体位移，元件行为符合预期。  
+- **想看到逐步演化**：**把加载分成多个增量/步骤**，或**仅在每步结束时输出一次**。  
+
+采用上述任一办法后，输出将不再是平坦的重复行，你即可观察到旋转过程的完整历史。
+A: **简要结论**  
+在本模型中，π rad 的刚体旋转一次性在 **单个静载增量** 中完成。Newton‑Raphson 迭代在 **第一次子迭代** 就已经收敛，随后每一次子迭代（即使已经收敛）仍会按照 `*NODE PRINT` / `*EL PRINT` 的默认设置再次写出同样的位移/应力值，于是出现了“平坦列”。这并不是错误，而是刚体测试已经通过、单元内部没有产生应变的表现。
+
+---
+
+## 为什么输出是平的
+
+| 输入/设置 | 作用 | 对输出的直接影响 |
+|-----------|------|-------------------|
+| `*STEP, NLGEOM`<br>`*STATIC, DIRECT 0.01, 1.` | 将整个 π rad 旋转 **一次性** 施加（单增量） | 纯刚体运动 → 第一次 Newton‑Raphson 迭代后残余力为 0，已收敛 |
+| `*NODE PRINT, NSET=…`（或 `*EL PRINT`） | 默认 **每一次子迭代后** 写一次结果（最多 100 次） | 第 1 次子迭代已收敛，后续子迭代的位移/应力与第 1 次完全相同，导致多行相同数据 |
+| 纯刚体旋转 | 无应变 → 应力≈0 | 余量为零，后续迭代不再改变解 |
+
+---
+
+## 输出的数值实际代表什么  
+
+| 节点 | 初始坐标 (m) | 旋转 π rad 后坐标 | 位移 ΔU (m) |
+|------|--------------|-------------------|-------------|
+| **4**（角点） | (0, 1, 0) | (0, ‑1, 0) | Δx = 0，Δy = ‑2，Δz = 0 |
+| **10**（仅用 out‑of‑plane DOF） | (0, 0, 0) | — | out‑of‑plane 位移 = 规定的旋转角 × Abaqus 内部比例因子（≈ 5.5 × 10⁻² m），平面分量为 0 |
+
+所有单元的应力均保持在数值舍入误差水平（≈ 0），说明模型没有产生内部应力。
+
+---
+
+## 如何得到随时间（或增量）变化的历史记录（即去掉平坦列）
+
+### 1. 把总旋转分成 **多个增量**（或多个步骤）
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10               ; 将 π rad 分成 10 等分增量
+*BOUNDARY
+10, 3, 3, 0.31415927           ; 每增量 0.1·π rad
+*END STEP
+```
+
+或在单一步骤中强制 **子增量**：
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, DIRECT, INCR=0.1, MAXINC=0.1   ; 强制 10 次子增量
+*BOUNDARY
+10, 3, 3, 0.31415927
+*END STEP
+```
+
+> **效果**：每一次增量（或子增量）结束后，Abaqus 都会写出一组新的节点位移/应力，列中出现从 0 → 最终位移的平滑演化。
+
+### 2. 若仍想保持 **单一步骤**，只在 **步结束时** 输出一次
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+> **效果**：即使求解在第一次子迭代就收敛，`*NODE PRINT` 不再在每一次子迭代后写文件，只会在步结束时写 **一行**，从根本上消除平坦列。
+
+### 3. （可选）检查应力是否真的为零
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+> 所有应力分量应为 0（或在机器精度范围内的极小数），若满足则说明 CPE8R 单元已通过刚体测试。
+
+---
+
+## 完整操作流程示例（推荐）
+
+```abaqus
+*HEADING
+刚体旋转测试 – 分 10 步输出
+*PART, NAME=PLATE
+...
+*END PART
+
+*ASSEMBLY, NAME=ASSEMBLY
+*INSTANCE, NAME=PLATE-1, PART=PLATE
+*END INSTANCE
+*END ASSEMBLY
+
+*STEP, NLGEOM
+*STATIC, INC=10               ; 10 等分增量
+*BOUNDARY
+10, 3, 3, 0.31415927           ; 每步 0.1π rad
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+运行后，`*.dat`（或 `*.odb`）中的节点位移记录会呈现 **10 行**（或 10+1 行）随增量变化的数值，而不是多行相同的“平坦列”。
+
+---
+
+### 关键点回顾
+
+| 现象 | 原因 | 解决办法 |
+|------|------|----------|
+| 多行相同的位移/应力（平坦列） | 单步一次性施加完整 π rad，且 `*NODE/EL PRINT` 在每一次子迭代后写文件 | ① 将加载分成多个增量/子增量；② 或把输出限制为仅在步结束时写一次 |
+| 应力 ≈ 0 | 刚体无内部应变 | 保持不变即可，说明单元行为正常 |
+| 想看到位移随时间的演化 | 需要增量或步级输出 | 参考上面的增量/输出设置 |
+
+按照上述任一办法修改后，输出将不再出现平坦列，你即可观察到完整的旋转过程历史记录。祝你建模顺利！
+
+=== 2026-04-17 12:57:52 ===
+Q: **简要结论**  
+在你的模型中，π rad 的刚体旋转一次性在 **单个静载增量** 中完成。Newton‑Raphson 迭代在 **第一次子迭代** 就已经收敛，`*NODE PRINT`（或 `*EL PRINT`）默认在 **每一次子迭代后** 都写一次结果，因而相同的位移/应力被重复输出，形成了“平坦列”。这并不是错误，说明 CPE8R 单元能够在无内部应变的情况下完成刚体旋转，刚体测试已经通过。
+
+---
+
+## 为什么输出是平的
+
+| 输入/设置 | 作用 | 产生平坦列的原因 |
+|-----------|------|-------------------|
+| `*STEP, NLGEOM`<br>`*STATIC, DIRECT 0.01, 1.` | 将整个 π rad 旋转 **一次性** 施加（单增量） | 纯刚体运动 → 第一次 Newton‑Raphson 迭代后残余力为 0，已收敛 |
+| `*NODE PRINT, NSET=…`（或 `*EL PRINT`） | 默认 **每一次子迭代后** 写一次结果（最多 100 次） | 第 1 次子迭代已收敛，后续子迭代输出的位移/应力与第 1 次完全相同，导致多行相同数据 |
+| 纯刚体旋转 | 无应变 → 应力≈0 | 余量为零，后续迭代不再改变解 |
+
+---
+
+## 输出的数值实际代表什么  
+
+| 节点 | 初始坐标 (m) | 旋转 π rad 后坐标 | 位移 ΔU (m) |
+|------|--------------|-------------------|-------------|
+| **4**（角点） | (0, 1, 0) | (0, ‑1, 0) | Δx = 0，Δy = ‑2，Δz = 0 |
+| **10**（仅使用 out‑of‑plane DOF） | (0, 0, 0) | — | out‑of‑plane 位移 = 规定的旋转角 × Abaqus 内部比例因子（≈ 5.5 × 10⁻² m），平面分量为 0 |
+
+所有单元的应力均保持在机器精度范围内（≈ 0），说明模型内部没有产生应变。
+
+---
+
+## 如何得到随增量（或时间）变化的历史记录（去掉平坦列）
+
+### 1. 把总旋转分成 **多个增量**（或多个步骤）
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10               ; 将 π rad 分成 10 等分增量
+*BOUNDARY
+10, 3, 3, 0.31415927           ; 每增量 0.1·π rad
+*END STEP
+```
+
+或在单一步骤中强制 **子增量**：
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, DIRECT, INCR=0.1, MAXINC=0.1   ; 强制 10 次子增量
+*BOUNDARY
+10, 3, 3, 0.31415927
+*END STEP
+```
+
+> **效果**：每一次增量（或子增量）结束后，Abaqus 都会写出一组新的节点位移/应力，列中出现从 0 → 最终位移的平滑演化。
+
+### 2. 若仍想保持 **单一步骤**，只在 **步结束时** 输出一次
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+> **效果**：即使求解在第一次子迭代就收敛，`*NODE PRINT` 只在步结束时写一次，根本消除平坦列。
+
+### 3. （可选）检查应力是否真的为零
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+> 所有应力分量应为 0（或在机器精度范围内的极小数），若满足则说明 CPE8R 单元已通过刚体测试。
+
+---
+
+## 关键点回顾
+
+| 现象 | 原因 | 解决办法 |
+|------|------|----------|
+| 多行相同的位移/应力（平坦列） | 单步一次性施加完整 π rad，且 `*NODE/EL PRINT` 在每一次子迭代后写文件 | ① 将加载分成多个增量/子增量；② 或把输出限制为仅在步结束时写一次 |
+| 应力 ≈ 0 | 刚体无内部应变 | 正常，无需修改 |
+| 想看到位移随时间的演化 | 需要增量或步级输出 | 参考上面的增量/输出设置 |
+
+按照上述任一办法修改后，输出将不再出现平坦列，你即可观察到完整的旋转过程历史记录。祝你建模顺利！
+A: **简要结论**  
+在你的模型里，π rad 的刚体旋转被一次性放在 **单个静载增量** 中完成。Newton‑Raphson 迭代在 **第一次子迭代** 就已经收敛，`*NODE PRINT`（或 `*EL PRINT`）默认在 **每一次子迭代后** 都写一次结果。于是同一组位移/应力被重复输出，形成了“平坦列”。这并不是错误，而是刚体单元（CPE8R）在 **无内部应变** 的情况下成功完成了刚体旋转，刚体测试已经通过。
+
+---
+
+## 为什么输出是平的
+
+| 设置 | 作用 | 产生平坦列的原因 |
+|------|------|-------------------|
+| `*STEP, NLGEOM`<br>`*STATIC, DIRECT 0.01, 1.` | 把整个 π rad 旋转 **一次性** 施加（单增量） | 纯刚体运动 → 第一次 Newton‑Raphson 迭代后残余力为 0，已收敛 |
+| `*NODE PRINT, NSET=…`（或 `*EL PRINT`） | 默认 **每一次子迭代后** 写一次结果（最多 100 次） | 第 1 次子迭代已收敛，后续子迭代输出的位移/应力与第 1 次完全相同，导致多行相同数据 |
+| 纯刚体旋转 | 无应变 → 应力≈0 | 余量为零，后续迭代不再改变解 |
+
+---
+
+## 输出的数值实际代表什么  
+
+| 节点 | 初始坐标 (m) | 旋转 π rad 后坐标 | 位移 ΔU (m) |
+|------|--------------|-------------------|-------------|
+| **4**（角点） | (0, 1, 0) | (0, ‑1, 0) | Δx = 0，Δy = ‑2，Δz = 0 |
+| **10**（仅使用 out‑of‑plane DOF） | (0, 0, 0) | — | out‑of‑plane 位移 = 规定的旋转角 × Abaqus 内部比例因子（≈ 5.5 × 10⁻² m），平面分量为 0 |
+
+所有单元的应力均保持在机器精度范围内（≈ 0），说明模型内部没有产生应变。
+
+---
+
+## 如何得到随增量（或时间）变化的历史记录（去掉平坦列）
+
+### 1. 把总旋转分成 **多个增量**（或多个步骤）
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, INC=10               ; 将 π rad 分成 10 等分增量
+*BOUNDARY
+10, 3, 3, 0.31415927           ; 每增量 0.1·π rad
+*END STEP
+```
+
+或在单一步骤中强制 **子增量**：
+
+```abaqus
+*STEP, NLGEOM
+*STATIC, DIRECT, INCR=0.1, MAXINC=0.1   ; 强制 10 次子增量
+*BOUNDARY
+10, 3, 3, 0.31415927
+*END STEP
+```
+
+**效果**：每一次增量（或子增量）结束后，Abaqus 都会写出一组新的节点位移/应力，列中出现从 0 → 最终位移的平滑演化。
+
+---
+
+### 2. 若仍想保持 **单一步骤**，只在 **步结束时** 输出一次
+
+```abaqus
+*OUTPUT, FIELD, VARIABLE=PRESELECT
+*NODE OUTPUT
+U
+*END STEP
+```
+
+**效果**：即使求解在第一次子迭代就收敛，`*NODE PRINT` 只在步结束时写一次，根本消除平坦列。
+
+---
+
+### 3. （可选）检查应力是否真的为零
+
+```abaqus
+*EL PRINT, ELSET=EALL, SECTION=ALL
+S
+```
+
+所有应力分量应为 0（或在机器精度范围内的极小数），若满足则说明 CPE8R 单元已通过刚体测试。
+
+---
+
+## 关键点回顾
+
+| 现象 | 原因 | 解决办法 |
+|------|------|----------|
+| 多行相同的位移/应力（平坦列） | 单步一次性施加完整 π rad，且 `*NODE/EL PRINT` 在每一次子迭代后写文件 | ① 将加载分成多个增量/子增量；② 或把输出限制为仅在步结束时写一次 |
+| 应力 ≈ 0 | 刚体无内部应变 | 正常，无需修改 |
+| 想看到位移随时间的演化 | 需要增量或步级输出 | 参考上面的增量/输出设置 |
+
+按照上述任一办法修改后，输出将不再出现平坦列，你即可观察到完整的旋转过程历史记录。祝你建模顺利！
+

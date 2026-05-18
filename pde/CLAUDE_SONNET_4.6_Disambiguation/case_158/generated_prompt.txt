@@ -1,0 +1,59 @@
+Solve the 1D Compressible Navier-Stokes PDE (no heat conduction) numerically using the following complete specification.
+
+Domain: x in [-1, 1], t in [0, 0.5].
+Use a uniform finite-volume grid with Nx = 400 cells.
+Cell spacing: dx = 2.0 / 400 = 0.005.
+Cell centers: x_j = -1 + (j + 0.5) * dx for j = 0, ..., 399.
+
+Parameters: Gamma = 1.6666666666666667, eta = 1e-08, zeta = 1e-08, CFL = 0.8 (use this value unless a different CFL is specified; if needed default to 0.8).
+
+PDE in conservative form:
+Let m = rho * v and total energy E = p / (Gamma - 1) + 0.5 * rho * v**2.
+Let viscous stress sigma = (zeta + 4/3 * eta) * v_x.
+Evolve: rho_t + (m)_x = 0.
+Evolve: m_t + (m**2 / rho + p - sigma)_x = 0.
+Evolve: E_t + ((E + p) * v - v * sigma)_x = 0.
+
+Initial conditions (set on cell centers):
+rho(x, 0) = 1.0 + 0.2 * sin(pi * x).
+v(x, 0) = 0.1 * cos(pi * x).
+p(x, 0) = 1.0 + 0.2 * cos(pi * x).
+Convert to conservative variables: m = rho * v, E = p / (Gamma - 1) + 0.5 * rho * v**2.
+
+Boundary conditions: periodic on x = -1 and x = 1. Implement using index wrapping for ghost cells.
+
+Equation of state: p = (Gamma - 1) * (E - 0.5 * m**2 / rho). Clip rho and p to a floor of 1e-12 to enforce positivity.
+
+Convective flux (Rusanov / local Lax-Friedrichs):
+F_conv(U) = [m, m**2 / rho + p, (E + p) * v] where v = m / rho.
+Interface wave speed: a = max(|v_L| + c_L, |v_R| + c_R) where c = sqrt(Gamma * p / rho).
+Numerical convective flux: F_hat = 0.5 * (F_conv(U_L) + F_conv(U_R)) - 0.5 * a * (U_R - U_L).
+Use piecewise-constant reconstruction (first-order), so U_L at interface j+1/2 is cell j and U_R is cell j+1.
+
+Viscous flux:
+Compute v_x at each cell center using centered differences: v_x_j = (v_{j+1} - v_{j-1}) / (2 * dx), with periodic wrapping.
+Compute cell-centered sigma_j = (zeta + 4/3 * eta) * v_x_j.
+Approximate sigma at interface j+1/2 as 0.5 * (sigma_j + sigma_{j+1}).
+Approximate v at interface j+1/2 as 0.5 * (v_j + v_{j+1}).
+Viscous flux at interface: F_visc = [0, -sigma, -v * sigma].
+Total interface flux: F_total = F_hat + F_visc.
+
+Time integration: 2-stage SSP-RK2 (Heun's method).
+Stage 1: U_star = U^n + dt * L(U^n).
+Stage 2: U^{n+1} = 0.5 * U^n + 0.5 * (U_star + dt * L(U_star)).
+Here L(U) = -(F_{j+1/2} - F_{j-1/2}) / dx is the finite-volume right-hand side.
+
+Time step selection each step:
+dt_conv = CFL * dx / max_j(|v_j| + c_j).
+dt_visc = 0.5 * dx**2 / max(zeta + 4/3 * eta, 1e-30).
+dt = min(dt_conv, dt_visc).
+Adjust the final step so the simulation ends exactly at T = 0.5.
+
+Use CFL = 0.8.
+
+Output:
+Compute rho(x, T), v(x, T), p(x, T) on the 400 cell centers from the final conservative variables.
+Save a file named "solution_pdebench_cns1d_eta1em8_periodic_smooth.npz" containing arrays x (length 400), rho (length 400), v (length 400), p (length 400), and scalars Gamma, eta, zeta, T, dx, CFL.
+Save a 3-panel line plot of rho, v, p versus x at T = 0.5 as "solution_pdebench_cns1d_eta1em8_periodic_smooth.png".
+Print the minimum and maximum of rho and p as a positivity check.
+Print the mean of rho over the domain as a mass conservation check.

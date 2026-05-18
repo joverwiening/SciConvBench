@@ -1,0 +1,99 @@
+**Why the warning is issued**
+
+`*MPC, TYPE=STRAIGHT` creates a straight‑line multi‑point constraint.  
+The first number on the line is the **dependent** node (the node that will be constrained) and the second and third numbers are the two **independent** nodes that define the line.
+
+When Abaqus reads the input file it checks that **every node referenced in an MPC has already been defined in a preceding `*Node` section**.  
+In your model node 28 – the dependent node of the MPC – is never created, therefore Abaqus prints
+
+```
+MPC constraint references undefined node 28
+```
+
+and simply ignores the MPC.
+
+---
+
+### How to fix it
+
+1. **Define node 28** (any point that lies on the straight line joining nodes 163 and 175).  
+   The node definition must appear **before** the `*MPC` card.
+
+   ```abaqus
+   *Node
+   …
+   163, 10.0, 0.0, 0.0      # independent node A
+   175, 10.0, 5.0, 0.0      # independent node B
+   28,  10.0, 2.5, 0.0      # <-- dependent node (mid‑point on the line)
+   …
+   ```
+
+2. **Leave the MPC line unchanged** – the syntax is already correct.
+
+   ```abaqus
+   *MPC, TYPE=STRAIGHT
+   STRAIGHT, 28, 163, 175
+   ```
+
+3. **Check the order of the cards** – Abaqus reads the file sequentially, so the node definition must come before the MPC definition, and both must be placed before any `*Step` cards:
+
+   ```
+   *Node
+   *Element
+   *MPC
+   *Step
+   ```
+
+4. **Run the analysis again**. The warning disappears and the MPC becomes active.
+
+---
+
+### Minimal working example
+
+```abaqus
+*Heading
+** Simple model with a straight‑line MPC
+*Preprint, echo=NO, model=NO, history=NO, contact=NO
+
+*Node
+1,   0., 0., 0.          # fixed base
+163, 10., 0., 0.         # independent node A
+175, 10., 5., 0.         # independent node B
+28,  10., 2.5, 0.        # dependent node (added)
+
+*Element, type=C3D8, elset=EALL
+1, 1, 2, 3, 4, 5, 6, 7, 8   # (your element connectivity)
+
+*MPC, TYPE=STRAIGHT
+STRAIGHT, 28, 163, 175
+
+*Boundary
+1, 1, 6, 0.0          # fully fix node 1
+
+*Step, name=Step-1, nlgeom=YES
+*Static
+0.1, 1., 1e-05, 1.
+*Cload
+28, 2, -100.0        # vertical load on the dependent node
+*End Step
+```
+
+Running this file produces **no “undefined node 28” warning**, and node 28 moves only along the line defined by nodes 163‑175.
+
+---
+
+### Quick checklist for future `*MPC` definitions
+
+| ✔️ | Item | What to verify |
+|---|------|----------------|
+| 1 | All referenced nodes exist | Every dependent and independent node must be listed in a `*Node` block **before** the `*MPC` card. |
+| 2 | Correct MPC type | Use `TYPE=STRAIGHT` for solid/continuum elements; `TYPE=BEAM` only for beam elements. |
+| 3 | Independent nodes are distinct | Nodes 163 and 175 must not be coincident; otherwise the line collapses to a point. |
+| 4 | Card order | `*Node` → `*Element` → `*MPC` → `*Step`. |
+| 5 | No conflicting constraints | Do not apply a `*Boundary` or `*Coupling` condition to the same DOF that the MPC controls. |
+| 6 | Validate | Run a short static step and inspect nodal displacements to confirm the MPC behaves as expected. |
+
+---
+
+**Bottom line:**  
+The warning is caused solely by the missing definition of node 28. Add a `*Node` entry for node 28 (any point on the line between nodes 163 and 175) before the `*MPC` card, keep the line `STRAIGHT, 28, 163, 175` unchanged, and the multi‑point constraint will be recognized and applied correctly. After this change the analysis runs without the warning. Happy modeling!

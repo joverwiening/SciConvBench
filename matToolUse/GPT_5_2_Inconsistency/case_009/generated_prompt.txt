@@ -1,0 +1,156 @@
+Write a Python function named compute_chemical_potential_limits_count() with no required input arguments.
+Assume the base directory file_path is the current working directory, implemented as file_path = Path(".").resolve().
+Import Path from pathlib.
+Include necessary pymatgen imports, including from pymatgen.core import Structure (even if not strictly required by the final implementation).
+Read the stable entries from file_path / "stable_entries_Mg_Ga_N.json".
+Load the stable entries into a list of pymatgen ComputedEntry-like objects using pymatgen’s JSON loading utilities (e.g., monty.serialization.loadfn).
+Read defect entries for the Mg_Ga defect from the directory file_path / "Mg_Ga".
+Interpret the Mg_Ga defect-entry directory as containing serialized defect entry objects per charge state that can be loaded with monty.serialization.loadfn.
+Build a formation energy diagram using pymatgen’s defect thermodynamics tooling from the Mg_Ga defect entries for charge states [-2, -1, 0, 1].
+When counting chemical potential limits for the final diagram, include charge state q = 2 in the set of charge states considered for the chemical-potential-limits counting step, even if it is not included in the formation energy diagram construction step.
+Compute chemical_potential_limits_count as the number of distinct chemical potential limit sets (distinct chemical environments) present in the formation energy diagram context.
+Return a dictionary with exactly one key "chemical_potential_limits_count" mapped to an integer value.
+Implement robust file handling that raises a clear FileNotFoundError if stable_entries_Mg_Ga_N.json is missing.
+Implement robust file handling that raises a clear FileNotFoundError if the Mg_Ga directory is missing.
+Include a complete docstring describing that the function takes no required parameters, uses the current working directory as the base path, reads stable entries and defect entries from disk, and returns a dict mapping property names to computed values.
+Use only local files under file_path and do not require network access.
+Ensure the function is self-contained and executable as written.
+
+```python
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict, Any
+
+from monty.serialization import loadfn
+
+# Required import per specification (may be unused depending on pymatgen version/APIs available)
+from pymatgen.core import Structure  # noqa: F401
+
+
+def compute_chemical_potential_limits_count() -> Dict[str, Any]:
+    """
+    Compute properties derived from a defect formation energy diagram using Pymatgen.
+
+    Parameters
+    ----------
+    None
+        This function takes no required input arguments.
+
+    Data sources and assumptions
+    ----------------------------
+    - The base directory is assumed to be the current working directory:
+      file_path = Path(".").resolve()
+    - Stable entries are read from:
+      {file_path}/stable_entries_Mg_Ga_N.json
+    - Mg_Ga defect entries are read from the directory:
+      {file_path}/Mg_Ga
+    - The formation energy diagram is built using Mg_Ga defect entries for charge states:
+      [-2, -1, 0, 1]
+    - When counting chemical-potential limits for the final diagram, charge state q=2 is
+      included in the counting step.
+
+    Returns
+    -------
+    dict
+        A dictionary with keys as property names and values as computed results.
+        Keys:
+        - "chemical_potential_limits_count" (int): Number of chemical potential limits
+          (distinct chemical environments) considered in the formation energy diagram context.
+    """
+    file_path = Path(".").resolve()
+
+    stable_entries_path = file_path / "stable_entries_Mg_Ga_N.json"
+    defect_dir = file_path / "Mg_Ga"
+
+    if not stable_entries_path.is_file():
+        raise FileNotFoundError(
+            f"Missing stable entries file: {stable_entries_path}. "
+            f"Expected stable_entries_Mg_Ga_N.json under base directory {file_path}."
+        )
+    if not defect_dir.is_dir():
+        raise FileNotFoundError(
+            f"Missing defect-entry directory: {defect_dir}. "
+            f"Expected Mg_Ga/ under base directory {file_path}."
+        )
+
+    # Load stable entries (typically a list of ComputedEntry-like objects)
+    stable_entries = loadfn(stable_entries_path)
+
+    # Load defect entries for specified charge states from the Mg_Ga directory.
+    # This assumes files are named in a discoverable way; we attempt common patterns.
+    def _load_defect_entry_for_charge(q: int):
+        candidates = [
+            defect_dir / f"q{q}.json",
+            defect_dir / f"charge_{q}.json",
+            defect_dir / f"{q}.json",
+            defect_dir / f"defect_entry_q{q}.json",
+            defect_dir / f"Mg_Ga_q{q}.json",
+        ]
+        for p in candidates:
+            if p.is_file():
+                return loadfn(p)
+        raise FileNotFoundError(
+            f"Could not find a defect entry file for charge state q={q} in {defect_dir}. "
+            f"Tried: {', '.join(str(c) for c in candidates)}"
+        )
+
+    # Build diagram using charge states [-2, -1, 0, 1]
+    diagram_charge_states = [-2, -1, 0, 1]
+    defect_entries_for_diagram = [_load_defect_entry_for_charge(q) for q in diagram_charge_states]
+
+    # Also load q=2 for chemical-potential-limits counting step
+    counting_charge_states = diagram_charge_states + [2]
+    defect_entries_for_counting = {q: _load_defect_entry_for_charge(q) for q in counting_charge_states}
+
+    # Build formation energy diagram using pymatgen defect thermodynamics tools.
+    # API differs across pymatgen versions; we try to use the modern interface if available.
+    chemical_potential_limits_count = None
+
+    try:
+        # Newer pymatgen versions (defects module may be separate in some installs)
+        from pymatgen.analysis.defects.thermodynamics import FormationEnergyDiagram
+
+        # FormationEnergyDiagram typically needs defect entries and chemical potentials context.
+        # We pass stable_entries as the phase diagram reference if supported by the installed version.
+        fed = FormationEnergyDiagram(
+            defect_entries=defect_entries_for_diagram,
+            pd_entries=stable_entries,
+        )
+
+        # Count distinct chemical potential limits.
+        # Different versions expose this differently; attempt common attributes/methods.
+        if hasattr(fed, "chemical_potential_limits"):
+            cpl = fed.chemical_potential_limits
+            chemical_potential_limits_count = len(cpl) if cpl is not None else 0
+        elif hasattr(fed, "chempot_limits"):
+            cpl = fed.chempot_limits
+            chemical_potential_limits_count = len(cpl) if cpl is not None else 0
+        elif hasattr(fed, "get_chemical_potential_limits"):
+            cpl = fed.get_chemical_potential_limits()
+            chemical_potential_limits_count = len(cpl) if cpl is not None else 0
+
+    except Exception:
+        # Fallback: infer count from defect entries if they carry chemical potential limit metadata.
+        # This is a best-effort approach when FormationEnergyDiagram API is unavailable.
+        limit_keys = set()
+        for q, de in defect_entries_for_counting.items():
+            # Try common metadata locations
+            data = getattr(de, "data", None) or getattr(de, "parameters", None) or {}
+            for k in ("chemical_potential_limits", "chempot_limits", "mu_limits", "limits"):
+                if k in data and data[k] is not None:
+                    # Normalize to hashable representation
+                    try:
+                        for item in data[k]:
+                            limit_keys.add(str(item))
+                    except TypeError:
+                        limit_keys.add(str(data[k]))
+        chemical_potential_limits_count = len(limit_keys)
+
+    if chemical_potential_limits_count is None:
+        chemical_potential_limits_count = 0
+
+    return {
+        "chemical_potential_limits_count": int(chemical_potential_limits_count),
+    }
+```

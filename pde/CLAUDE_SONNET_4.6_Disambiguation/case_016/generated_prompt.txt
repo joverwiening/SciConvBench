@@ -1,0 +1,127 @@
+Solve the 1D viscous Burgers PDE with a forcing term numerically and save the results.
+
+The PDE is u_t + u*u_x = 0.02*u_xx + sin(2*pi*x)*cos(2*pi*t).
+The spatial domain is x in [0,1) with periodic boundary conditions.
+The time domain is t in [0, 1.0].
+The viscosity parameter nu = 0.02.
+The initial condition is u(x, 0) = 0.
+
+Use Nx = 1000 grid points on [0,1) with no duplicated endpoint.
+Set dx = 1.0 / Nx so dx = 0.001.
+Set x_i = i * dx for i = 0, 1, ..., Nx-1.
+Use dt = 1e-4 and Nt = 10000 time steps so that T = 1.0 is hit exactly.
+
+Discretize in conservative form: u_t + (f(u))_x = nu * u_xx where f(u) = 0.5 * u**2.
+
+Compute the convective flux using the Rusanov (local Lax-Friedrichs) flux at each interface.
+Compute F_{i+1/2} = 0.5*(f(u_i) + f(u_{i+1})) - 0.5*alpha_{i+1/2}*(u_{i+1} - u_i) where alpha_{i+1/2} = max(|u_i|, |u_{i+1}|).
+Compute the convective term as conv_i = (F_{i+1/2} - F_{i-1/2}) / dx.
+Apply periodic indexing so that index Nx wraps to 0 and index -1 wraps to Nx-1.
+
+Use 1st-order IMEX time integration: treat convection and the source term explicitly, treat diffusion implicitly.
+The update equation is (u^{n+1} - u^n) / dt + conv^n = nu * u_xx^{n+1} + S^n where S^n = sin(2*pi*x)*cos(2*pi*t^n).
+Rearrange to the linear system (I - dt*nu*L) u^{n+1} = u^n - dt*(conv^n - S^n).
+Construct the diffusion operator L as the second-order central difference matrix: L_{i,i} = -2/dx**2, L_{i,i+1} = 1/dx**2, L_{i,i-1} = 1/dx**2 with periodic wrap-around.
+Build (I - dt*nu*L) as a sparse matrix using scipy.sparse in CSR format.
+Solve the sparse linear system each time step using scipy.sparse.linalg.spsolve.
+
+After Nt steps, compute u(x, T=1.0) on the Nx-point grid.
+Print min(u), max(u), and the discrete L2 norm sqrt(sum(u**2) * dx) at T=1.0.
+Save a file named "solution_agent_burgers_04.npz" containing: array x (1D, length Nx), array u (1D, length Nx), scalar T=1.0, scalar dx, scalar dt.
+Save a line plot of u(x, T=1.0) as "solution_agent_burgers_04.png" with x on the horizontal axis and u on the vertical axis.
+
+Write all code in Python using numpy, scipy, and matplotlib.
+Use ** for exponentiation in Python code.
+Use radians for all trigonometric functions.
+
+```python
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+
+# Grid parameters
+Nx = 1000
+dx = 1.0 / Nx
+x = np.arange(Nx) * dx  # x_i = i*dx, i=0..Nx-1
+
+# Time parameters
+dt = 1e-4
+Nt = 10000
+T = 1.0
+nu = 0.02
+
+# Initial condition
+u = np.zeros(Nx)
+
+# Build diffusion operator L (periodic, second-order central difference)
+# L u = (u_{i+1} - 2*u_i + u_{i-1}) / dx^2
+diag_main = -2.0 * np.ones(Nx) / dx**2
+diag_off  =  1.0 * np.ones(Nx) / dx**2
+
+L = (sp.diags(diag_main, 0, shape=(Nx, Nx), format='lil') +
+     sp.diags(diag_off,  1, shape=(Nx, Nx), format='lil') +
+     sp.diags(diag_off, -1, shape=(Nx, Nx), format='lil'))
+
+# Periodic wrap-around corners
+L[0,  Nx-1] = 1.0 / dx**2
+L[Nx-1, 0]  = 1.0 / dx**2
+
+# Build implicit matrix A = I - dt*nu*L
+I = sp.eye(Nx, format='csr')
+A = (I - dt * nu * L).tocsr()
+
+# Time integration
+t_n = 0.0
+for n in range(Nt):
+    # --- Explicit convective flux (Rusanov / local Lax-Friedrichs) ---
+    # Periodic neighbor indices
+    ip1 = np.arange(1, Nx + 1) % Nx   # i+1 mod Nx
+    im1 = np.arange(-1, Nx - 1) % Nx  # i-1 mod Nx
+
+    f_u = 0.5 * u**2                   # f(u) = 0.5*u^2
+
+    # F_{i+1/2}
+    alpha_right = np.maximum(np.abs(u), np.abs(u[ip1]))
+    F_right = 0.5 * (f_u + f_u[ip1]) - 0.5 * alpha_right * (u[ip1] - u)
+
+    # F_{i-1/2}
+    alpha_left = np.maximum(np.abs(u[im1]), np.abs(u))
+    F_left  = 0.5 * (f_u[im1] + f_u) - 0.5 * alpha_left  * (u - u[im1])
+
+    conv = (F_right - F_left) / dx
+
+    # --- Explicit source term at t^n ---
+    S = np.sin(2.0 * np.pi * x) * np.cos(2.0 * np.pi * t_n)
+
+    # --- RHS of linear system ---
+    rhs = u - dt * (conv - S)
+
+    # --- Solve implicit system ---
+    u = spla.spsolve(A, rhs)
+
+    t_n += dt
+
+# Diagnostics
+u_min  = np.min(u)
+u_max  = np.max(u)
+l2norm = np.sqrt(np.sum(u**2) * dx)
+print(f"min(u)  = {u_min:.6e}")
+print(f"max(u)  = {u_max:.6e}")
+print(f"L2 norm = {l2norm:.6e}")
+
+# Save .npz
+np.savez("solution_agent_burgers_04.npz", x=x, u=u, T=T, dx=dx, dt=dt)
+
+# Save plot
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(x, u, linewidth=1.0)
+ax.set_xlabel("x")
+ax.set_ylabel("u(x, T=1.0)")
+ax.set_title("Burgers solution at T=1.0 (agent_burgers_04)")
+ax.grid(True)
+plt.tight_layout()
+plt.savefig("solution_agent_burgers_04.png", dpi=150)
+plt.close()
+print("Files saved: solution_agent_burgers_04.npz, solution_agent_burgers_04.png")
+```

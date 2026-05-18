@@ -1,0 +1,98 @@
+**Why the error occurs**
+
+When the `*MPC` line is written without a `TYPE=` argument Abaqus uses its **default type = USER**.  
+In that case the first token on the next line is taken as the *name of the user sub‑routine* that implements the MPC.
+
+```
+*MPC                ← type omitted → USER
+MEANROT, …         ← “MEANROT” is read as the name of a user routine
+```
+
+Because no Fortran routine called **MEANROT** has been compiled, Abaqus aborts with  
+
+```
+*** ERROR: The user sub‑routine has not been compiled
+```
+
+---
+
+## How to use the built‑in mean‑rotation MPC (`MEANROT`) correctly
+
+Abaqus already provides an internal **mean‑rotation** multi‑point constraint.  
+To activate it you must **explicitly** tell Abaqus which built‑in type you want:
+
+```abaqus
+*MPC, TYPE=MEANROT
+```
+
+When the type is supplied, the data line must contain **only the node numbers (or node‑pair definitions)** required by that type – the word *MEANROT* must **not** appear again.
+
+---
+
+## Minimal changes that fix the problem
+
+| Original line                              | Fixed line                     | Reason |
+|--------------------------------------------|--------------------------------|--------|
+| `*MPC` (no arguments)                     | `*MPC, TYPE=MEANROT`           | Declares the built‑in mean‑rotation MPC. |
+| `MEANROT,5,5,5,6,6,6,7,7,7,8,8,8,262`      | `5,5,5,6,6,6,7,7,7,8,8,8,262`   | Removes the type name; leaves only the node numbers. |
+
+---
+
+## Complete, corrected input (runnable as‑is)
+
+```abaqus
+*ELSET, ELSET=EALL, GENERATE
+1, 32
+
+*NSET, NSET=NALL, GENERATE
+1, 261
+
+*MATERIAL, NAME=LIN_ISO_EL
+*ELASTIC
+210000., 0.3
+
+*SOLID SECTION, ELSET=EALL, MATERIAL=LIN_ISO_EL
+
+*------  MEAN‑ROTATION MPC (built‑in type) ------*
+*MPC, TYPE=MEANROT
+5,5,5,6,6,6,7,7,7,8,8,8,262
+*------------------------------------------------*
+
+*NSET, NSET=N1
+262
+
+*STEP
+*STATIC
+*BOUNDARY
+262, 1, 1, 0.5          ! prescribed displacement of node 262
+*END STEP
+```
+
+Running this input will **not** trigger the “user sub‑routine has not been compiled” error; Abaqus will use its internal implementation of the mean‑rotation MPC and the analysis proceeds normally.
+
+---
+
+## Quick checklist for any `*MPC` card
+
+| ✔️ Check | What to verify |
+|----------|----------------|
+| **Explicit type** | Always write `TYPE=` (e.g., `TYPE=MEANROT`, `TYPE=BEAM`, `TYPE=RIGID`). If you truly need a user‑defined MPC, use `TYPE=USER` and compile the corresponding Fortran routine. |
+| **Data line content** | After the `*MPC` line, list **only** the node numbers (or node‑pair definitions) required by the chosen type. Do **not** repeat the type name. |
+| **Node existence** | Every node number used in the MPC must be defined elsewhere (`*NSET`, `*NODE`, etc.). |
+| **Compatibility with BCs** | Ensure that prescribed displacements/rotations do not over‑constrain a node already fully restrained by the MPC. |
+| **Consistent numbering** | If you generate nodes/elements, make sure the numbers in the MPC line match the generated range. |
+
+---
+
+## TL;DR
+
+The error appears because the `*MPC` line lacked a `TYPE=` specification, so Abaqus assumed a **user** MPC and tried to call a non‑existent routine named `MEANROT`.  
+
+**Fix it with two simple edits:**
+
+```abaqus
+*MPC, TYPE=MEANROT
+5,5,5,6,6,6,7,7,7,8,8,8,262
+```
+
+Now Abaqus uses its built‑in mean‑rotation MPC and the analysis runs without any user sub‑routine.

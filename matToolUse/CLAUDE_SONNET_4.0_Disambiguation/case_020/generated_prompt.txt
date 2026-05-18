@@ -1,0 +1,97 @@
+```python
+import numpy as np
+from pymatgen.analysis.defects.ccd import HarmonicDefect
+import pandas as pd
+from scipy.integrate import trapz
+import os
+
+def compute_optical_properties():
+    """
+    Compute optical properties using Pymatgen's HarmonicDefect analysis.
+    
+    This function reads defect data from the v_Ga/ccd_0_-1/optics directory,
+    builds a HarmonicDefect object, evaluates the dielectric function, and
+    computes various optical transition properties.
+    
+    Returns:
+        dict: A dictionary containing the following keys and values:
+            - inter_vbm_integral (float): Integral of imaginary dielectric function at VBM
+            - inter_cbm_integral (float): Integral of imaginary dielectric function at CBM  
+            - optical_transitions_dataframe_type (bool): Whether optical transitions result is DataFrame
+            - optical_transitions_dataframe_length (int): Number of entries in optical transitions DataFrame
+            - optical_transitions_user_defect_band_ib (int): Initial band index for user defect band
+            - optical_transitions_user_defect_band_jb (int): Final band index for user defect band
+    """
+    
+    # Set up file paths
+    file_path = "."  # Base directory
+    optics_dir = os.path.join(file_path, "v_Ga", "ccd_0_-1", "optics")
+    
+    # Build HarmonicDefect object
+    harmonic_defect = HarmonicDefect.from_directory(optics_dir)
+    
+    # Read WAVEDER data and evaluate dielectric function
+    harmonic_defect.read_waveder()
+    
+    # Define energy range for integration (0 to 10 eV is reasonable for optical properties)
+    energy_min = 0.0
+    energy_max = 10.0
+    energy_points = 1000
+    energies = np.linspace(energy_min, energy_max, energy_points)
+    
+    # Evaluate dielectric function
+    dielectric_data = harmonic_defect.get_dielectric_function(energies)
+    
+    # Extract imaginary part of dielectric function
+    epsilon_imag = dielectric_data.imag
+    
+    # Get VBM and CBM positions
+    vbm_energy = harmonic_defect.vbm
+    cbm_energy = harmonic_defect.cbm
+    
+    # Find closest energy indices to VBM and CBM
+    vbm_idx = np.argmin(np.abs(energies - vbm_energy))
+    cbm_idx = np.argmin(np.abs(energies - cbm_energy))
+    
+    # Compute integrals around VBM and CBM (using ±1 eV window)
+    vbm_window = np.abs(energies - vbm_energy) <= 1.0
+    cbm_window = np.abs(energies - cbm_energy) <= 1.0
+    
+    inter_vbm_integral = trapz(epsilon_imag[vbm_window], energies[vbm_window])
+    inter_cbm_integral = trapz(epsilon_imag[cbm_window], energies[cbm_window])
+    
+    # Generate optical transitions DataFrame
+    kpt_index = 0
+    band_window = 5
+    user_defect_band = harmonic_defect.defect_band_index  # Use the main defect band
+    
+    optical_transitions_df = harmonic_defect.plot_optical_transitions(
+        kpt_index=kpt_index,
+        band_window=band_window,
+        user_defect_band=user_defect_band
+    )
+    
+    # Check if result is DataFrame
+    optical_transitions_dataframe_type = isinstance(optical_transitions_df, pd.DataFrame)
+    
+    # Get DataFrame length
+    optical_transitions_dataframe_length = len(optical_transitions_df) if optical_transitions_dataframe_type else 0
+    
+    # Get user defect band indices (assuming they are stored in the DataFrame or defect object)
+    if optical_transitions_dataframe_type and len(optical_transitions_df) > 0:
+        optical_transitions_user_defect_band_ib = optical_transitions_df['ib'].iloc[0]
+        optical_transitions_user_defect_band_jb = optical_transitions_df['jb'].iloc[0]
+    else:
+        optical_transitions_user_defect_band_ib = user_defect_band
+        optical_transitions_user_defect_band_jb = user_defect_band + 1
+    
+    # Return results dictionary
+    return {
+        'inter_vbm_integral': float(inter_vbm_integral),
+        'inter_cbm_integral': float(inter_cbm_integral),
+        'optical_transitions_dataframe_type': optical_transitions_dataframe_type,
+        'optical_transitions_dataframe_length': optical_transitions_dataframe_length,
+        'optical_transitions_user_defect_band_ib': int(optical_transitions_user_defect_band_ib),
+        'optical_transitions_user_defect_band_jb': int(optical_transitions_user_defect_band_jb)
+    }
+```

@@ -1,0 +1,2177 @@
+=== 2026-04-17 21:49:45 ===
+Q: **Why the two keywords give an error**
+
+| Keyword | When it can be used |
+|---------|---------------------|
+|`*INITIAL CONDITIONS, TYPE=DISPLACEMENT`|Only in a **dynamic** step (implicit or explicit). It is used to prescribe the *initial* displacement field of the model before the dynamic analysis starts. |
+|`*BOUNDARY`|In a **static** or **quasi‑static** step (or in a dynamic step if you want a prescribed displacement that is applied as a load). It is the normal way to “fix” a node or to prescribe a displacement that is part of the loading. |
+
+In the input file you have
+
+```abaqus
+*STEP
+*END STEP
+```
+
+No step type is given, therefore Abaqus creates a **static** step.  
+Consequently
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is rejected because a static step does not accept an initial‑displacement condition.
+* `*BOUNDARY` is also rejected because the step type has not been declared (`*STATIC` or `*DYNAMIC` is missing).
+
+---
+
+## 1.  What you really want – a static cantilever with a prescribed end‑displacement
+
+For a cantilever beam the usual way is:
+
+1. **Clamp the nodes at the fixed end** (your set `CN7`).  
+2. **Prescribe the displacement of the nodes at the free end** (your set `LAST`).  
+
+Both are done with the `*BOUNDARY` keyword inside a static step.
+
+```abaqus
+*STEP
+*STATIC
+** 1) Clamp the fixed end (all 3 DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0
+
+** 2) Prescribe the displacement of the free end.
+**    Example: a uniform translation of 0.5 mm in the Z‑direction
+*BOUNDARY
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+* `CN7` – the node set that contains the 20 nodes at the clamped face.  
+* `LAST` – the node set that contains the 8 nodes on the free face (you already defined it).  
+* `1,3` – means “apply the value to DOFs 1, 2 and 3”.  
+* `3,3` – means “apply the value only to the Z‑direction (DOF 3)”.  
+
+You can change the magnitude (`0.5` in the example) to whatever displacement you need.  
+If you also want to restrain the X‑ and Y‑translations of the free end, add two more lines, e.g.
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  If you really need an **initial‑displacement** (dynamic analysis)
+
+Suppose you want to start a **dynamic** (implicit) analysis with the beam already displaced and then let it vibrate. In that case you must:
+
+1. Define a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` to give the initial field.  
+
+The syntax is the same as for `*BOUNDARY`, only the keyword changes:
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT
+**  Initial displacement (same numbers as above)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+*Note*: The values you write after the node set are **the actual displacement components** (in the model’s length unit). Abaqus does **not** compute them for you – you have to decide what displacement you want and write it explicitly.
+
+---
+
+## 3.  Summary of the changes you need in your input file
+
+Below is a minimal, corrected version of the part of the file that matters.  
+Everything else (mesh, material, section, etc.) can stay exactly as you wrote it.
+
+```abaqus
+*STEP
+*STATIC                     ! <‑‑ declare the step type
+**  Clamp the fixed end (all 3 DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0
+
+**  Prescribe a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+If you want a dynamic analysis with an initial displacement, replace the two lines
+
+```abaqus
+*STATIC
+```
+
+by
+
+```abaqus
+*DYNAMIC, IMPLICIT
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+```
+
+and keep the same node‑set/DOF/value lines.
+
+---
+
+### Quick checklist
+
+| What you want to do | Keyword(s) | Step type required |
+|---------------------|------------|--------------------|
+|Static analysis, prescribe a displacement as part of the loading | `*BOUNDARY` | `*STATIC` (or any static step) |
+|Dynamic analysis, start the model already displaced | `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` | `*DYNAMIC, IMPLICIT` (or `*DYNAMIC, EXPLICIT`) |
+|Both clamping and prescribed displacement | Two `*BOUNDARY` cards (or one `*BOUNDARY` + one `*INITIAL CONDITIONS` in a dynamic step) | as above |
+
+With these modifications the model will run without the “type is not applicable” errors, and the displacement you write in the input file will be the one that the solver applies.
+A: **Why the two keywords give an error**
+
+In an Abaqus input file a step must be declared **before** any load, boundary‑condition or initial‑condition cards are read.  
+If the step header does not contain a type ( `*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, … ) Abaqus creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit).  
+  Because the step that precedes it is static, Abaqus stops with the error *“INITIAL CONDITIONS – TYPE=DISPLACEMENT is not applicable to a static step”*.
+
+* `*BOUNDARY` can be used in a static step, but it also has to be placed **inside a defined step**.  
+  When the step header is missing Abaqus again reports an error such as *“BOUNDARY – no step defined”*.
+
+So the root cause is **the missing step type**. Once the step type is declared, the keywords work as intended.
+
+---
+
+## 1.  What you most likely want: a **static cantilever** with a prescribed end‑displacement  
+
+The usual way to model a cantilever that is pulled (or pushed) a certain amount is:
+
+| Action | Abaqus keyword | Where it goes |
+|--------|----------------|---------------|
+|Clamp the fixed face (all three translational DOFs = 0) | `*BOUNDARY` | Inside a **static** step |
+|Prescribe the displacement of the free face (e.g. 0.5 mm in Z) | `*BOUNDARY` | Inside the same static step |
+
+### Minimal corrected input fragment
+
+```abaqus
+*STEP
+*STATIC                     ! <-- declare the step type
+** 1) Clamp the fixed end (all 3 DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0
+
+** 2) Prescribe a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the 20 nodes on the clamped face (you already defined it).  
+* `LAST` – node set that contains the 8 nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to DOF 3 (Z‑direction).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – the magnitude of the prescribed translation (change to the value you need).  
+
+If you also want to prevent the free end from moving in X and Y, add two more lines:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When you really need an **initial displacement** (dynamic analysis)
+
+If the intention is to start a **dynamic** analysis with the beam already displaced (e.g. to study free vibration after a prescribed deflection), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` to give the initial field.
+
+### Example – implicit dynamic step with an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+**  Initial displacement (same numbers as above)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+*The values after the node‑set are the **actual displacement components** (in the model’s length unit). Abaqus does not compute them for you; you must decide the magnitude you want.*
+
+If you also want to apply additional loads or constraints during the dynamic analysis, add the usual `*CLOAD`, `*BOUNDARY`, etc., **after** the `*INITIAL CONDITIONS` card but still inside the same `*STEP`.
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+| Desired analysis | Step header you need | Keyword to use for the displacement |
+|------------------|----------------------|--------------------------------------|
+|Static cantilever, displacement is part of the loading | `*STATIC` (or any static step) | `*BOUNDARY` |
+|Dynamic analysis that **starts** with a displaced shape | `*DYNAMIC, IMPLICIT` (or `*DYNAMIC, EXPLICIT`) | `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` |
+|Dynamic analysis where the displacement is applied **as a load** (not as an initial condition) | `*DYNAMIC,…` | `*BOUNDARY` (or `*CLOAD` for forces) |
+
+### Minimal fix for your current file
+
+Replace the empty step block
+
+```abaqus
+*STEP
+*END STEP
+```
+
+with the appropriate step type and the needed keyword(s). For a static cantilever the final block looks exactly like the one shown in section 1.
+
+---
+
+### TL;DR
+
+* **Add a step type** (`*STATIC` for a static analysis, `*DYNAMIC,…` for a dynamic one).  
+* Use `*BOUNDARY` inside a static step to clamp the fixed end and to prescribe the end‑displacement.  
+* Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` **only** inside a dynamic step if you need the displacement to be the *initial* state of the model.  
+
+With those two changes the input file will run without the “type is not applicable” errors, and the displacement you write will be the one the solver applies.
+
+=== 2026-04-17 21:50:20 ===
+Q: **Why the two keywords give an error**
+
+In an Abaqus input file every load, boundary‑condition or initial‑condition must be placed **inside a defined step**.  
+If the step header does not contain a type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus creates a **default static step**.
+
+| Keyword | When it can be used |
+|---------|----------------------|
+|`*INITIAL CONDITIONS, TYPE=DISPLACEMENT`|Only in a **dynamic** step (implicit or explicit). It defines the *initial* displacement field before the dynamic analysis starts.|
+|`*BOUNDARY`|In a **static** (or quasi‑static) step, or in a dynamic step if you want a prescribed displacement that is part of the loading. It must be placed inside a step definition.|
+
+Because your file contains
+
+```abaqus
+*STEP
+*END STEP
+```
+
+no step type is declared, so Abaqus creates a **static** step. Consequently:
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is rejected – it is not applicable to a static step.
+* `*BOUNDARY` is also rejected because there is no step header (`*STATIC` or `*DYNAMIC`) preceding it.
+
+---
+
+## 1.  What you most likely want – a **static cantilever** with a prescribed end‑displacement
+
+The usual way to model a cantilever that is pulled (or pushed) a given amount is:
+
+1. **Clamp the nodes at the fixed end** (your node set `CN7`).  
+2. **Prescribe the displacement of the nodes at the free end** (your node set `LAST`).  
+
+Both are done with the `*BOUNDARY` keyword inside a **static** step.
+
+```abaqus
+*STEP
+*STATIC                     ! declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0
+
+** 2) Prescribe a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the 20 nodes on the clamped face (you already defined it).  
+* `LAST` – node set that contains the 8 nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – the magnitude of the prescribed translation (change to the value you need).  
+
+If you also want to prevent the free end from moving in X and Y, add two more lines:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When you really need an **initial displacement** (dynamic analysis)
+
+If the intention is to start a **dynamic** analysis with the beam already displaced (e.g., to study free vibration after a prescribed deflection), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` to give the initial field.
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+The numbers after the node‑set are the **actual displacement components** (in the model’s length unit). Abaqus does not compute them for you; you must decide the magnitude you want.
+
+---
+
+## 3.  Summary of the changes you need in your input file
+
+Replace the empty step block
+
+```abaqus
+*STEP
+*END STEP
+```
+
+with the appropriate step type and the needed displacement card.
+
+* For a **static** cantilever → use `*STATIC` and `*BOUNDARY` (as shown in section 1).  
+* For a **dynamic** analysis that starts with a displaced shape → use `*DYNAMIC,…` and `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` (as shown in section 2).
+
+With a proper step declaration the keywords become applicable, and the displacement you write in the input file will be the one the solver applies.
+A: **Why the two keywords give an error**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition **must be placed inside a defined step**.  
+If the step header does not contain a type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus automatically creates a **default static step**.  
+
+| Keyword | When it can be used |
+|---------|----------------------|
+|`*INITIAL CONDITIONS, TYPE=DISPLACEMENT`|Only in a **dynamic** step (implicit or explicit). It defines the *initial* displacement field **before** the dynamic analysis starts.|
+|`*BOUNDARY`|In a **static** (or quasi‑static) step, or in a dynamic step if you want a prescribed displacement that is part of the loading. It must be placed inside a step definition.|
+
+Because your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+no step type is declared, so Abaqus creates a **static** step. Consequently
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is rejected – it is not applicable to a static step.
+* `*BOUNDARY` is also rejected because there is no explicit step header (`*STATIC` or `*DYNAMIC`) preceding it.
+
+---
+
+## What you most likely want – a **static cantilever** with a prescribed end‑displacement
+
+The usual way to model a cantilever that is pulled (or pushed) a given amount is:
+
+1. **Clamp the nodes at the fixed end** (`CN7`).  
+2. **Prescribe the displacement of the nodes at the free end** (`LAST`).  
+
+Both are done with the `*BOUNDARY` keyword inside a **static** step.
+
+### Input‑file fragment
+
+```abaqus
+*STEP
+*STATIC                     ! <‑‑ declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0
+
+** 2) Prescribe a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the 20 nodes on the clamped face (you already defined it).  
+* `LAST` – node set that contains the 8 nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – the magnitude of the prescribed translation (change to the value you need).
+
+If you also want to prevent the free end from moving in X and Y, add two more lines:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## When you really need an **initial displacement** (dynamic analysis)
+
+If the intention is to start a **dynamic** analysis with the beam already displaced (e.g., to study free vibration after a prescribed deflection), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` to give the initial field.
+
+### Input‑file fragment for a dynamic analysis
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+* The numbers after the node‑set are the **actual displacement components** (in the model’s length unit). Abaqus does **not** compute them for you; you must decide the magnitude you want.
+
+---
+
+## Summary of the changes you need in your input file
+
+Replace the empty step block
+
+```abaqus
+*STEP
+*END STEP
+```
+
+with the appropriate step type and the needed displacement card.
+
+| Desired analysis | Step header | Keyword to use | Example |
+|------------------|------------|----------------|---------|
+| **Static cantilever** (most common) | `*STATIC` | `*BOUNDARY` | see *static* fragment above |
+| **Dynamic analysis that starts from a displaced shape** | `*DYNAMIC, IMPLICIT` (or `EXPLICIT`) | `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` | see *dynamic* fragment above |
+
+With a proper step declaration the keywords become applicable, and the displacement you write in the input file will be the one the solver applies.
+
+=== 2026-04-17 21:50:53 ===
+Q: **Why the two cards give an error**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition **must be placed inside a defined step**.  
+If the step header does not contain a type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus automatically creates a **default static step**.
+
+| Keyword | When it can be used |
+|---------|----------------------|
+|`*INITIAL CONDITIONS, TYPE=DISPLACEMENT`|Only in a **dynamic** step (implicit or explicit). It defines the *initial* displacement field before the dynamic analysis starts.|
+|`*BOUNDARY`|In a **static** (or quasi‑static) step, or in a dynamic step if the displacement is part of the loading. It must be placed inside a step definition.|
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```  
+
+so Abaqus creates a **static** step. Consequently  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is rejected – it is not applicable to a static step.  
+* `*BOUNDARY` is also rejected because there is no explicit step header (`*STATIC` or `*DYNAMIC`) preceding it.
+
+---
+
+## 1.  Most likely intention – a **static cantilever** with a prescribed end‑displacement  
+
+The usual way to model a cantilever that is pulled (or pushed) a given amount is:
+
+1. **Clamp the nodes at the fixed end** (node set `CN7`).  
+2. **Prescribe the displacement of the nodes at the free end** (node set `LAST`).  
+
+Both are done with the `*BOUNDARY` card inside a **static** step.
+
+### Minimal corrected fragment
+
+```abaqus
+*STEP
+*STATIC                     ! declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0
+
+** 2) Prescribe a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the 20 nodes on the clamped face (already defined).  
+* `LAST` – node set that contains the 8 nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – magnitude of the prescribed translation (change to the value you need).
+
+If you also want to keep the free end from moving in X and Y, add two more lines:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When you really need an **initial displacement** (dynamic analysis)
+
+If the goal is to start a **dynamic** analysis with the beam already displaced (e.g., to study free vibration after a prescribed deflection), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` to give the initial field.
+
+### Example – implicit dynamic step with an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+The numbers after the node‑set are the **actual displacement components** (in the model’s length unit). Abaqus does **not** compute them for you; you must decide the magnitude you want.
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+Replace the empty step block
+
+```abaqus
+*STEP
+*END STEP
+```  
+
+with the appropriate step type and the needed displacement card:
+
+* **Static cantilever (most common)** → `*STATIC` + `*BOUNDARY` (as shown in section 1).  
+* **Dynamic analysis that starts from a displaced shape** → `*DYNAMIC,…` + `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` (as shown in section 2).
+
+With a proper step declaration the keywords become applicable, and the displacement you write in the input file will be the one the solver applies.
+A: **Why the two cards give an error**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition **must be placed inside a defined step**.  
+If the step header does **not** contain a step type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus creates a **default static step**.  
+
+| Keyword | When it can be used |
+|---------|----------------------|
+|`*INITIAL CONDITIONS, TYPE=DISPLACEMENT`|Only in a **dynamic** step (implicit or explicit). It defines the *initial* displacement field **before** the dynamic analysis starts.|
+|`*BOUNDARY`|In a **static** (or quasi‑static) step, or in a dynamic step if the displacement is part of the loading. It must be inside a step definition.|
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus creates a **static** step. Consequently  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is rejected – it is not applicable to a static step.  
+* `*BOUNDARY` is also rejected because there is no explicit step header (`*STATIC` or `*DYNAMIC`) preceding it.
+
+---
+
+## 1.  Most likely intention – a **static cantilever** with a prescribed end‑displacement  
+
+If you simply want a beam that is clamped at one end and pulled (or pushed) a given amount at the other end, use a **static step** and prescribe the displacements with `*BOUNDARY`.
+
+### Minimal corrected fragment (static)
+
+```abaqus
+*STEP
+*STATIC                     ! <‑‑ declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0
+
+** 2) Prescribe a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the 20 nodes on the clamped face (already defined in the model).  
+* `LAST` – node set that contains the 8 nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – magnitude of the prescribed translation (change to the value you need).
+
+If you also want to prevent the free end from moving in X and Y, add two more lines:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When you really need an **initial displacement** (dynamic analysis)
+
+If the goal is to start a **dynamic** analysis with the beam already displaced (e.g., to study free vibration after a prescribed deflection), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` to give the initial field.
+
+### Example – implicit dynamic step with an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+* The numbers after the node‑set are the **actual displacement components** (in the model’s length unit).  
+* No additional `*BOUNDARY` cards are needed unless you also want to apply loads during the dynamic step.
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|--------------------------|
+|`*STEP`<br>`*END STEP`|No step type → default static step|Add a step type (`*STATIC` or `*DYNAMIC,…`)|
+|`*INITIAL CONDITIONS, TYPE=DISPLACEMENT`|Only allowed in a dynamic step|Use it **inside** a `*DYNAMIC` step, or replace it with `*BOUNDARY` if you are doing a static analysis|
+|`*BOUNDARY` (outside any step)|Abaqus expects the card inside a step|Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step|
+
+### Two “ready‑to‑run” versions
+
+#### a) Static cantilever (most common)
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+#### b) Dynamic analysis that starts from a displaced shape
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+With a proper step declaration the keywords become applicable, and the displacement you write in the input file will be the one the solver applies.
+
+=== 2026-04-17 21:51:30 ===
+Q: **Why the cards give an error**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition **must be placed inside a defined step**.  
+If the step header does not contain a step type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus automatically creates a **default static step**.  
+
+| Card | When it can be used |
+|------|----------------------|
+|`*INITIAL CONDITIONS, TYPE=DISPLACEMENT`|Only in a **dynamic** step (implicit or explicit). It defines the *initial* displacement field **before** the dynamic analysis starts.|
+|`*BOUNDARY`|In a **static** (or quasi‑static) step, or in a dynamic step if the displacement is part of the loading. It must be inside a step definition.|
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus creates a **static** step. Consequently  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is rejected – it is not applicable to a static step.  
+* `*BOUNDARY` is also rejected because there is no explicit step header (`*STATIC` or `*DYNAMIC`) preceding it.
+
+---
+
+## 1.  Most likely intention – a **static cantilever** with a prescribed end‑displacement  
+
+If you simply want a beam that is clamped at one end and pulled (or pushed) a given amount at the other end, use a **static step** and prescribe the displacements with `*BOUNDARY`.
+
+### Minimal corrected fragment (static)
+
+```abaqus
+*STEP
+*STATIC                     ! declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0
+
+** 2) Prescribe a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the 20 nodes on the clamped face (already defined).  
+* `LAST` – node set that contains the 8 nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – magnitude of the prescribed translation (change to the value you need).
+
+If you also want to keep the free end from moving in X and Y, add two more lines:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When you really need an **initial displacement** (dynamic analysis)
+
+If the goal is to start a **dynamic** analysis with the beam already displaced (e.g., to study free vibration after a prescribed deflection), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` to give the initial field.
+
+### Example – implicit dynamic step with an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+The numbers after the node‑set are the **actual displacement components** (in the model’s length unit). Abaqus does **not** compute them for you; you must decide the magnitude you want.
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+|`*STEP`<br>`*END STEP`|No step type → default static step|Add a step type (`*STATIC` or `*DYNAMIC,…`)|
+|`*INITIAL CONDITIONS, TYPE=DISPLACEMENT`|Only allowed in a dynamic step|Use it **inside** a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis|
+|`*BOUNDARY` (outside any step)|Abaqus expects the card inside a step|Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step|
+
+### Two ready‑to‑run versions
+
+**a) Static cantilever (most common)**  
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+**b) Dynamic analysis that starts from a displaced shape**  
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+With a proper step declaration the cards become applicable, and the displacement you write in the input file will be the one the solver applies.
+A: **Why the cards are rejected**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition **must be placed inside a defined step**.  
+If the step header does **not** contain a step type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit).  
+* `*BOUNDARY` may be used in a static step **or** in a dynamic step, but it **has to be inside a step definition**.
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus builds a static step automatically. Consequently the two cards you added are illegal for that step and the parser throws an error.
+
+---
+
+## 1.  What you probably want – a **static cantilever** with a prescribed end‑displacement  
+
+If the analysis is meant to be a simple static pull‑out of a beam, use a **static step** and prescribe the displacements with `*BOUNDARY`.
+
+### Minimal corrected fragment (static)
+
+```abaqus
+*STEP
+*STATIC                     ! <‑‑ declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0              ! node set CN7, DOFs 1‑3, value 0.0
+
+** 2) Impose a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5             ! node set LAST, DOF 3 only, value 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the 20 nodes on the clamped face (already defined in the mesh section).  
+* `LAST` – node set that contains the 8 nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – magnitude of the prescribed translation (change to the value you need).
+
+If you also want to prevent the free end from moving in X and Y, add two more lines inside the same step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When you really need an **initial displacement** (dynamic analysis)
+
+If the purpose is to start a **dynamic** analysis from a pre‑deflected shape (e.g., free‑vibration after a prescribed bend), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` **inside** that step.
+
+### Example – implicit dynamic step with an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+* The numbers after the node‑set are the **actual displacement components** (in the model’s length unit).  
+* No additional `*BOUNDARY` cards are needed unless you also want to apply loads during the dynamic step.
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+| `*STEP`<br>`*END STEP` | No step type → default static step | Add a step type (`*STATIC` or `*DYNAMIC,…`) |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` | Allowed only in a dynamic step | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis |
+| `*BOUNDARY` (outside any step) | Abaqus expects the card inside a step | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step |
+
+### Two ready‑to‑run versions
+
+#### a) Static cantilever (most common)
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+#### b) Dynamic analysis that starts from a displaced shape
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate version (or adapt the magnitudes) into your input file, run the job, and the error messages will disappear.
+
+=== 2026-04-17 21:52:08 ===
+Q: **Why the cards are rejected**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition has to be **inside a defined step**.  
+If the step header does **not** contain a step type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus automatically creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit).  
+* `*BOUNDARY` may be used in a static step **or** in a dynamic step, but it **must be placed inside a step definition**.
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus builds a static step automatically. Consequently the two cards you added are illegal for that step and the parser throws an error.
+
+---
+
+## 1.  What you probably want – a **static cantilever** with a prescribed end‑displacement  
+
+If the analysis is meant to be a simple static pull‑out of a beam, use a **static step** and prescribe the displacements with `*BOUNDARY`.
+
+### Minimal corrected fragment (static)
+
+```abaqus
+*STEP
+*STATIC                     ! declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0              ! node set CN7, DOFs 1‑3, value 0.0
+
+** 2) Impose a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5             ! node set LAST, DOF 3 only, value 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the 20 nodes on the clamped face (already defined in the mesh).  
+* `LAST` – node set that contains the 8 nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – magnitude of the prescribed translation (change to the value you need).
+
+If you also want to keep the free end from moving in X and Y, add two more lines inside the same step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When you really need an **initial displacement** (dynamic analysis)
+
+If the purpose is to start a **dynamic** analysis from a pre‑deflected shape (e.g., free‑vibration after a prescribed bend), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` **inside** that step.
+
+### Example – implicit dynamic step with an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+The numbers after the node‑set are the **actual displacement components** (in the model’s length unit). No additional `*BOUNDARY` cards are needed unless you also want to apply loads during the dynamic step.
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+| `*STEP`<br>`*END STEP` | No step type → default static step | Add a step type (`*STATIC` or `*DYNAMIC,…`) |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` | Allowed only in a dynamic step | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis |
+| `*BOUNDARY` (outside any step) | Abaqus expects the card inside a step | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step |
+
+### Two ready‑to‑run versions
+
+**a) Static cantilever (most common)**  
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+**b) Dynamic analysis that starts from a displaced shape**  
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate version (or adapt the magnitudes) into your input file, run the job, and the error messages will disappear.
+A: **Why the cards are rejected**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition **must be placed inside a step definition**.  
+If the step header does **not** contain a step type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit).  
+* `*BOUNDARY` may be used in a static or a dynamic step, but it **has to be inside the step block**.
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus builds a default static step. The two cards you added are therefore illegal for that step and the parser throws an error.
+
+---
+
+## 1.  What you probably want – a **static cantilever** with a prescribed end‑displacement  
+
+If the analysis is meant to be a simple static pull‑out of a beam, use a **static step** and prescribe the displacements with `*BOUNDARY`.
+
+### Minimal corrected fragment (static)
+
+```abaqus
+*STEP
+*STATIC                         ! declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! node set CN7, DOFs 1‑3, value 0.0
+
+** 2) Impose a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5                 ! node set LAST, DOF 3 only, value 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the nodes on the clamped face (already defined in the mesh).  
+* `LAST` – node set that contains the nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – magnitude of the prescribed translation (change to the value you need).
+
+If you also want to keep the free end from moving in X and Y, add two more lines inside the same step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When you really need an **initial displacement** (dynamic analysis)
+
+If the purpose is to start a **dynamic** analysis from a pre‑deflected shape (e.g., free‑vibration after a prescribed bend), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` **inside** that step.
+
+### Example – implicit dynamic step with an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+The numbers after the node‑set are the **actual displacement components** (in the model’s length unit). No additional `*BOUNDARY` cards are needed unless you also want to apply loads during the dynamic step.
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+| `*STEP`<br>`*END STEP` | No step type → default static step | Add a step type (`*STATIC` or `*DYNAMIC,…`) |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` | Allowed only in a dynamic step | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis |
+| `*BOUNDARY` (outside any step) | Abaqus expects the card inside a step | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step |
+
+### Two ready‑to‑run versions
+
+**a) Static cantilever (most common)**  
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+**b) Dynamic analysis that starts from a displaced shape**  
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate version (or adapt the magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+
+=== 2026-04-17 21:52:44 ===
+Q: **Why the cards are rejected**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition **must be placed inside a step definition**.  
+If the step header does **not** contain a step type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus automatically creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit).  
+* `*BOUNDARY` may be used in a static step **or** in a dynamic step, but it **has to be inside the step block**.
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus builds a static step automatically. Consequently the two cards you added are illegal for that step and the parser throws an error.
+
+---
+
+## 1.  What you probably want – a **static cantilever** with a prescribed end‑displacement  
+
+If the analysis is meant to be a simple static pull‑out of a beam, use a **static step** and prescribe the displacements with `*BOUNDARY`.
+
+### Minimal corrected fragment (static)
+
+```abaqus
+*STEP
+*STATIC                         ! declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! node set CN7, DOFs 1‑3, value 0.0
+
+** 2) Impose a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5                 ! node set LAST, DOF 3 only, value 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the nodes on the clamped face (already defined in the mesh).  
+* `LAST` – node set that contains the nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – magnitude of the prescribed translation (change to the value you need).
+
+If you also want to keep the free end from moving in X and Y, add two more lines inside the same step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When you really need an **initial displacement** (dynamic analysis)
+
+If the purpose is to start a **dynamic** analysis from a pre‑deflected shape (e.g., free‑vibration after a prescribed bend), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` **inside** that step.
+
+### Example – implicit dynamic step with an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+The numbers after the node‑set are the **actual displacement components** (in the model’s length unit). No additional `*BOUNDARY` cards are needed unless you also want to apply loads during the dynamic step.
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+| `*STEP`<br>`*END STEP` | No step type → default static step | Add a step type (`*STATIC` or `*DYNAMIC,…`) |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` | Allowed only in a dynamic step | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis |
+| `*BOUNDARY` (outside any step) | Abaqus expects the card inside a step | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step |
+
+### Two ready‑to‑run versions
+
+**a) Static cantilever (most common)**  
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+**b) Dynamic analysis that starts from a displaced shape**  
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate version (or adapt the magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+A: **Why the cards are rejected**
+
+In an Abaqus *.inp* file **every** load, boundary‑condition or initial‑condition **must be placed inside a step definition**.  
+If the step header does **not** contain a step type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit).  
+* `*BOUNDARY` may be used in a static step **or** in a dynamic step, but it **has to be inside the step block**.
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus builds a static step automatically. Consequently the two cards you added are illegal for that step and the parser throws the “card rejected” error.
+
+---
+
+## 1.  What you probably want – a **static cantilever** with a prescribed end‑displacement  
+
+If the analysis is meant to be a simple static pull‑out of a beam, use a **static step** and prescribe the displacements with `*BOUNDARY`.
+
+### Minimal corrected fragment (static)
+
+```abaqus
+*STEP
+*STATIC                         ! declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! node set CN7, DOFs 1‑3, value 0.0
+
+** 2) Impose a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5                 ! node set LAST, DOF 3 only, value 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the nodes on the clamped face (already defined in the mesh).  
+* `LAST` – node set that contains the nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – magnitude of the prescribed translation (change to the value you need).
+
+If you also want to keep the free end from moving in X and Y, add two more lines inside the same step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When you really need an **initial displacement** (dynamic analysis)
+
+If the purpose is to start a **dynamic** analysis from a pre‑deflected shape (e.g., free‑vibration after a prescribed bend), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` **inside** that step.
+
+### Example – implicit dynamic step with an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+The numbers after the node‑set are the **actual displacement components** (in the model’s length unit). No additional `*BOUNDARY` cards are needed unless you also want to apply loads during the dynamic step.
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+| `*STEP`<br>`*END STEP` | No step type → default static step | Add a step type (`*STATIC` or `*DYNAMIC,…`) |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` | Allowed only in a dynamic step | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis |
+| `*BOUNDARY` (outside any step) | Abaqus expects the card inside a step | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step |
+
+### Two ready‑to‑run versions
+
+**a) Static cantilever (most common)**  
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+**b) Dynamic analysis that starts from a displaced shape**  
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate version (or adapt the magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+
+=== 2026-04-17 21:53:19 ===
+Q: **Why the cards are rejected**
+
+In an Abaqus *.inp* file **every** load, boundary‑condition or initial‑condition **must be placed inside a step definition**.  
+If the step header does **not** contain a step type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus automatically creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit).  
+* `*BOUNDARY` may be used in a static step **or** in a dynamic step, but it **has to be inside the step block**.
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus builds a default static step. The two cards you added are therefore illegal for that step and the parser reports **“card rejected”**.
+
+---
+
+## 1.  Static cantilever with a prescribed end‑displacement  
+
+If you simply want a static pull‑out of the beam, use a **static step** and prescribe the displacements with `*BOUNDARY`.
+
+### Minimal corrected fragment (static)
+
+```abaqus
+*STEP
+*STATIC                         ! declare the step type
+** 1) Clamp the fixed end (all three translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! node set CN7, DOFs 1‑3, value 0.0
+
+** 2) Impose a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5                 ! node set LAST, DOF 3 only, value 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the nodes on the clamped face (already defined in the mesh).  
+* `LAST` – node set that contains the nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+* `0.0` – zero displacement (clamping).  
+* `0.5` – magnitude of the prescribed translation (change to the value you need).
+
+If you also want to keep the free end from moving in X and Y, add two more lines inside the same step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  Initial displacement for a dynamic analysis  
+
+If you need the beam to start the analysis from a pre‑deflected shape (e.g., free‑vibration after a prescribed bend), you must:
+
+1. Declare a **dynamic step** (`*DYNAMIC, IMPLICIT` or `*DYNAMIC, EXPLICIT`).  
+2. Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` **inside** that step.
+
+### Example – implicit dynamic step with an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+The numbers after the node‑set are the **actual displacement components** (in the model’s length unit). No additional `*BOUNDARY` cards are needed unless you also want to apply loads during the dynamic step.
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+| `*STEP`<br>`*END STEP` | No step type → default static step | Add a step type (`*STATIC` or `*DYNAMIC,…`) |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` | Allowed only in a dynamic step | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis |
+| `*BOUNDARY` (outside any step) | Abaqus expects the card inside a step | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step |
+
+### Two ready‑to‑run versions
+
+**a) Static cantilever (most common)**  
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+**b) Dynamic analysis that starts from a displaced shape**  
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate version (or adapt the magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+A: **Why Abaqus rejects the two cards**
+
+In an Abaqus *.inp* file **every** load, boundary‑condition or initial‑condition **must be placed inside a step definition**.  
+If the step header does **not** contain a step type (`*STATIC`, `*DYNAMIC`, `*HEAT TRANSFER`, …) Abaqus creates a **default static step**.
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit).  
+* `*BOUNDARY` may be used in a static step **or** in a dynamic step, but it **has to be inside the step block**.
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus builds a default static step. The two cards you added are therefore illegal for that step and the parser reports **“card rejected”**.
+
+---
+
+## 1.  Static cantilever – prescribe the end displacement with *BOUNDARY*
+
+If you only need a **static pull‑out** (or a static deflection) use a static step and put the `*BOUNDARY` cards inside it.
+
+```abaqus
+*STEP
+*STATIC                         ! declare the step type
+** 1) Clamp the fixed end (all translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! node set CN7, DOFs 1‑3, value 0.0
+
+** 2) Impose a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5                 ! node set LAST, DOF 3 only, value 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the nodes on the clamped face (already defined in the mesh).  
+* `LAST` – node set that contains the nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+
+If you also want the free end to stay fixed in X and Y, add two more lines inside the same step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  Dynamic analysis – start from a pre‑deflected shape
+
+If the beam must **start the analysis from an initial displacement** (e.g., free‑vibration after a prescribed bend) you need a **dynamic step** and the `*INITIAL CONDITIONS` card must be placed inside that step.
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+* No `*BOUNDARY` cards are required unless you also want to apply loads during the dynamic step.  
+* The numbers after the node‑set are the **actual displacement components** (in the model’s length unit).
+
+---
+
+## 3.  Quick checklist – what to change in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+| `*STEP`<br>`*END STEP` | No step type → default static step | Add a step type (`*STATIC` or `*DYNAMIC,…`) |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` | Allowed only in a dynamic step | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis |
+| `*BOUNDARY` (outside any step) | Abaqus expects the card inside a step | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step |
+
+---
+
+## 4.  Ready‑to‑run fragments
+
+### a) Static cantilever (most common)
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+### b) Dynamic analysis that starts from a displaced shape
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate version (or adapt the magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+
+=== 2026-04-17 21:53:54 ===
+Q: **Why the two cards are rejected**
+
+In an Abaqus *.inp* file **every** load, boundary‑condition or initial‑condition **has to be inside a step definition**.  
+If a step is opened without a step type (`*STATIC`, `*DYNAMIC`, …) Abaqus automatically creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only permitted in a dynamic step** (implicit or explicit).  
+* `*BOUNDARY` can be used in a static or a dynamic step, but it **must be placed inside the step block**.
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus creates a default static step. Consequently the two cards you added are illegal for that step and the parser reports **“card rejected”**.
+
+---
+
+## 1.  What you probably need – a static cantilever
+
+If you only want a **static pull‑out** (or a static deflection) you should use a **static step** and put the `*BOUNDARY` cards inside it.
+
+```abaqus
+*STEP
+*STATIC                         ! declare a static step
+** 1) Clamp the fixed end (all translational DOFs = 0)
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! node set CN7, DOFs 1‑3, value 0.0
+
+** 2) Impose a uniform Z‑displacement of 0.5 mm at the free end
+*BOUNDARY
+LAST, 3, 3, 0.5                 ! node set LAST, DOF 3 only, value 0.5
+*END STEP
+```
+
+* `CN7` – node set that contains the nodes on the clamped face (already defined in the mesh).  
+* `LAST` – node set that contains the nodes on the free face (also already defined).  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+
+If you also want the free end to stay fixed in X and Y, add two more lines inside the same step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+## 2.  When an initial displacement is required – dynamic analysis
+
+If the beam must **start the analysis from an initial displacement** (e.g., free‑vibration after a prescribed bend) you need a **dynamic step** and the `*INITIAL CONDITIONS` card must be placed inside that step.
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as required)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+No `*BOUNDARY` cards are required unless you also want to apply loads during the dynamic step. The numbers after the node‑set are the **actual displacement components** (in the model’s length unit).
+
+---
+
+## 3.  Quick checklist – what to modify in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+| `*STEP`<br>`*END STEP` | No step type → default static step | Add a step type (`*STATIC` or `*DYNAMIC,…`) |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` | Allowed only in a dynamic step | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis |
+| `*BOUNDARY` (outside any step) | Abaqus expects the card inside a step | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step |
+
+---
+
+## 4.  Ready‑to‑run fragments
+
+### a) Static cantilever (most common)
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+### b) Dynamic analysis that starts from a displaced shape
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate fragment (or adjust the displacement magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+A: **Why the two cards are rejected**
+
+In an Abaqus *.inp* file **every** load, boundary‑condition or initial‑condition **must be placed inside a step definition**.  
+If a step is opened without a step type (`*STATIC`, `*DYNAMIC`, …) Abaqus creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit).  
+* `*BOUNDARY` may be used in a static or a dynamic step, but it **has to be inside the step block**.
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus creates a default static step. Because the two cards are **outside** any step (and the `*INITIAL CONDITIONS` card is also illegal for a static step), the parser reports **“card rejected”**.
+
+---
+
+## How to fix the input file
+
+### 1.  Decide what you really want to do  
+
+| Goal | Recommended step type | How to apply the condition |
+|------|----------------------|----------------------------|
+| **Static pull‑out / static deflection** | `*STATIC` | Use `*BOUNDARY` to prescribe the displacement. |
+| **Start a dynamic analysis from a prescribed shape** (e.g., free‑vibration after a bend) | `*DYNAMIC, IMPLICIT` (or `*DYNAMIC, EXPLICIT`) | Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT`. |
+
+### 2.  Put the cards inside the appropriate step
+
+#### a) Static cantilever (most common)
+
+```abaqus
+*STEP
+*STATIC                         ! declare a static step
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! clamp the fixed face (DOFs 1‑3 = 0)
+LAST, 3, 3, 0.5                 ! move the free face 0.5 mm in Z
+*END STEP
+```
+
+* `CN7` – node set that contains the nodes on the clamped face (already defined in the mesh).  
+* `LAST` – node set that contains the nodes on the free face.  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+
+If you also want the free end to stay fixed in X and Y, add:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+inside the same `*STATIC` step.
+
+#### b) Dynamic analysis that starts from an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as needed)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+No `*BOUNDARY` cards are required unless you also want to apply loads during the dynamic step. The numbers after the node‑set are the **actual displacement components** (in the model’s length unit).
+
+### 3.  Quick checklist – what to modify in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+| `*STEP`<br>`*END STEP` | No step type → default static step | Add a step type (`*STATIC` or `*DYNAMIC,…`). |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` (outside any step) | Allowed only in a dynamic step and must be inside a step block | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis. |
+| `*BOUNDARY` (outside any step) | Abaqus expects the card inside a step | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step. |
+
+---
+
+## Ready‑to‑run fragments
+
+### **Static cantilever (most common)**
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+### **Dynamic analysis that starts from a displaced shape**
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate fragment (or adjust the displacement magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+
+=== 2026-04-17 21:54:28 ===
+Q: **Why the two cards are rejected**
+
+In an Abaqus *.inp* file **every** load, boundary‑condition or initial‑condition **must be placed inside a step definition**.  
+When a step is opened without a step type (`*STATIC`, `*DYNAMIC`, …) Abaqus automatically creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit).  
+* `*BOUNDARY` can be used in a static or a dynamic step, but it **must be inside the step block**.
+
+Your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+so Abaqus creates a default static step. Because the two cards are outside any step (and the `*INITIAL CONDITIONS` card is illegal for a static step), the parser reports **“card rejected”**.
+
+---
+
+## How to fix the input file
+
+### 1. Choose the analysis type
+
+| What you want to do | Step type to use | How to apply the condition |
+|---------------------|------------------|----------------------------|
+| **Static pull‑out / static deflection** | `*STATIC` | Use `*BOUNDARY` to prescribe the displacement. |
+| **Start a dynamic analysis from a prescribed shape** (e.g., free‑vibration after a bend) | `*DYNAMIC, IMPLICIT` (or `*DYNAMIC, EXPLICIT`) | Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT`. |
+
+### 2. Put the cards inside the appropriate step
+
+#### a) Static cantilever (most common)
+
+```abaqus
+*STEP
+*STATIC                         ! declare a static step
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! clamp the fixed face (DOFs 1‑3 = 0)
+LAST, 3, 3, 0.5                 ! move the free face 0.5 mm in Z
+*END STEP
+```
+
+* `CN7` – node set that contains the nodes on the clamped face (already defined in the mesh).  
+* `LAST` – node set that contains the nodes on the free face.  
+* `1,3` – apply the value to DOFs 1, 2 and 3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+
+If you also want the free end to stay fixed in X and Y, add inside the same `*STATIC` step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+#### b) Dynamic analysis that starts from an initial displacement
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as needed)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+No `*BOUNDARY` cards are required unless you also want to apply loads during the dynamic step. The numbers after the node‑set are the **actual displacement components** (in the model’s length unit).
+
+### 3. Quick checklist – what to modify in your original file
+
+| What you have | Why it fails | What to replace it with |
+|---------------|--------------|------------------------|
+| `*STEP`<br>`*END STEP` | No step type → default static step | Add a step type (`*STATIC` or `*DYNAMIC,…`). |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` (outside any step) | Allowed only in a dynamic step and must be inside a step block | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis. |
+| `*BOUNDARY` (outside any step) | Abaqus expects the card inside a step | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step. |
+
+---
+
+## Ready‑to‑run fragments
+
+### **Static cantilever (most common)**
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+### **Dynamic analysis that starts from a displaced shape**
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate fragment (or adjust the displacement magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+A: **Why the two cards are rejected**
+
+In an Abaqus *.inp* file **every** load, boundary‑condition or initial‑condition **must be placed inside a step definition**.  
+If a `*STEP` block is opened without specifying a step type (`*STATIC`, `*DYNAMIC`, …) Abaqus creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit). It cannot appear in a static step and it must be inside the step block.  
+* `*BOUNDARY` can be used in a static or a dynamic step, but it **must also be inside the step block**.
+
+Because your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+Abaqus creates a default static step. The two cards are therefore **outside any step** (and the `*INITIAL CONDITIONS` card is illegal for a static step), so the parser reports *“card rejected”*.
+
+---
+
+## How to fix the input file
+
+### 1. Decide what kind of analysis you really need  
+
+| Desired analysis                              | Step type to use                | How to apply the condition                              |
+|-----------------------------------------------|---------------------------------|----------------------------------------------------------|
+| **Static pull‑out / static deflection**       | `*STATIC`                       | Use `*BOUNDARY` to prescribe the displacement.          |
+| **Dynamic analysis that starts from a shape**| `*DYNAMIC, IMPLICIT` (or EXPLICIT) | Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT`.           |
+
+### 2. Put the cards **inside** the appropriate step
+
+Below are two ready‑to‑run fragments. Choose the one that matches the physics you want to simulate and replace the node‑set names (`CN7`, `LAST`) with the sets you have defined in the mesh.
+
+---
+
+#### a) **Static cantilever (most common)**  
+
+```abaqus
+*STEP
+*STATIC                         ! static analysis
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! clamped face: X,Y,Z = 0
+LAST, 3, 3, 0.5                 ! free face: 0.5 mm displacement in Z
+*END STEP
+```
+
+* `CN7` – node set that contains the nodes on the fixed face.  
+* `LAST` – node set that contains the nodes on the free (pulled) face.  
+* `1,3` – apply the value to DOFs 1‑3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+
+If you also want the free end to stay fixed in X and Y, add two more `*BOUNDARY` lines inside the same `*STATIC` step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+#### b) **Dynamic analysis that starts from an initial displacement**  
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as needed)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+* No `*BOUNDARY` cards are required unless you also want to apply loads during the dynamic step.  
+* The numbers after the node‑set are the **actual displacement components** (in the model’s length unit).
+
+---
+
+### 3. Quick checklist – what to modify in your original file
+
+| What you have                               | Why it fails                                            | What to replace it with                                   |
+|---------------------------------------------|----------------------------------------------------------|-----------------------------------------------------------|
+| `*STEP`<br>`*END STEP`                      | No step type → default static step                       | Add a step type (`*STATIC` or `*DYNAMIC,…`).             |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` (outside any step) | Allowed only in a dynamic step **and** must be inside a step block | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis. |
+| `*BOUNDARY` (outside any step)              | Abaqus expects the card inside a step                    | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step. |
+
+---
+
+## Final recommended input fragment (static case)
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0          ! clamp the fixed face
+LAST, 3, 3, 0.5         ! pull the free face 0.5 mm in Z
+*END STEP
+```
+
+*or* (dynamic case)
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate fragment (or adjust the displacement magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+
+=== 2026-04-17 21:55:04 ===
+Q: **Why the cards are rejected**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition has to be **inside a step definition**.  
+When a `*STEP` block is opened without a step type (`*STATIC`, `*DYNAMIC`, …) Abaqus automatically creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only allowed in a dynamic step** (implicit or explicit) and it must be placed **inside** the step block.  
+* `*BOUNDARY` may be used in a static or a dynamic step, but it also **must be inside** the step block.
+
+Because your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+Abaqus creates a default static step, and the two cards are therefore outside any step (and the `*INITIAL CONDITIONS` card is illegal for a static step). Hence the parser reports **“card rejected”**.
+
+---
+
+## How to fix the input file
+
+### 1. Choose the analysis type
+
+| Desired analysis                              | Step type to use                | How to apply the condition                              |
+|-----------------------------------------------|--------------------------------|----------------------------------------------------------|
+| **Static pull‑out / static deflection**       | `*STATIC`                      | Use `*BOUNDARY` to prescribe the displacement.          |
+| **Dynamic analysis that starts from a shape**| `*DYNAMIC, IMPLICIT` (or EXPLICIT) | Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT`.           |
+
+### 2. Put the cards inside the appropriate step
+
+Below are two ready‑to‑run fragments. Use the one that matches the physics you want to simulate and replace the node‑set names (`CN7`, `LAST`) with the sets you have defined in the mesh.
+
+---
+
+#### a) **Static cantilever (most common)**  
+
+```abaqus
+*STEP
+*STATIC                         ! static analysis
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! clamped face: X,Y,Z = 0
+LAST, 3, 3, 0.5                 ! free face: 0.5 mm displacement in Z
+*END STEP
+```
+
+* `CN7` – node set that contains the nodes on the fixed face.  
+* `LAST` – node set that contains the nodes on the pulled face.  
+* `1,3` – apply the value to DOFs 1‑3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+
+If you also want the free end to stay fixed in X and Y, add inside the same `*STATIC` step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+#### b) **Dynamic analysis that starts from an initial displacement**  
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as needed)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+No `*BOUNDARY` cards are required unless you also want to apply loads during the dynamic step. The numbers after the node‑set are the **actual displacement components** (in the model’s length unit).
+
+---
+
+### 3. Quick checklist – what to modify in your original file
+
+| What you have                               | Why it fails                                            | What to replace it with                                   |
+|--------------------------------------------|----------------------------------------------------------|-----------------------------------------------------------|
+| `*STEP`<br>`*END STEP`                     | No step type → default static step                       | Add a step type (`*STATIC` or `*DYNAMIC,…`).             |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` (outside any step) | Allowed only in a dynamic step **and** must be inside a step block | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis. |
+| `*BOUNDARY` (outside any step)             | Abaqus expects the card inside a step                    | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step. |
+
+---
+
+## Final recommended input fragment (static case)
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0          ! clamp the fixed face
+LAST, 3, 3, 0.5         ! pull the free face 0.5 mm in Z
+*END STEP
+```
+
+*or* (dynamic case)
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate fragment (or adjust the displacement magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+A: **Why the cards are rejected**
+
+In an Abaqus *.inp* file every load, boundary‑condition or initial‑condition **must be placed inside a step definition**.  
+When a `*STEP` block is opened without a step type (`*STATIC`, `*DYNAMIC`, …) Abaqus creates a **default static step**.  
+
+* `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` is **only legal in a dynamic step** (implicit or explicit) and it has to be inside that step.  
+* `*BOUNDARY` can be used in a static or a dynamic step, but it also **must be inside** the step block.
+
+Because your file contains only
+
+```abaqus
+*STEP
+*END STEP
+```
+
+Abaqus creates a default static step, and the two cards are therefore **outside any step** (and the `*INITIAL CONDITIONS` card is illegal for a static step). The parser therefore reports **“card rejected”**.
+
+---
+
+## How to fix the input file
+
+### 1. Decide which type of analysis you need  
+
+| Desired physics                              | Step type to use                | How to prescribe the displacement |
+|----------------------------------------------|--------------------------------|------------------------------------|
+| **Static pull‑out / static deflection**      | `*STATIC`                      | Use `*BOUNDARY` cards.             |
+| **Dynamic analysis that starts from a shape**| `*DYNAMIC, IMPLICIT` (or `EXPLICIT`) | Use `*INITIAL CONDITIONS, TYPE=DISPLACEMENT`. |
+
+### 2. Put the cards **inside** the appropriate step
+
+Below are two ready‑to‑run fragments. Choose the one that matches the physics you want to simulate and replace the node‑set names (`CN7`, `LAST`) with the sets you have defined in the mesh.
+
+---
+
+#### a) **Static analysis (most common for a cantilever‑type pull‑out)**  
+
+```abaqus
+*STEP
+*STATIC                         ! static analysis
+*BOUNDARY
+CN7, 1, 3, 0.0                  ! fixed face: X, Y, Z = 0
+LAST, 3, 3, 0.5                 ! free face: 0.5 mm displacement in Z
+*END STEP
+```
+
+*Explanation*  
+
+* `CN7` – node set that contains the nodes on the clamped face.  
+* `LAST` – node set that contains the nodes on the pulled face.  
+* `1,3` – apply the value to DOFs 1‑3 (X, Y, Z).  
+* `3,3` – apply the value only to the Z‑direction (DOF 3).  
+
+If you also want the free end to stay fixed in X and Y, add two more `*BOUNDARY` lines inside the same step:
+
+```abaqus
+LAST, 1, 1, 0.0
+LAST, 2, 2, 0.0
+```
+
+---
+
+#### b) **Dynamic analysis that starts from an initial displacement**  
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0   ! total analysis time = 1 s (adjust as needed)
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0                 ! fixed end stays at the origin
+LAST, 3, 3, 0.5                ! free end is initially displaced 0.5 mm in Z
+*END STEP
+```
+
+*Explanation*  
+
+* `*DYNAMIC, IMPLICIT` creates a dynamic (implicit) step; you can also use `*DYNAMIC, EXPLICIT` if you prefer an explicit solver.  
+* The `*INITIAL CONDITIONS` card is now inside a dynamic step, which is allowed.  
+* No `*BOUNDARY` cards are required unless you want to apply additional loads during the dynamic step.
+
+---
+
+### 3. Quick checklist – what to modify in your original file
+
+| What you have                               | Why it fails                                            | What to replace it with                                   |
+|---------------------------------------------|----------------------------------------------------------|-----------------------------------------------------------|
+| `*STEP`<br>`*END STEP`                     | No step type → default static step; cards are outside any step | Add a step type (`*STATIC` or `*DYNAMIC,…`).             |
+| `*INITIAL CONDITIONS, TYPE=DISPLACEMENT` (outside any step) | Allowed only in a dynamic step **and** must be inside a step block | Move it inside a `*DYNAMIC` step, or replace it with `*BOUNDARY` for a static analysis. |
+| `*BOUNDARY` (outside any step)             | Abaqus expects the card inside a step                    | Place the `*BOUNDARY` lines inside a `*STATIC` (or `*DYNAMIC`) step. |
+
+---
+
+## Final recommended input fragment (static case)
+
+```abaqus
+*STEP
+*STATIC
+*BOUNDARY
+CN7, 1, 3, 0.0          ! clamp the fixed face
+LAST, 3, 3, 0.5         ! pull the free face 0.5 mm in Z
+*END STEP
+```
+
+*or* (dynamic case)
+
+```abaqus
+*STEP
+*DYNAMIC, IMPLICIT, TIME=1.0
+*INITIAL CONDITIONS, TYPE=DISPLACEMENT
+CN7, 1, 3, 0.0
+LAST, 3, 3, 0.5
+*END STEP
+```
+
+Insert the appropriate fragment (or adjust the displacement magnitudes) into your input file, run the job, and the “card rejected” errors will disappear.
+

@@ -1,0 +1,130 @@
+Implement a Python function named compute_freysoldt_properties() that takes no required input arguments.
+Assume a base directory path variable named file_path is defined inside the function and set it to the current working directory via os.getcwd().
+Assume the defect dataset root directory is exactly os.path.join(file_path, "Mg_Ga").
+Recursively scan all subdirectories under the defect dataset root directory to discover VASP outputs.
+Treat any directory containing a vasprun.xml or vasprun.xml.gz file as a candidate calculation directory.
+Prefer gzipped files when both gzipped and plain versions exist.
+For each candidate calculation directory, also look for LOCPOT or LOCPOT.gz in the same directory.
+Select one defect-state directory to evaluate by choosing the first directory (sorted lexicographically by full path) that contains both a vasprun.xml(.gz) and a LOCPOT(.gz).
+If no directory contains both required files, raise a FileNotFoundError describing what was missing and where the scan was performed.
+Load the VASP run using pymatgen.io.vasp.outputs.Vasprun with parse_potcar_file=False.
+Load the local potential using pymatgen.io.vasp.outputs.Locpot.from_file.
+Assume the defect charge state q is -1.
+Assume an isotropic dielectric constant epsilon of 10.0 and represent it as a 3x3 diagonal tensor [[10.0,0,0],[0,10.0,0],[0,0,10.0]].
+Compute the Freysoldt correction energy using pymatgen.analysis.defects.corrections.freysoldt.get_freysoldt_correction with the loaded Locpot, the structure from the Vasprun final_structure, the charge state q, and the dielectric tensor.
+Extract the correction energy as a float in eV from the returned correction object or dictionary, using the key "energy" if a dict is returned, otherwise using an attribute named energy if present.
+If the computed energy is not directly accessible, raise a RuntimeError explaining the unexpected return type and its available fields.
+Return a dictionary with exactly one key "freysoldt_correction_energy" mapped to the computed float value.
+Include all necessary imports, including os, glob, numpy as np, Vasprun, Locpot, and get_freysoldt_correction.
+Include a complete docstring that states there are no input parameters, describes the directory assumptions, lists the assumed q and dielectric tensor, and describes the returned dictionary schema and units.
+
+```python
+def compute_freysoldt_properties():
+    """
+    Compute defect correction properties for the Mg_Ga dataset using Pymatgen.
+
+    Parameters
+    ----------
+    None
+        This function takes no required input arguments.
+
+    Data/Filesystem Assumptions
+    ---------------------------
+    - A base directory named `file_path` is assumed to be the current working directory.
+    - The Mg_Ga dataset directory is assumed to exist at: <file_path>/Mg_Ga
+    - The function recursively scans subfolders under <file_path>/Mg_Ga to find a defect-state
+      calculation folder containing:
+        - vasprun.xml or vasprun.xml.gz
+        - LOCPOT or LOCPOT.gz
+    - The first matching folder (lexicographically sorted by full path) is used.
+
+    Physical Assumptions
+    --------------------
+    - Defect charge state: q = -1
+    - Dielectric constant: isotropic epsilon = 10.0, represented as a 3x3 diagonal tensor.
+
+    Returns
+    -------
+    dict
+        Dictionary with keys:
+        - "freysoldt_correction_energy" (float): Freysoldt correction energy in eV.
+    """
+    import os
+    import numpy as np
+
+    from pymatgen.io.vasp.outputs import Vasprun, Locpot
+    from pymatgen.analysis.defects.corrections.freysoldt import get_freysoldt_correction
+
+    # Base path assumption (best practice default: current working directory)
+    file_path = os.getcwd()
+    mg_ga_root = os.path.join(file_path, "Mg_Ga")
+
+    if not os.path.isdir(mg_ga_root):
+        raise FileNotFoundError(
+            f"Expected Mg_Ga directory at '{mg_ga_root}', but it does not exist."
+        )
+
+    # Recursively find candidate directories containing vasprun and LOCPOT
+    candidate_dirs = []
+    for root, dirs, files in os.walk(mg_ga_root):
+        files_set = set(files)
+
+        # Prefer gzipped if present
+        vasprun_path = None
+        if "vasprun.xml.gz" in files_set:
+            vasprun_path = os.path.join(root, "vasprun.xml.gz")
+        elif "vasprun.xml" in files_set:
+            vasprun_path = os.path.join(root, "vasprun.xml")
+
+        locpot_path = None
+        if "LOCPOT.gz" in files_set:
+            locpot_path = os.path.join(root, "LOCPOT.gz")
+        elif "LOCPOT" in files_set:
+            locpot_path = os.path.join(root, "LOCPOT")
+
+        if vasprun_path and locpot_path:
+            candidate_dirs.append((root, vasprun_path, locpot_path))
+
+    if not candidate_dirs:
+        raise FileNotFoundError(
+            f"No calculation directory under '{mg_ga_root}' contained both "
+            f"vasprun.xml(.gz) and LOCPOT(.gz)."
+        )
+
+    # Select first matching directory deterministically
+    candidate_dirs.sort(key=lambda x: x[0])
+    selected_root, vasprun_file, locpot_file = candidate_dirs[0]
+
+    # Load VASP outputs
+    vr = Vasprun(vasprun_file, parse_potcar_file=False)
+    structure = vr.final_structure
+    locpot = Locpot.from_file(locpot_file)
+
+    # Assumed defect charge and dielectric tensor
+    q = -1
+    epsilon = 10.0
+    dielectric_tensor = np.diag([epsilon, epsilon, epsilon])
+
+    # Compute Freysoldt correction
+    corr = get_freysoldt_correction(
+        locpot=locpot,
+        structure=structure,
+        charge=q,
+        dielectric=dielectric_tensor,
+    )
+
+    # Extract energy robustly
+    energy = None
+    if isinstance(corr, dict):
+        energy = corr.get("energy", None)
+    else:
+        energy = getattr(corr, "energy", None)
+
+    if energy is None:
+        raise RuntimeError(
+            f"Could not extract correction energy from get_freysoldt_correction return "
+            f"type '{type(corr)}'."
+        )
+
+    return {"freysoldt_correction_energy": float(energy)}
+```
