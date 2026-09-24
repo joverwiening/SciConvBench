@@ -1,0 +1,187 @@
+The PDE is a 1D dispersive beam / nonlinear wave equation with periodic boundary conditions.
+
+The equation is second order in time: u_tt + (q**2)*u_xxxx + c*∂_x( u * u_x ) = 0.
+
+The spatial domain is [0, 1) with periodic boundary conditions, meaning u and all x-derivatives are periodic.
+
+The time domain is [0, 0.5].
+
+Parameters are q = 0.05 and c = 1.0.
+
+Initial conditions are u(x,0) = 0.1*cos(2*pi*x) and u_t(x,0) = 0.
+
+The grid uses Nx points with dx = 1/Nx, x_i = i*dx for i = 0..Nx-1, with no duplicated endpoint due to periodicity.
+
+The nonlinear term c*∂_x( u * u_x ) expands to c*(u_x^2 + u*u_xx).
+
+The fourth derivative u_xxxx is computed spectrally using FFT for accuracy on the periodic domain.
+
+Time stepping uses a second-order Verlet or leapfrog scheme, or alternatively a Runge-Kutta method for the first-order system.
+
+Define v = u_t, then the system is:
+u_t = v
+v_t = -(q**2)*u_xxxx - c*(u_x^2 + u*u_xx)
+
+Use FFT to compute spatial derivatives: u_hat = fft(u), then u_x = ifft(1j*k*u_hat), u_xx = ifft((1j*k)^2*u_hat), u_xxxx = ifft((1j*k)^4*u_hat), where k = 2*pi*fftfreq(Nx, d=dx) = 2*pi*[0, 1, ..., Nx/2-1, -Nx/2, ..., -1]/1 for even Nx.
+
+Time stepping uses a symplectic integrator suitable for Hamiltonian systems: the Stormer-Verlet method.
+
+For the second-order equation, use the standard central difference for time: (u^{n+1} - 2*u^n + u^{n-1})/dt^2 = - (q**2)*u_xxxx^n - c*(u_x^n)^2 - c*u^n*u_xx^n.
+
+This requires u^{-1}, obtained from initial velocity: u^{-1} = u^0 - dt*v^0 + 0.5*dt^2*a^0 = u^0 + 0.5*dt^2*a^0 since v^0=0, where a^0 = -(q**2)*u_xxxx^0 - c*(u_x^0)^2 - c*u^0*u_xx^0.
+
+Alternatively use a first-order system with RK4 for better stability control.
+
+Use RK4 on the first-order system with state vector [u, v] for robustness.
+
+The CFL condition for the dispersive term suggests dt ~ dx^4 / q^2 for explicit stability, which is very restrictive. Use an implicit-explicit or fully implicit scheme, or use a sufficiently small dt.
+
+Given the small q=0.05, q^2=0.0025, the dispersive term coefficient is small, so the CFL is less restrictive. Use dt = C * dx^2 for safety with C around 0.1 to 0.5.
+
+Set Nx = 256 or 512 for good resolution, dt = dx^2 / 10 or similar to ensure stability.
+
+Compute until T=0.5.
+
+Output requirements: save solution_molk_016.npz with x, u, T, dx, Nx, q, c; save plot; print diagnostics.
+
+Implementation uses numpy and matplotlib.
+
+Use RK4 for time integration of the first-order system.
+
+The right-hand side for [u, v] is:
+du/dt = v
+dv/dt = -(q**2)*ifft((1j*k)^4 * fft(u)).real - c*(u_x^2 + u*u_xx)
+
+where u_x = ifft(1j*k * fft(u)).real and u_xx = ifft((1j*k)^2 * fft(u)).real.
+
+Use real-valued output from ifft by taking .real, ensuring numerical noise is removed.
+
+Set Nx = 512, dt = 0.0001 or adaptive, but fixed is fine. Total steps = T/dt = 5000 for dt=0.0001.
+
+Check stability: the dispersive term has eigenvalues ~ q^2 * k^4 ~ 0.0025 * (2*pi*256)^4 for high modes, which is large. Use implicit treatment or very small dt.
+
+Better: use ETDRK4 (exponential time differencing) or treat the linear part exactly.
+
+Simpler: use a semi-implicit scheme where the linear stiff part is treated implicitly and nonlinear explicitly.
+
+For the beam equation, use: (u^{n+1} - 2u^n + u^{n-1})/dt^2 + q^2 * u_xxxx^{n+1} = -c*(u*u_x)_x^n
+
+This requires solving (I + q^2*dt^2*D_xxxx) u^{n+1} = 2u^n - u^{n-1} - dt^2*c*(u*u_x)_x^n, which is easy in Fourier space.
+
+In Fourier space: u_hat^{n+1} = (2*u_hat^n - u_hat^{n-1} - dt^2*c*fft((u*u_x)_x)^n) / (1 + q^2*dt^2*k^4)
+
+This is unconditionally stable for the linear part.
+
+Use this implicit-explicit leapfrog scheme.
+
+Initialize: u^0 given, u^1 = u^0 + dt*v^0 + 0.5*dt^2*a^0 = u^0 + 0.5*dt^2*a^0 since v^0=0.
+
+Compute a^0 = -(q**2)*u_xxxx^0 - c*(u*u_x)_x^0.
+
+Then iterate: u^{n+1} = 2*u^n - u^{n-1} - dt^2*((q**2)*u_xxxx^{n+1} + c*(u*u_x)_x^n), but solving implicitly for u_xxxx^{n+1} is tricky since it's inside the derivative.
+
+Actually the standard approach is: u^{n+1} + q^2*dt^2*u_xxxx^{n+1} = 2u^n - u^{n-1} - dt^2*c*(u*u_x)_x^n.
+
+In Fourier space: (1 + q^2*dt^2*k^4)*u_hat^{n+1} = 2*u_hat^n - u_hat^{n-1} - dt^2*c*fft((u*u_x)_x)^n.
+
+This is correct and stable.
+
+Compute (u*u_x)_x = u_x^2 + u*u_xx using spectral derivatives.
+
+Algorithm:
+- Set Nx = 512
+- dx = 1/Nx
+- x = np.arange(Nx)*dx
+- k = 2*np.pi*np.fft.fftfreq(Nx, d=dx)
+- k4 = k**4
+- u0 = 0.1*np.cos(2*np.pi*x)
+- v0 = 0.0
+- Compute initial acceleration: u0_x = ifft(1j*k*fft(u0)).real, u0_xx = ifft(-k**2*fft(u0)).real, nonlinear = c*(u0_x**2 + u0*u0_xx), u0_xxxx = ifft(k**4*fft(u0)).real, a0 = -q**2*u0_xxxx - nonlinear
+- dt = 1e-4 or smaller; try dt = 5e-5 for safety
+- u_prev = u0 - dt*v0 + 0.5*dt**2*a0 = u0 + 0.5*dt**2*a0 (since v0=0)
+- u_curr = u0
+- For n in range(int(T/dt)):
+  - Compute nonlinear term at current step: ux = ifft(1j*k*fft(u_curr)).real, uxx = ifft(-k**2*fft(u_curr)).real, nl = c*(ux**2 + u_curr*uxx), nl_hat = fft(nl)
+  - u_next_hat = (2*fft(u_curr) - fft(u_prev) - dt**2*nl_hat) / (1 + q**2*dt**2*k4)
+  - u_next = ifft(u_next_hat).real
+  - u_prev, u_curr = u_curr, u_next
+- Final u = u_curr
+
+Check: the scheme is u^{n+1} = (2u^n - u^{n-1} - dt^2*nl^n) with implicit linear part correction in Fourier space.
+
+Actually the equation is u_tt = -q^2*u_xxxx - nl, so the leapfrog is (u^{n+1}-2u^n+u^{n-1})/dt^2 = -q^2*u_xxxx^{n+1} - nl^n, rearranged to u^{n+1} + q^2*dt^2*u_xxxx^{n+1} = 2u^n - u^{n-1} - dt^2*nl^n.
+
+In Fourier space: (1+q^2*dt^2*k^4)*u_hat^{n+1} = 2*u_hat^n - u_hat^{n-1} - dt^2*nl_hat^n.
+
+Yes.
+
+Diagnostics: min, max, mean, L2 norm = sqrt(np.sum(u**2)*dx).
+
+Save npz with x, u, T, dx, Nx, q, c.
+
+Save plot with x vs u.
+
+Use Nx=512, dt=1e-4, check if T=0.5 is reached with stable solution.
+
+If unstable, reduce dt.
+
+Final specification:
+
+Use Nx = 512 grid points on [0,1) periodic, dx = 1/512.
+
+Time step dt = 0.0001, integrate to T=0.5 using 5000 steps.
+
+Use the implicit-explicit leapfrog scheme: linear stiff term treated implicitly in Fourier space, nonlinear term treated explicitly.
+
+Compute spatial derivatives via FFT with wavenumbers k = 2*pi*fftfreq(Nx, d=dx).
+
+Initialize u^0 = 0.1*cos(2*pi*x), v^0 = 0.
+
+Compute initial acceleration a^0 = -q^2*ifft(k^4*fft(u^0)).real - c*( (ifft(1j*k*fft(u^0)).real)**2 + u^0*ifft(-k**2*fft(u^0)).real ).
+
+Set u^{-1} = u^0 - dt*v^0 + 0.5*dt^2*a^0 = u^0 + 0.5*dt^2*a^0.
+
+Iterate for n=0 to Nsteps-1:
+  - Compute u_x = ifft(1j*k*fft(u^n)).real, u_xx = ifft(-k**2*fft(u^n)).real
+  - Compute nl = c*(u_x**2 + u^n*u_xx)
+  - Compute nl_hat = fft(nl)
+  - Solve in Fourier: u_hat^{n+1} = (2*fft(u^n) - fft(u^{n-1}) - dt^2*nl_hat) / (1 + q^2*dt^2*k^4)
+  - u^{n+1} = ifft(u_hat^{n+1}).real
+  - Update u^{n-1} = u^n, u^n = u^{n+1}
+
+After loop, final u is the solution at T=0.5.
+
+Compute diagnostics: min(u), max(u), mean(u), L2 = sqrt(sum(u**2)*dx).
+
+Save files as requested. </think> 
+
+Use Nx = 512 grid points on the periodic domain [0, 1), giving dx = 1/512 and x_i = i*dx for i = 0,...,511.
+
+Compute wavenumbers k = 2*pi*fftfreq(Nx, d=dx) for spectral differentiation.
+
+Set time step dt = 0.0001 and integrate to final time T = 0.5 using 5000 steps.
+
+Use the implicit-explicit leapfrog time stepping scheme where the linear dispersive term is treated implicitly and the nonlinear term is treated explicitly.
+
+Initialize the field u^0 = 0.1*cos(2*pi*x) and initial velocity v^0 = 0.
+
+Compute the initial acceleration a^0 = -q**2 * ifft(k**4 * fft(u^0)).real - c * ( (ifft(1j*k*fft(u^0)).real)**2 + u^0 * ifft(-k**2*fft(u^0)).real ).
+
+Set the pre-initial value u^{-1} = u^0 + 0.5*dt**2 * a^0 to start the multistep scheme.
+
+For each time step n from 0 to Nsteps-1:
+Compute the nonlinear term nl = c * (u_x**2 + u*u_xx) where u_x = ifft(1j*k*fft(u^n)).real and u_xx = ifft(-k**2*fft(u^n)).real.
+Compute nl_hat = fft(nl).
+Update in Fourier space: u_hat^{n+1} = (2*fft(u^n) - fft(u^{n-1}) - dt**2 * nl_hat) / (1 + q**2 * dt**2 * k**4).
+Transform back: u^{n+1} = ifft(u_hat^{n+1}).real.
+Shift the solution history: u^{n-1} becomes u^n, and u^n becomes u^{n+1}.
+
+After completing all time steps, the final array u represents the solution at T = 0.5.
+
+Compute the required diagnostics: min(u), max(u), mean(u), and the discrete L2 norm sqrt(sum(u**2)*dx).
+
+Save the file "solution_molk_016.npz" containing the arrays x and u, and scalars T, dx, Nx, q, c.
+
+Save the line plot of u versus x as "solution_molk_016.png" with appropriate axis labels.
+
+Print the four scalar diagnostics to standard output.

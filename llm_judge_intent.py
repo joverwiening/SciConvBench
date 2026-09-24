@@ -6,6 +6,7 @@ import os
 import argparse
 import re
 
+
 class LLMJudgeIntent:
     def __init__(self):
         self.config = Config()
@@ -87,32 +88,35 @@ class LLMJudgeIntent:
             # Use Regex to extract ONLY the text between <FINAL_JSON> tags
             clean_json_str = ""
 
-            matches = re.findall(r'<FINAL_JSON>(.*?)</FINAL_JSON>', response_text, re.DOTALL)
-            
+            matches = re.findall(
+                r'<FINAL_JSON>(.*?)</FINAL_JSON>', response_text, re.DOTALL)
+
             if matches:
                 clean_json_str = matches[-1].strip()
-            else: # Fallback
+            else:  # Fallback
                 cleaned_text = re.sub(r'```json\s*', '', response_text)
                 cleaned_text = re.sub(r'```\s*', '', cleaned_text)
                 start_idx = cleaned_text.find('{')
                 end_idx = cleaned_text.rfind('}')
-                
+
                 if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
                     clean_json_str = cleaned_text[start_idx:end_idx+1]
                 else:
                     raise ValueError("Could not find JSON block in response.")
             # Clean up any lingering markdown backticks inside the block
+            clean_json_str = re.sub(r'[\xa0\u202F\u200B]', ' ', clean_json_str)
             clean_json_str = re.sub(r'```json\s*', '', clean_json_str)
             clean_json_str = re.sub(r'```\s*', '', clean_json_str)
-            clean_json_str = re.sub(r'\\(?!["\\/])', r'\\\\', clean_json_str)
+            clean_json_str = re.sub(
+                r'(?<!\\)\\(?!["\\/])', r'\\\\', clean_json_str)
             parsed_json = json.loads(clean_json_str, strict=False)
-            
+
             final_result = {
                 "score": "0/1",
-                "status": "ERROR", 
+                "status": "ERROR",
                 "reasoning": "Not provided by LLM."
             }
-            
+
             final_result.update(parsed_json)
             final_result["llm_usage"] = case_usage
 
@@ -123,10 +127,11 @@ class LLMJudgeIntent:
             print(response_text)
             return {
                 "score": "0/1",
-                "status": "ERROR", 
+                "status": "ERROR",
                 "reasoning": "Failed to parse evaluation response from LLM.",
                 "llm_usage": case_usage
             }
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -137,7 +142,7 @@ def main():
     test_runs_dir = args.input_dir
     json_path = args.json_path
     output_summary_file = "llm_judge_intent_summary.json"
-    
+
     if not os.path.exists(json_path):
         print(f"Error: {json_path} not found.")
         return
@@ -155,14 +160,14 @@ def main():
             print("Warning: Found item in JSON without an 'id' field. Skipping.")
 
     judge = LLMJudgeIntent()
-    
+
     print(f"\nSTARTING BATCH LLM INTENT EVALUATION")
     print("="*60)
 
     report_data = {
         "cases": []
     }
-    
+
     total_cases_run = len(cases_data)
     score_accum = 0
 
@@ -177,8 +182,9 @@ def main():
         gen_path = os.path.join(folder_path, "generated_prompt.txt")
 
         if not os.path.exists(gen_path):
-            print(f"   [!] THE AGENT DID NOT RUN {case_id}. Please double check what went wrong.")
-            missing_generated.append(case_id)                
+            print(
+                f"   [!] THE AGENT DID NOT RUN {case_id}. Please double check what went wrong.")
+            missing_generated.append(case_id)
             continue
 
         ground_truth_path = os.path.join(folder_path, "complete_prompt.txt")
@@ -188,17 +194,17 @@ def main():
         gen_text = judge.read_file(gen_path)
         ground_truth = judge.read_file(ground_truth_path)
         # Run Evaluation
-        print(f"\nLLM Judging Intent for {case_id}...")        
+        print(f"\nLLM Judging Intent for {case_id}...")
         result = judge.evaluate(gen_text, ground_truth)
         result["case_id"] = case_id
-        
+
         # Save Individual Result
         with open(output_path, 'w') as f:
             json.dump(result, f, indent=4)
-            
+
         score_str = result.get("score", "0/1")
         status = result.get("status", "UNKNOWN")
-        
+
         print(f"   Status: {status} | Score: {score_str}")
         print(f"   Saved to: {os.path.basename(output_path)}")
 
@@ -225,20 +231,22 @@ def main():
             "total_cases_evaluated": total_cases_run,
             "total_llm_usage": final_llm_stats
         }
-        
+
         final_output_path = os.path.join(test_runs_dir, output_summary_file)
-        
+
         with open(final_output_path, "w") as f:
             json.dump(report_data, f, indent=4)
-            
+
         print("\n" + "="*60)
-        print(f"INTENT/FAITHFULNESS SCORE: {score_accum}/{total_cases_run} ({avg_percentage:.1f}%)")
+        print(
+            f"INTENT/FAITHFULNESS SCORE: {score_accum}/{total_cases_run} ({avg_percentage:.1f}%)")
         print(f"REPORT SAVED TO: {final_output_path}")
         print("="*60)
-        
+
     if len(missing_generated) > 0:
         print("\nWARNING: The agent did not run the following cases so they were evaluated as 0/UNFAITHFUL:")
         print(missing_generated)
+
 
 if __name__ == "__main__":
     main()

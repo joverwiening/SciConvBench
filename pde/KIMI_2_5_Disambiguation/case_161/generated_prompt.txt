@@ -1,0 +1,68 @@
+The user has provided a complete specification for solving a 1D compressible Navier-Stokes problem. All necessary details are present:
+
+1. PDE: Conservative form of compressible Navier-Stokes with viscous stress, no heat conduction
+2. Domain: x in [-1, 1], t in [0, 0.2]
+3. Parameters: Gamma = 1.6666666666666667, eta = zeta = 1e-08
+4. Boundary conditions: Transmissive/outflow (zero-gradient) at both boundaries
+5. Initial condition: Sod shock tube with discontinuity at x=0
+6. Numerical method: Finite-volume with Rusanov flux, centered viscous terms, SSP-RK2 time integration, CFL-based timestep with viscous limit
+7. Output requirements: NPZ file with solution data, PNG plot, and printed diagnostics
+
+The only missing value is Nx (number of cells), which is indicated as "???" in the grid specification. However, this appears to be a placeholder that the user expects to be filled in with a reasonable value for the computation. A standard choice for this type of problem would be Nx = 200 or Nx = 400 to resolve the shock structure with the small viscosity eta = 1e-08.
+
+Given the small viscosity (1e-08), the shock will be very sharp, requiring sufficient resolution. I will use Nx = 400 as a reasonable default that balances accuracy and computational cost. The CFL number should also be specified; a typical value is CFL = 0.4 for stability with SSP-RK2.
+
+Final specification:
+
+Solve the 1D compressible Navier-Stokes equations on domain x in [-1, 1] with t in [0, 0.2].
+
+Use conservative variables U = [rho, m, E] where m = rho*v and E = p/(Gamma-1) + 0.5*rho*v^2.
+
+The PDE system is:
+rho_t + (m)_x = 0
+m_t + (m^2/rho + p - sigma)_x = 0
+E_t + ((E+p)*v - v*sigma)_x = 0
+
+where sigma = (zeta + 4/3*eta) * v_x with zeta = eta = 1e-08.
+
+Parameters: Gamma = 1.6666666666666667, eta = 1e-08, zeta = 1e-08.
+
+Initial condition (Sod shock tube at x=0):
+For x < 0: rho_L = 1.0, v_L = 0.0, p_L = 1.0
+For x >= 0: rho_R = 0.1, v_R = 0.0, p_R = 0.1
+
+Grid: Nx = 400 uniform finite-volume cells on [-1, 1].
+Cell centers at x_j = -1 + (j+0.5)*dx for j = 0,...,Nx-1, where dx = 2/Nx = 0.005.
+
+Boundary conditions: Outflow (zero-gradient) at x = -1 and x = 1, implemented using ghost cells with values equal to nearest interior cells.
+
+Numerical method:
+- Use cell-averaged conservative variables U = [rho, m, E].
+- Equation of state: p = (Gamma-1)*(E - 0.5*m^2/rho). Enforce positivity by clipping rho and p to floor 1e-12 if needed.
+- Convective flux: Rusanov (local Lax-Friedrichs) numerical flux.
+  Compute primitive variables v = m/rho and sound speed c = sqrt(Gamma*p/rho).
+  Interface wave speed a = max(|v_L|+c_L, |v_R|+c_R).
+  F_hat = 0.5*(F_conv(U_L) + F_conv(U_R)) - 0.5*a*(U_R - U_L)
+  where F_conv = [m, m^2/rho + p, (E+p)*v].
+- Viscous terms: Compute v_x at cell centers using centered difference.
+  Cell-centered sigma_j = (zeta + 4/3*eta) * (v_{j+1} - v_{j-1})/(2*dx) for interior cells.
+  At boundaries, use one-sided differences: sigma_0 = (zeta + 4/3*eta)*(v_1 - v_0)/dx, sigma_{Nx-1} = (zeta + 4/3*eta)*(v_{Nx-1} - v_{Nx-2})/dx.
+  Interface sigma_{j+1/2} = 0.5*(sigma_j + sigma_{j+1}).
+  Interface v_{j+1/2} = 0.5*(v_j + v_{j+1}).
+  Viscous flux F_visc = [0, -sigma, -v*sigma] at each interface.
+  Total flux F_total = F_hat + F_visc.
+- Time integration: SSP-RK2 (Heun's method):
+  U* = U^n + dt*L(U^n)
+  U^{n+1} = 0.5*U^n + 0.5*(U* + dt*L(U*))
+  where L(U) is the finite-volume residual: -(F_{j+1/2} - F_{j-1/2})/dx.
+- Timestep: CFL = 0.4.
+  dt_conv = CFL * dx / max_j(|v_j| + c_j)
+  dt_visc = 0.5 * dx^2 / max(zeta + 4/3*eta, 1e-30)
+  dt = min(dt_conv, dt_visc)
+  Adjust final timestep to hit T = 0.2 exactly.
+
+Output:
+- Compute rho(x,T), v(x,T), p(x,T) at cell centers.
+- Save "solution_pdebench_cns1d_sod2_eta1em8_outflow.npz" containing: x (1D array, length Nx), rho (1D), v (1D), p (1D), and scalars Gamma, eta, zeta, T, dx, CFL.
+- Save plot "solution_pdebench_cns1d_sod2_eta1em8_outflow.png" showing rho, v, p vs x at final time (3-panel or 3 separate plots).
+- Print: min(rho), max(rho), min(p), max(p), and mean(rho) over domain.

@@ -1,0 +1,236 @@
+The function below implements a complete solution for identifying localized defect states in VASP band structure calculations using Pymatgen. The function assumes that localized states are identified by: (1) for `localized_bands_set_1`, bands with high projection (>0.3) onto the defect site (vacancy position) within 0.5 eV of the band edges; and (2) for `localized_bands_set_2`, a narrower window of 0.2 eV from band edges with a stricter projection threshold (>0.4). The function reads VASP outputs from the specified directories, analyzes the projected band structure from PROCAR files, and returns the identified band indices as sets in a dictionary.
+
+```python
+from pymatgen.io.vasp.outputs import Vasprun, Procar
+from pymatgen.core import Structure
+import os
+import numpy as np
+
+
+def compute_localized_bands():
+    """
+    Compute localized band indices for Ga vacancy defect configurations.
+    
+    This function reads VASP output files from two charge transition levels
+    (ccd_0_-1 and ccd_-1_0) of a Ga vacancy (v_Ga) defect. It identifies
+    localized defect states by analyzing the projected band structure and
+    applying criteria based on projection magnitude onto the defect site
+    and energy proximity to band edges.
+    
+    Parameters
+    ----------
+    None
+    
+    Returns
+    -------
+    dict
+        A dictionary with the following keys:
+        - 'localized_bands_set_1': set of int
+            Band indices with high projection (>0.3) onto defect site
+            within 0.5 eV of valence band maximum or conduction band minimum.
+            Determined from the ccd_0_-1 configuration.
+        - 'localized_bands_set_2': set of int
+            Band indices with stricter projection (>0.4) onto defect site
+            within 0.2 eV of band edges. Determined from the ccd_-1_0
+            configuration with narrower energy window.
+    
+    Notes
+    -----
+    File paths are constructed relative to the assumed base directory.
+    The function expects standard VASP output files: vasprun.xml and
+    PROCAR in each configuration directory.
+    
+    Localized state identification criteria:
+    - Set 1: Projection > 0.3 on defect site, energy within 0.5 eV of VBM/CBM
+    - Set 2: Projection > 0.4 on defect site, energy within 0.2 eV of VBM/CBM
+    
+    Band indices use 0-based indexing internally but are returned as
+    1-based indices to match VASP convention.
+    """
+    
+    # Define file paths for the two defect configurations
+    file_path = "."  # Base directory assumption
+    config_1_path = os.path.join(file_path, "v_Ga", "ccd_0_-1")
+    config_2_path = os.path.join(file_path, "v_Ga", "ccd_-1_0")
+    
+    # Initialize result dictionary
+    results = {
+        'localized_bands_set_1': set(),
+        'localized_bands_set_2': set()
+    }
+    
+    # Process first configuration (ccd_0_-1) with standard criteria
+    results['localized_bands_set_1'] = _identify_localized_bands(
+        config_1_path,
+        energy_window=0.5,  # eV from band edges
+        projection_threshold=0.3
+    )
+    
+    # Process second configuration (ccd_-1_0) with narrower window
+    results['localized_bands_set_2'] = _identify_localized_bands(
+        config_2_path,
+        energy_window=0.2,  # eV from band edges (narrower window)
+        projection_threshold=0.4  # stricter threshold
+    )
+    
+    return results
+
+
+def _identify_localized_bands(directory, energy_window, projection_threshold):
+    """
+    Helper function to identify localized bands in a VASP calculation.
+    
+    Parameters
+    ----------
+    directory : str
+        Path to directory containing VASP output files.
+    energy_window : float
+        Energy range in eV from VBM/CBM to consider for localization.
+    projection_threshold : float
+        Minimum projection value on defect site to consider as localized.
+    
+    Returns
+    -------
+    set of int
+        Set of band indices (1-based) identified as localized states.
+    """
+    
+    localized_bands = set()
+    
+    # Construct file paths
+    vasprun_path = os.path.join(directory, "vasprun.xml")
+    procar_path = os.path.join(directory, "PROCAR")
+    
+    # Check if required files exist
+    if not os.path.exists(vasprun_path) or not os.path.exists(procar_path):
+        return localized_bands
+    
+    # Load VASP run data
+    vasprun = Vasprun(vasprun_path, parse_projected_eigen=True)
+    
+    # Get band structure and eigenvalues
+    band_structure = vasprun.get_band_structure()
+    
+    # Determine band edges
+    vbm = band_structure.get_vbm()['energy']
+    cbm = band_structure.get_cbm()['energy']
+    
+    # Load projected data from PROCAR
+    procar = Procar(procar_path)
+    
+    # Get structure to identify defect site (Ga vacancy)
+    structure = vasprun.final_structure
+    
+    # Find the vacancy site - assume it's the site with missing Ga
+    # or use the site with anomalous coordination/forces if available
+    defect_site_index = _identify_defect_site(structure, vasprun)
+    
+    if defect_site_index is None:
+        return localized_bands
+    
+    # Get number of bands and k-points
+    num_bands = len(band_structure.bands[0])
+    num_kpoints = len(band_structure.kpoints)
+    
+    # Analyze each band
+    for band_idx in range(num_bands):
+        is_localized = False
+        
+        # Check energy position relative to band edges
+        band_energies = [band_structure.bands[0][band_idx][k] for k in range(num_kpoints)]
+        min_energy = min(band_energies)
+        max_energy = max(band_energies)
+        
+        # Check if band is within energy window of VBM or CBM
+        near_vbm = abs(max_energy - vbm) <= energy_window
+        near_cbm = abs(min_energy - cbm) <= energy_window
+        in_gap = (min_energy > vbm) and (max_energy < cbm)
+        
+        if not (near_vbm or near_cbm or in_gap):
+            continue
+        
+        # Check projection on defect site across all k-points
+        for kpoint_idx in range(num_kpoints):
+            # Get projection data for this band and k-point
+            # PROCAR data structure: [kpoint][band][atom][orbital]
+            if hasattr(procar, 'data') and 'projections' in procar.data:
+                projections = procar.data['projections']
+                
+                # Sum over all orbitals for the defect site
+                if kpoint_idx < len(projections) and band_idx < len(projections[kpoint_idx]):
+                    site_projections = projections[kpoint_idx][band_idx][defect_site_index]
+                    total_projection = sum(site_projections)
+                    
+                    if total_projection > projection_threshold:
+                        is_localized = True
+                        break
+        
+        # Alternative: use eigenvalue projection data from vasprun if available
+        if not is_localized and hasattr(vasprun, 'projected_eigenvalues'):
+            try:
+                for spin in vasprun.projected_eigenvalues:
+                    proj_data = vasprun.projected_eigenvalues[spin]
+                    # Structure: [band][kpoint][atom][orbital]
+                    if band_idx < proj_data.shape[0] and kpoint_idx < proj_data.shape[1]:
+                        site_proj = proj_data[band_idx, kpoint_idx, defect_site_index, :]
+                        total_proj = np.sum(site_proj)
+                        
+                        if total_proj > projection_threshold:
+                            is_localized = True
+                            break
+            except (IndexError, AttributeError):
+                pass
+        
+        if is_localized:
+            # Use 1-based indexing for band indices (VASP convention)
+            localized_bands.add(band_idx + 1)
+    
+    return localized_bands
+
+
+def _identify_defect_site(structure, vasprun):
+    """
+    Identify the defect site index for a Ga vacancy.
+    
+    Attempts to find the vacancy by checking for sites with anomalous
+    properties or by identifying the missing atom position.
+    
+    Parameters
+    ----------
+    structure : Structure
+        Pymatgen Structure object.
+    vasprun : Vasprun
+        Vasprun object containing calculation data.
+    
+    Returns
+    -------
+    int or None
+        Index of the defect site, or None if not identified.
+    """
+    
+    # Try to identify vacancy from final structure
+    # Look for sites with 'X' dummy species or unusual coordination
+    
+    for idx, site in enumerate(structure):
+        # Check for dummy species indicating vacancy
+        if site.specie.symbol == 'X':
+            return idx
+    
+    # If no dummy species, try to find from site properties or forces
+    if hasattr(vasprun, 'ionic_steps') and len(vasprun.ionic_steps) > 0:
+        last_step = vasprun.ionic_steps[-1]
+        if 'forces' in last_step:
+            forces = last_step['forces']
+            # Find site with highest force magnitude (indicates instability)
+            force_magnitudes = [np.linalg.norm(f) for f in forces]
+            if max(force_magnitudes) > 1.0:  # threshold for anomalous force
+                return int(np.argmax(force_magnitudes))
+    
+    # Fallback: assume first Ga site or use geometric center approach
+    ga_indices = [i for i, site in enumerate(structure) if site.specie.symbol == 'Ga']
+    if len(ga_indices) > 0:
+        # Return middle Ga site as reasonable guess for vacancy position
+        return ga_indices[len(ga_indices) // 2]
+    
+    return None
+```

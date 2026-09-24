@@ -136,9 +136,11 @@ class LLMJudgeInconsistency:
                 else:
                     raise ValueError("Could not find JSON block in response.")
             # Clean up any lingering markdown backticks inside the block
+            clean_json_str = re.sub(r'[\xa0\u202F\u200B]', ' ', clean_json_str)
             clean_json_str = re.sub(r'```json\s*', '', clean_json_str)
             clean_json_str = re.sub(r'```\s*', '', clean_json_str)
-            clean_json_str = re.sub(r'\\(?!["\\/])', r'\\\\', clean_json_str)
+            clean_json_str = re.sub(
+                r'(?<!\\)\\(?!["\\/])', r'\\\\', clean_json_str)
             parsed_json = json.loads(clean_json_str, strict=False)
 
             final_result = {

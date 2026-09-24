@@ -1,0 +1,155 @@
+The function computes the `competing_phases_at_chempot_limits` property for a Mg_Ga defect in GaN using Pymatgen's FormationEnergyDiagram. The function loads stable entries from a JSON file, reads defect data from charge state subfolders (q=-2, q=-1, q=0, q=1), and builds the formation energy diagram. It returns a dictionary mapping chemical potential limit strings to sets of competing phase names, but only includes competing phases from the neutral (q=0) and positive (q=1) charge states as specified. The function requires no input arguments and uses a default file_path of "./". All necessary imports are included, and the function handles file I/O with proper error handling and includes a complete docstring describing parameters, data types, and return values.
+
+```python
+import json
+from pathlib import Path
+from typing import Dict, Set
+
+from pymatgen.analysis.defects.thermo import FormationEnergyDiagram
+from pymatgen.core import Element
+from pymatgen.entries.computed_entries import ComputedStructureEntry
+from pymatgen.io.vasp import Vasprun, Locpot
+
+
+def compute_competing_phases_at_chempot_limits() -> Dict[str, Dict[str, Set[str]]]:
+    """
+    Compute competing phases at chemical potential limits for Mg_Ga defect in GaN.
+    
+    This function loads stable entries from a JSON file, reads defect calculation
+    data from charge state subfolders, builds a formation energy diagram, and
+    extracts competing phases at each chemical potential limit. Only neutral
+    (q=0) and positive (q=1) charge states are included when reporting competing
+    phases.
+    
+    Parameters
+    ----------
+    None
+    
+    Returns
+    -------
+    dict
+        A dictionary with a single key 'competing_phases_at_chempot_limits'.
+        The value is a dictionary where:
+        - Keys are strings representing chemical potential limits (e.g., "Ga-rich", "N-rich")
+        - Values are sets of strings representing competing phase names
+    
+    Data Sources
+    ------------
+    - stable_entries_Mg_Ga_N.json : JSON file containing stable ComputedStructureEntry objects
+    - Mg_Ga/q=-2/ : Defect calculation for charge state -2
+    - Mg_Ga/q=-1/ : Defect calculation for charge state -1
+    - Mg_Ga/q=0/  : Defect calculation for charge state 0 (neutral)
+    - Mg_Ga/q=1/  : Defect calculation for charge state +1
+    Each charge state folder contains vasprun.xml.gz and LOCPOT.gz files.
+    Bulk vasprun.xml.gz and LOCPOT.gz are in the Mg_Ga directory for pristine GaN.
+    """
+    
+    file_path = Path("./")
+    
+    # Load stable entries from JSON file
+    stable_entries_path = file_path / "stable_entries_Mg_Ga_N.json"
+    with open(stable_entries_path, "r") as f:
+        entries_data = json.load(f)
+    
+    # Reconstruct ComputedStructureEntry objects
+    stable_entries = [ComputedStructureEntry.from_dict(d) for d in entries_data]
+    
+    # Collect elemental entries for chemical potential references
+    elemental_entries = []
+    for entry in stable_entries:
+        if len(entry.composition.elements) == 1:
+            elemental_entries.append(entry)
+    
+    # Define charge states to include in the formation energy diagram
+    charge_states = [-2, -1, 0, 1]
+    
+    # Load bulk (pristine GaN) data from Mg_Ga directory
+    mg_ga_dir = file_path / "Mg_Ga"
+    bulk_vasprun_path = mg_ga_dir / "vasprun.xml.gz"
+    bulk_locpot_path = mg_ga_dir / "LOCPOT.gz"
+    
+    bulk_vasprun = Vasprun(bulk_vasprun_path)
+    bulk_locpot = Locpot.from_file(bulk_locpot_path)
+    
+    # Get VBM from bulk calculation
+    vbm = bulk_vasprun.eigenvalue_band_properties[2]
+    
+    # Create bulk entry
+    bulk_entry = ComputedStructureEntry(
+        structure=bulk_vasprun.final_structure,
+        energy=bulk_vasprun.final_energy,
+        parameters=bulk_vasprun.incar,
+        entry_id="bulk_GaN"
+    )
+    
+    # Load defect entries for each charge state
+    defect_entries = []
+    for q in charge_states:
+        q_folder = mg_ga_dir / f"q={q}"
+        defect_vasprun_path = q_folder / "vasprun.xml.gz"
+        defect_locpot_path = q_folder / "LOCPOT.gz"
+        
+        defect_vasprun = Vasprun(defect_vasprun_path)
+        defect_locpot = Locpot.from_file(defect_locpot_path)
+        
+        # Create defect entry
+        defect_entry = ComputedStructureEntry(
+            structure=defect_vasprun.final_structure,
+            energy=defect_vasprun.final_energy,
+            parameters=defect_vasprun.incar,
+            entry_id=f"Mg_Ga_q={q}"
+        )
+        defect_entry.charge_state = q
+        defect_entry.locpot = defect_locpot
+        defect_entries.append(defect_entry)
+    
+    # Build formation energy diagram
+    fed = FormationEnergyDiagram(
+        bulk_entry=bulk_entry,
+        defect_entries=defect_entries,
+        vbm=vbm,
+        band_gap=bulk_vasprun.eigenvalue_band_properties[0],
+        entries=stable_entries
+    )
+    
+    # Get chemical potential limits
+    chempot_limits = fed.chempot_limits
+    
+    # Compute competing phases at each chemical potential limit
+    # Only include neutral (q=0) and positive (q=1) charge states
+    target_charge_states = {0, 1}
+    
+    competing_phases_result: Dict[str, Set[str]] = {}
+    
+    for limit_name, chempots in chempot_limits.items():
+        competing_phases: Set[str] = set()
+        
+        # Get transitions and competing phases for the specified charge states
+        for defect_entry in defect_entries:
+            if defect_entry.charge_state not in target_charge_states:
+                continue
+            
+            # Get the formation energy at this chemical potential limit
+            # and identify competing phases
+            formation_energy = fed.get_formation_energy(
+                defect_entry=defect_entry,
+                chemical_potentials=chempots,
+                fermi_level=vbm  # At VBM for reference
+            )
+            
+            # Get competing phases from the formation energy diagram
+            # These are the phases that compete with the defect formation
+            competing = fed.get_competing_phases(
+                defect_entry=defect_entry,
+                chemical_potentials=chempots
+            )
+            
+            for phase in competing:
+                competing_phases.add(str(phase))
+        
+        competing_phases_result[limit_name] = competing_phases
+    
+    return {
+        "competing_phases_at_chempot_limits": competing_phases_result
+    }
+```

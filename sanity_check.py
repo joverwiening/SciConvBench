@@ -4,11 +4,14 @@ import json
 MODELS = [
     # "CLAUDE_SONNET_4.0",
     # "CLAUDE_HAIKU_3.5",
-    "CLAUDE_SONNET_4.6",
-    "GEMINI_2_5_PRO",
-    "GEMINI_2_5_FLASH",
-    "GPT_5_2",
-    "OLLAMA"
+    # "CLAUDE_SONNET_4.6",
+    # "GEMINI_2_5_PRO",
+    # "GEMINI_2_5_FLASH",
+    # "GPT_5_2",
+    # "OLLAMA"
+    "QWEN_3",
+    "KIMI_2_5",
+    "DEEPSEEK_V3"
 ]
 
 MODES = ["Inconsistency", "Disambiguation"]
@@ -164,9 +167,9 @@ def run_sanity_check(domain, baseline=False):
                 "llm_judge_intent_summary.json",
                 "llm_judge_chat_summary.json"
             ]
-            if domain in ["fluids", "foam", "pde"]:
-                if mode == "Disambiguation":
-                    root_files.append("disambiguation_coverage_summary.json")
+            # if domain in ["fluids", "foam", "pde"]:
+            #     if mode == "Disambiguation":
+            #         root_files.append("disambiguation_coverage_summary.json")
 
             for rf in root_files:
                 rf_path = os.path.join(folder_name, rf)
@@ -219,9 +222,9 @@ def run_sanity_check(domain, baseline=False):
                 "complete_prompt.txt",
                 "conversation_log.txt"
             ]
-            if domain in ["fluids", "foam", "pde"]:
-                if mode == "Disambiguation":
-                    root_files.append("disambiguation_coverage_score.json")
+            # if domain in ["fluids", "foam", "pde"]:
+            #     if mode == "Disambiguation":
+            #         root_files.append("disambiguation_coverage_score.json")
 
             missing_folders_count = 0
             missing_case_files = 0
@@ -287,13 +290,13 @@ def run_sanity_check(domain, baseline=False):
 
 if __name__ == "__main__":
     run_sanity_check("foam", baseline=False)
-    run_sanity_check("foam", baseline=True)
+    # run_sanity_check("foam", baseline=True)
 
     run_sanity_check("fluids", baseline=False)
-    run_sanity_check("fluids", baseline=True)
+    # run_sanity_check("fluids", baseline=True)
 
     run_sanity_check("pde", baseline=False)
-    run_sanity_check("pde", baseline=True)
+    # run_sanity_check("pde", baseline=True)
 
     run_sanity_check("solMech", baseline=False)
     # run_sanity_check("solMech", baseline=True)

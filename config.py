@@ -19,32 +19,32 @@ class Config:
     # codex_gpt5
     # ollama_local
     # ==========================================
-    ACTIVE_PROFILE = "codex_gpt5"
+    ACTIVE_PROFILE = "gemini_2_5_pro_vertex"
 
     LLM_PROFILES = {
         "bedrock_3_5_sonnet": {
             "provider": "bedrock",
-            "model_version": "arn:aws:bedrock:us-west-2:567316078106:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "model_version": "arn:aws:bedrock:us-west-2:<ACCOUNT_ID>:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
             "temperature": 0.0
         },
         "bedrock_4_0_sonnet": {
             "provider": "bedrock",
-            "model_version": "arn:aws:bedrock:us-west-2:567316078106:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0",
+            "model_version": "arn:aws:bedrock:us-west-2:<ACCOUNT_ID>:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0",
             "temperature": 0.0
         },
         "bedrock_3_5_haiku": {
             "provider": "bedrock",
-            "model_version": "arn:aws:bedrock:us-west-2:567316078106:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0",
+            "model_version": "arn:aws:bedrock:us-west-2:<ACCOUNT_ID>:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0",
             "temperature": 0.0
         },
         "bedrock_4_6_sonnet": {
             "provider": "bedrock",
-            "model_version": "arn:aws:bedrock:us-west-2:567316078106:inference-profile/us.anthropic.claude-sonnet-4-6",
+            "model_version": "arn:aws:bedrock:us-west-2:<ACCOUNT_ID>:inference-profile/us.anthropic.claude-sonnet-4-6",
             "temperature": 0.0
         },
         "bedrock_4_6_opus": {
             "provider": "bedrock",
-            "model_version": "arn:aws:bedrock:us-west-2:567316078106:inference-profile/us.anthropic.claude-opus-4-6-v1",
+            "model_version": "arn:aws:bedrock:us-west-2:<ACCOUNT_ID>:inference-profile/us.anthropic.claude-opus-4-6-v1",
             "temperature": 0.0
         },
         "bedrock_4_6_sonnet_sdk": {
@@ -76,7 +76,48 @@ class Config:
             "provider": "ollama",
             "model_version": "gpt-oss:120b",
             "temperature": 0.0
+        },
+        "openrouter_deepseek": {
+            "provider": "openrouter",
+            "model_version": "deepseek/deepseek-v4-pro",
+            "temperature": 0.0
+        },
+        "openrouter_qwen": {
+            "provider": "openrouter",
+            "model_version": "qwen/qwen3.5-122b-a10b",
+            "temperature": 0.0
+        },
+        "openrouter_llama": {
+            "provider": "openrouter",
+            "model_version": "meta-llama/llama-4-maverick",
+            "temperature": 0.0
+        },
+        "bedrock_qwen": {
+            "provider": "bedrock_boto3",
+            "model_version": "qwen.qwen3-235b-a22b-2507-v1:0",
+            "temperature": 0.0
+        },
+        "bedrock_deepseek": {
+            "provider": "bedrock_boto3",
+            "model_version": "deepseek.v3.2",
+            "temperature": 0.0
+        },
+        "bedrock_llama": {
+            "provider": "bedrock_boto3",
+            "model_version": "meta.llama3-3-70b-instruct-v1:0",
+            "temperature": 0.0
+        },
+        "bedrock_kimi": {
+            "provider": "bedrock_boto3",
+            "model_version": "moonshotai.kimi-k2.5",
+            "temperature": 0.0
+        },
+        "gemini_2_5_pro_vertex": {
+            "provider": "vertex_gemini",
+            "model_version": "gemini-2.5-pro",
+            "temperature": 0.0
         }
+
     }
 
     active_conf = LLM_PROFILES[ACTIVE_PROFILE]

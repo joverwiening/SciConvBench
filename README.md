@@ -46,7 +46,7 @@ If running `gpt-5.3-codex` directly rather than through a standard OpenAI subscr
 2. Run `codex` in the terminal and follow the prompt to "Sign in with ChatGPT".
 
 **Local Ollama (`ollama_local`)**
-If running models locally (e.g., `gpt-oss:120b`), you will need dedicated GPU access and Ollama installed. If you are using an HPC cluster (like NERSC or similar), the general workflow is:
+If running models locally (e.g., `gpt-oss:120b`), you will need dedicated GPU access and Ollama installed. If you are using a shared HPC cluster, the general workflow is:
 1. Request an interactive GPU compute node.
 2. Activate your respective conda/python environment.
 3. Start the Ollama server (e.g., `./ollama serve`).

@@ -7,26 +7,28 @@
 
 
 # base_dirs = [
-#     "matSci",
-#     "matToolUse",
-#     "solMech",
-#     "solToolUse",
-#     "pde",
-#     "pde_baseline",
-#     "foam",
-#     "foam_baseline",
+#     # "matSci",
+#     # "matToolUse",
+#     # "solMech",
+#     # "solToolUse",
+#     # "pde",
+#     # "pde_baseline",
+#     # "foam",
+#     # "foam_baseline",
 #     "fluids",
-#     "fluids_baseline"
+#     # "fluids_baseline"
 # ]
 # models = [
-#     "CLAUDE_SONNET_4.0_Inconsistency",
-#     "CLAUDE_SONNET_4.0_Disambiguation",
-#     "CLAUDE_HAIKU_3.5_Inconsistency",
-#     "CLAUDE_HAIKU_3.5_Disambiguation",
-#     "CLAUDE_SONNET_4.6_Inconsistency",
-#     "CLAUDE_SONNET_4.6_Disambiguation",
-#     "CLAUDE_SONNET_.0_Inconsistency",
-#     "CLAUDE_SONNET_4.0_Disambiguation",
+#     # "CLAUDE_SONNET_4.0_Inconsistency",
+#     # "CLAUDE_SONNET_4.0_Disambiguation",
+#     # "CLAUDE_HAIKU_3.5_Inconsistency",
+#     # "CLAUDE_HAIKU_3.5_Disambiguation",
+#     # "CLAUDE_SONNET_4.6_Inconsistency",
+#     # "CLAUDE_SONNET_4.6_Disambiguation",
+#     # "CLAUDE_SONNET_.0_Inconsistency",
+#     # "CLAUDE_SONNET_4.0_Disambiguation",
+#     "QWEN_3_5_Disambiguation",
+#     "QWEN_3_5_Inconsistency"
 # ]
 
 # input = 0
@@ -53,7 +55,8 @@
 
 #                         if stats_file.exists():
 #                             try:
-#                                 stats_data = json.loads(stats_file.read_text(encoding="utf-8"))
+#                                 stats_data = json.loads(
+#                                     stats_file.read_text(encoding="utf-8"))
 
 #                                 usage = stats_data.get("agent_llm_usage", {})
 
@@ -63,13 +66,14 @@
 #                             except json.JSONDecodeError:
 #                                 print(f"ERROR: Could not parse {stats_file}")
 #                         else:
-#                             print(f"SOMETHING IS WRONG (No stats.json found in {case_dir})")
+#                             print(
+#                                 f"SOMETHING IS WRONG (No stats.json found in {case_dir})")
 
 #     else:
 #         print(f"Skipping (not found): {dir_path}")
 
-# print(f"Total Adjusted Input Tokens:  {3*input/1000000}")
-# print(f"Total Adjusted Output Tokens: {15*output/1000000}")
+# print(f"Total Adjusted Input Tokens:  {0.53*input/1000000}")
+# print(f"Total Adjusted Output Tokens: {2.66*output/1000000}")
 
 #########################################################################################################
 #################################### CALCULATING COST OF JUDGE RUNS ####################################
@@ -637,6 +641,44 @@
 
 # # Modify this list to include only the directories you want to process
 # TARGET_DIRS = [
+# "fluids/QWEN_3_Inconsistency",
+# "fluids/QWEN_3_Disambiguation",
+# "foam/QWEN_3_Inconsistency",
+# "foam/QWEN_3_Disambiguation",
+# "pde/QWEN_3_Inconsistency",
+# "pde/QWEN_3_Disambiguation",
+# "matSci/QWEN_3_Inconsistency",
+# "matSci/QWEN_3_Disambiguation",
+# 'solMech/QWEN_3_Inconsistency',
+# "solMech/QWEN_3_Disambiguation",
+# "solToolUse/QWEN_3_Disambiguation",
+# "solToolUse/QWEN_3_Inconsistency",
+# "fluids/KIMI_2_5_Inconsistency",
+# "fluids/KIMI_2_5_Disambiguation",
+# "foam/KIMI_2_5_Inconsistency",
+# "foam/KIMI_2_5_Disambiguation",
+# "pde/KIMI_2_5_Inconsistency",
+# "pde/KIMI_2_5_Disambiguation",
+# "matSci/KIMI_2_5_Inconsistency",
+# "matSci/KIMI_2_5_Disambiguation",
+# 'solMech/KIMI_2_5_Inconsistency',
+# "solMech/KIMI_2_5_Disambiguation",
+# "solToolUse/KIMI_2_5_Disambiguation",
+# "solToolUse/KIMI_2_5_Inconsistency",
+
+# "fluids/DEEPSEEK_V3_Inconsistency",
+# "fluids/DEEPSEEK_V3_Disambiguation",
+# "foam/DEEPSEEK_V3_Inconsistency",
+# "foam/DEEPSEEK_V3_Disambiguation",
+# "pde/DEEPSEEK_V3_Inconsistency",
+# "pde/DEEPSEEK_V3_Disambiguation",
+# "matSci/DEEPSEEK_V3_Inconsistency",
+# "matSci/DEEPSEEK_V3_Disambiguation",
+# 'solMech/DEEPSEEK_V3_Inconsistency',
+# "solMech/DEEPSEEK_V3_Disambiguation",
+# "solToolUse/DEEPSEEK_V3_Disambiguation",
+# "solToolUse/DEEPSEEK_V3_Inconsistency"
+# ]
 #     "clamber/OLLAMA_Disambiguation",
 #     "clamber/GEMINI_2_5_PRO_Disambiguation",
 #     "solToolUse/OLLAMA_Inconsistency",

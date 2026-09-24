@@ -6,7 +6,8 @@ from typing import Optional
 import requests
 import json
 from pathlib import Path
-
+import boto3
+from google import genai
 from langchain_aws import ChatBedrockConverse
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -66,9 +67,16 @@ class LLMService:
                 temperature=self.temperature,
                 api_key=os.getenv("OPENAI_API_KEY")
             )
+        elif self.model_provider == "openrouter":
+            self.llm = ChatOpenAI(
+                model=self.model_version,
+                temperature=self.temperature,
+                api_key=os.getenv("OPENROUTER_API_KEY"),
+                base_url="https://openrouter.ai/api/v1"
+            )
 
         elif self.model_provider.lower() == "ollama":
-            # Get Ollama base URL from environment (for remote instances like Perlmutter)
+            # Get Ollama base URL from environment (for remote instances, e.g. an HPC compute node)
             # Default to localhost if not set
             ollama_base_url = os.getenv(
                 "OLLAMA_BASE_URL", "http://127.0.0.1:11434")
@@ -83,7 +91,7 @@ class LLMService:
                 print(
                     f"Error: Cannot connect to Ollama server at {ollama_base_url}: {e}")
                 print(
-                    "Make sure Ollama is running. On Perlmutter, start with: ollama serve")
+                    "Make sure Ollama is running. On a remote node, start with: ollama serve")
                 raise ConnectionError(
                     f"Cannot connect to Ollama at {ollama_base_url}. Please ensure Ollama is running.")
 
@@ -130,11 +138,53 @@ class LLMService:
                 base_url=ollama_base_url,
                 temperature=self.temperature
             )
-        elif self.model_provider in ["claude_sdk", "codex"]:
+        elif self.model_provider in ["claude_sdk", "codex", "bedrock_boto3", "vertex_gemini"]:
             self.llm = self.model_provider
         else:
             raise ValueError(
                 f"{self.model_provider} is not a supported model_provider")
+
+    def _invoke_boto3_converse(self, system_prompt: Optional[str], user_prompt: str) -> str:
+        aws_region = os.getenv("AWS_DEFAULT_REGION", "us-west-2").strip()
+        client = boto3.client("bedrock-runtime", region_name=aws_region)
+
+        system_msgs = [{"text": system_prompt}] if system_prompt else []
+        messages = [{"role": "user", "content": [{"text": user_prompt}]}]
+
+        resp = client.converse(
+            modelId=self.model_version,
+            system=system_msgs,
+            messages=messages,
+            inferenceConfig={"temperature": self.temperature}
+        )
+
+        text = "".join(p.get("text", "")
+                       for p in resp["output"]["message"]["content"] if "text" in p).strip()
+        return text
+
+    def _invoke_vertex_gemini(self, system_prompt: Optional[str], user_prompt: str) -> str:
+        project = os.environ.get(
+            "GOOGLE_CLOUD_PROJECT", "gen-lang-client-0168697037")
+        location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
+
+        client = genai.Client(
+            vertexai=True,
+            project=project,
+            location=location,
+        )
+
+        config = {}
+        if system_prompt:
+            config["system_instruction"] = system_prompt
+
+        resp = client.models.generate_content(
+            model=self.model_version,
+            contents=user_prompt,
+            config=config if config else None,
+        )
+
+        text = (resp.text or "").strip()
+        return text
 
     def _load_codex_token(self) -> tuple[str, Optional[str]]:
         candidates = [
@@ -288,7 +338,7 @@ class LLMService:
         prompt_tokens = 0
         messages = []
 
-        if self.model_provider in ["claude_sdk", "codex"]:
+        if self.model_provider in ["claude_sdk", "codex", "bedrock_boto3", "vertex_gemini"]:
             prompt_tokens = count_tokens(
                 system_prompt or "") + count_tokens(user_prompt)
         else:
@@ -309,7 +359,12 @@ class LLMService:
                 elif self.model_provider == "codex":
                     final_content = self._invoke_codex(
                         system_prompt, user_prompt)
-
+                elif self.model_provider == "bedrock_boto3":
+                    final_content = self._invoke_boto3_converse(
+                        system_prompt, user_prompt)
+                elif self.model_provider == "vertex_gemini":
+                    final_content = self._invoke_vertex_gemini(
+                        system_prompt, user_prompt)
                 # Standard Langchain Integration
                 else:
                     response = self.llm.invoke(messages)
@@ -331,7 +386,7 @@ class LLMService:
                     raise ValueError(
                         f"Received empty response from {self.model_provider}.")
 
-                if self.model_provider in ["claude_sdk", "codex"]:
+                if self.model_provider in ["claude_sdk", "codex", "bedrock_boto3", "vertex_gemini"]:
                     completion_tokens = count_tokens(final_content)
                 else:
                     completion_tokens = self.llm.get_num_tokens(final_content)

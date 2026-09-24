@@ -1,0 +1,143 @@
+The function shall assume charge-state subfolders under `file_path/Mg_Ga/` are named `q-2/`, `q-1/`, `q0/`, `q1/` following common Pymatgen defect conventions.
+
+The function shall import `Structure`, `Vasprun`, `Locpot`, `DefectEntry`, `Defect`, `Substitution`, `FreysoldtCorrection`, and `get_correction` from `pymatgen.core`, `pymatgen.io.vasp`, `pymatgen.entries.defects`, and `pymatgen.analysis.defects.corrections`.
+
+The function shall define `compute_defect_properties()` with no required input arguments.
+
+The function shall set `file_path` to a default value of `"."` (current directory) or accept an optional keyword argument `file_path` with default `"."`.
+
+The function shall load the bulk structure from `file_path / "GaN.vasp"` using `Structure.from_file`.
+
+The function shall load the bulk LOCPOT from `file_path / "bulk_sc" / "LOCPOT.gz"` using `Locpot.from_file`.
+
+The function shall identify the Ga site to substitute by finding a Ga atom in the bulk structure, preferably near the center of the supercell.
+
+The function shall create a `Substitution` defect for `Mg_Ga` using the bulk structure, the Mg species, and the selected Ga site index.
+
+The function shall iterate over charge states `[-2, -1, 0, 1]` and for each charge state:
+
+The function shall construct the subfolder path as `file_path / "Mg_Ga" / f"q{charge_state}"` for negative and zero charges, and `file_path / "Mg_Ga" / f"q+{charge_state}"` for positive charges, or more simply use `f"q{charge_state:+d}"` to produce `q-2`, `q-1`, `q0`, `q+1`.
+
+The function shall load the defect vasprun from the subfolder's `vasprun.xml.gz` using `Vasprun`.
+
+The function shall load the defect LOCPOT from the subfolder's `LOCPOT.gz` using `Locpot`.
+
+The function shall create a `DefectEntry` with the defect object, the charge state, the energy from vasprun, and a dictionary containing the LOCPOT data under key `"locpot"`.
+
+The function shall store all `DefectEntry` objects in a list.
+
+The function shall generate Freysoldt correction metadata using dielectric constant `14` by creating a `FreysoldtCorrection` object with `dielectric=14` and calling `get_correction` on each defect entry to populate the correction metadata.
+
+The function shall compute `freysoldt_correction` for the `q=1` case using dielectric constant `10` by creating a new `FreysoldtCorrection` with `dielectric=10` and calling `get_correction` on the `q=1` defect entry, extracting the correction value.
+
+The function shall compute `potential_alignment_consistency` by comparing the potential alignment data from the correction metadata generated with dielectric `14` across all charge states, returning `True` if the potential alignment values are consistent (e.g., standard deviation below a threshold or exact match), otherwise `False`. Specifically, the function shall check that the potential alignment correction component is similar when computed with the same dielectric across different charge states or verify that the metadata structure is consistent.
+
+The function shall compute `energy_difference` as the difference between the defect supercell energy and the bulk supercell energy for each charge state, specifically returning the value for the neutral charge state `q=0` or providing a dictionary of all differences. The function shall return the `q=0` energy difference as a representative float value.
+
+The function shall return a dictionary with keys `"freysoldt_correction"`, `"potential_alignment_consistency"`, and `"energy_difference"` containing the computed float, boolean, and float values respectively.
+
+The function shall include a complete docstring describing the function purpose, the optional `file_path` parameter, and the returned dictionary with property descriptions and types.
+
+The function shall handle file loading with appropriate error handling or assume files exist as specified.
+
+The function shall use `pathlib.Path` for path manipulation.
+
+```python
+from pathlib import Path
+from pymatgen.core import Structure
+from pymatgen.io.vasp import Vasprun, Locpot
+from pymatgen.entries.defects import DefectEntry
+from pymatgen.analysis.defects.core import Substitution
+from pymatgen.analysis.defects.corrections import FreysoldtCorrection
+import numpy as np
+
+
+def compute_defect_properties(file_path="."):
+    """
+    Compute defect properties for Mg_Ga substitution in GaN.
+    
+    Parameters
+    ----------
+    file_path : str, optional
+        Base directory containing input files. Default is current directory.
+    
+    Returns
+    -------
+    dict
+        Dictionary with keys:
+        - 'freysoldt_correction' (float): Freysoldt correction for q=1 with dielectric=10
+        - 'potential_alignment_consistency' (bool): Consistency check of potential alignment
+        - 'energy_difference' (float): Energy difference for q=0 defect vs bulk
+    """
+    file_path = Path(file_path)
+    
+    # Load bulk structure and LOCPOT
+    bulk_structure = Structure.from_file(file_path / "GaN.vasp")
+    bulk_locpot = Locpot.from_file(file_path / "bulk_sc" / "LOCPOT.gz")
+    bulk_energy = Vasprun(file_path / "bulk_sc" / "vasprun.xml.gz").final_energy
+    
+    # Find Ga site for substitution (prefer center of cell)
+    ga_sites = [i for i, site in enumerate(bulk_structure) if site.specie.symbol == "Ga"]
+    center = np.array([0.5, 0.5, 0.5])
+    distances = [np.linalg.norm(bulk_structure[i].frac_coords - center) for i in ga_sites]
+    ga_index = ga_sites[np.argmin(distances)]
+    
+    # Create substitution defect
+    defect = Substitution(bulk_structure, ga_index, "Mg")
+    
+    # Build DefectEntry objects for each charge state
+    charge_states = [-2, -1, 0, 1]
+    defect_entries = {}
+    
+    for q in charge_states:
+        folder_name = f"q{q:+d}" if q > 0 else f"q{q}"
+        defect_dir = file_path / "Mg_Ga" / folder_name
+        
+        vr = Vasprun(defect_dir / "vasprun.xml.gz")
+        locpot = Locpot.from_file(defect_dir / "LOCPOT.gz")
+        
+        entry = DefectEntry(
+            defect=defect,
+            charge_state=q,
+            energy=vr.final_energy,
+            parameters={"locpot": locpot}
+        )
+        defect_entries[q] = entry
+    
+    # Generate correction metadata with dielectric=14
+    fc_14 = FreysoldtCorrection(dielectric=14)
+    metadata_14 = {}
+    for q, entry in defect_entries.items():
+        corr, meta = fc_14.get_correction(entry, return_meta=True)
+        metadata_14[q] = meta
+    
+    # Compute freysoldt_correction for q=1 with dielectric=10
+    fc_10 = FreysoldtCorrection(dielectric=10)
+    correction_q1, meta_q1 = fc_10.get_correction(defect_entries[1], return_meta=True)
+    freysoldt_correction = correction_q1
+    
+    # Check potential alignment consistency using dielectric=14 metadata
+    # Extract potential alignment values from metadata
+    pa_values = []
+    for q in charge_states:
+        if "potalign" in metadata_14[q]:
+            pa_values.append(metadata_14[q]["potalign"])
+        elif "potential_alignment" in metadata_14[q]:
+            pa_values.append(metadata_14[q]["potential_alignment"])
+    
+    # Consistent if all values are finite and within reasonable range
+    potential_alignment_consistency = (
+        len(pa_values) == len(charge_states) and
+        all(np.isfinite(v) for v in pa_values) and
+        np.std(pa_values) < 1.0  # threshold for consistency
+    )
+    
+    # Compute energy difference for q=0
+    energy_difference = defect_entries[0].energy - bulk_energy
+    
+    return {
+        "freysoldt_correction": float(freysoldt_correction),
+        "potential_alignment_consistency": bool(potential_alignment_consistency),
+        "energy_difference": float(energy_difference)
+    }
+```
