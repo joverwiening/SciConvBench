@@ -1,3 +1,5 @@
+import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,9 +21,35 @@ class Config:
     # codex_gpt5
     # ollama_local
     # ==========================================
-    ACTIVE_PROFILE = "gemini_2_5_pro_vertex"
+    # judges build Config() with no arguments, so this env var is how the judge model is chosen per run
+    ACTIVE_PROFILE = os.getenv("SCICONV_PROFILE", "gemini_2_5_pro_vertex")
 
     LLM_PROFILES = {
+        "or_sonnet_4_6": {
+            "provider": "openrouter",
+            "model_version": "anthropic/claude-sonnet-4.6",
+            "temperature": 0.0
+        },
+        "or_gemini_2_5_pro": {
+            "provider": "openrouter",
+            "model_version": "google/gemini-2.5-pro",
+            "temperature": 0.0
+        },
+        "or_gemini_2_5_flash": {
+            "provider": "openrouter",
+            "model_version": "google/gemini-2.5-flash",
+            "temperature": 0.0
+        },
+        "or_gpt_5_2": {
+            "provider": "openrouter",
+            "model_version": "openai/gpt-5.2",
+            "temperature": 0.0
+        },
+        "or_gpt_6_luna": {
+            "provider": "openrouter",
+            "model_version": "openai/gpt-6-luna",
+            "temperature": 0.0
+        },
         "bedrock_3_5_sonnet": {
             "provider": "bedrock",
             "model_version": "arn:aws:bedrock:us-west-2:<ACCOUNT_ID>:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0",

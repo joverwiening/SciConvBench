@@ -50,14 +50,14 @@ def save_statistics(file_path, agent_stats, turns_needed, max_turns_allowed, suc
         json.dump(stats_data, f, indent=4)
 
 
-def run_single_case(case_data, config, task_mode, output_root, baseline=False):
+def run_single_case(case_data, config, task_mode, output_root, baseline=False,
+                    user_profile=None, max_turns=10):
     """Runs the simulation for one specific case."""
 
     keys = config['keys']
     case_id = case_data.get('id', 'unknown_case')
     incomplete_req = case_data.get(keys['input_prompt'], "")
     complete_req = case_data.get(keys['ground_truth'], "")
-    max_turns = 10  # Hardcoded
 
     if not incomplete_req:
         print(f"Skipping {case_id}: Missing input prompt in JSON.")
@@ -91,7 +91,17 @@ def run_single_case(case_data, config, task_mode, output_root, baseline=False):
     prompt_mode = "baseline" if baseline else None
     agent = ConvAgent(cfg, prompt_mode)
 
-    user_llm_service = LLMService(cfg)
+    # upstream built the user from the agent's cfg; the paper (sec 4) uses a fixed Sonnet 4.6 user
+    if user_profile:
+        user_cfg = Config()
+        prof = Config.LLM_PROFILES[user_profile]
+        user_cfg.model_provider = prof["provider"]
+        user_cfg.model_version = prof["model_version"]
+        user_cfg.temperature = prof["temperature"]
+    else:
+        user_cfg = cfg
+    print("Simulated user model:", user_cfg.model_provider, user_cfg.model_version)
+    user_llm_service = LLMService(user_cfg)
     simulated_user = LLMUserInterface(
         llm_service=user_llm_service,
         incomplete_requirement=incomplete_req,
@@ -143,6 +153,9 @@ def run_single_case(case_data, config, task_mode, output_root, baseline=False):
     agent_stats = agent.llm.get_statistics()
     save_statistics(stats_file, agent_stats, turn,
                     max_turns, success, task_mode)
+    with open(os.path.join(case_folder, "user_statistics.json"), "w") as f:
+        json.dump({"user_model": user_cfg.model_version,
+                   "user_llm_usage": user_llm_service.get_statistics()}, f, indent=4)
     print(f"  Saved outputs to {case_folder}/")
 
 
@@ -158,25 +171,17 @@ def main():
     parser.add_argument("--domain", required=True, type=str,
                         help="The domain folder containing the test files (e.g., foam, fluids, pde)")
 
-    parser.add_argument("--model", required=True, choices=[
-        "bedrock_3_5_sonnet",
-        "bedrock_4_0_sonnet",
-        "bedrock_3_5_haiku",
-        "bedrock_4_6_sonnet",
-        "bedrock_4_6_opus",
-        "gemini_pro",
-        "gemini_flash",
-        "openai_gpt5",
-        "ollama_local",
-        "openrouter_deepseek",
-        "openrouter_qwen",
-        "openrouter_llama",
-        "bedrock_qwen",
-        "bedrock_deepseek",
-        "bedrock_llama",
-        "bedrock_kimi",
-        "gemini_2_5_pro_vertex"
-    ], help="Model profile to use (overrides config.py)")
+    parser.add_argument("--model", required=True, choices=list(Config.LLM_PROFILES),
+                        help="Model profile to use (overrides config.py)")
+
+    parser.add_argument("--user_model", default=None, choices=list(Config.LLM_PROFILES),
+                        help="Simulated-user profile; default = same as --model (upstream behaviour)")
+
+    # 10 question turns + 1 forced final call = the paper's 11-turn budget; released runs record 10
+    parser.add_argument("--max_turns", type=int, default=10)
+
+    parser.add_argument("--cases", default=None,
+                        help="Comma-separated case ids to run (default: all)")
 
     parser.add_argument("--baseline", action="store_true",
                         help="Run the baseline agent instead of the expert agent.")
@@ -212,10 +217,12 @@ def main():
     print("="*60)
 
     # Run All
+    wanted = set(args.cases.split(",")) if args.cases else None
     for case in cases:
-        id_int = int(case["id"][-3] + case["id"][-2] + case["id"][-1])
-        # if id_int >45 :
-        run_single_case(case, task_cfg, mode, output_dir, baseline)
+        if wanted and case["id"] not in wanted:
+            continue
+        run_single_case(case, task_cfg, mode, output_dir, baseline,
+                        user_profile=args.user_model, max_turns=args.max_turns)
 
 
 if __name__ == "__main__":
