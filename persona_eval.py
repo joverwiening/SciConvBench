@@ -586,7 +586,7 @@ def main(argv=None):
             with open(entry["path"]) as f:
                 ctx["cards"][key] = {"data": json.load(f), "sha256": entry["sha256"]}
         elif not args.skip_aux:
-            sys.exit(f"No cards recorded in the manifest for {key}; attribution needs them (or --skip_aux)")
+            print(f"WARNING: no cards recorded for {key}; per-item attribution is skipped, trait check still runs")
 
     eval_manifest_path = os.path.join(args.run_dir, "eval_manifest.json")
     em = read_json(eval_manifest_path) or {"prices": {}, "invocations": []}

@@ -218,11 +218,11 @@ def main(argv=None):
 
     cards_path = args.cards or pu.default_cards_path(args.domain, args.mode)
     cards = load_cards(cards_path)
-    if any(a in pu.DETERMINISTIC_ARMS for a in arms):
+    if "oracle" in arms:
         if cards is None:
-            sys.exit(f"oracle/mute arms need a fact-card file; not found: {cards_path}")
+            sys.exit(f"oracle arm needs a fact-card file; not found: {cards_path}")
         no_cards = [c for c in case_ids if not cards["cases"].get(c, {}).get("cards")]
-        if no_cards and "oracle" in arms:
+        if no_cards:
             sys.exit(f"No fact cards for cases {no_cards} in {cards_path}")
 
     agent_cfg = pu.role_config(args.agent_model, args.agent_temperature)
