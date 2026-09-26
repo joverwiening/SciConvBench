@@ -14,6 +14,7 @@ class LLMUserInterface:
     complete_requirement: str
     clarifications: List[Dict[str, Any]] = field(default_factory=list)
     log_file: str = "conversation_log.txt"
+    persona_text: str = ""
 
     def __post_init__(self):
         """Ensures the log file exists, even if no conversation happens"""
@@ -53,11 +54,8 @@ class LLMUserInterface:
         context_parts.append("</clarifications>")
         return "\n".join(context_parts)
     
-    def answer_clarification_question(self, question: str) -> str:
-        # Log the question immediately
-        self._log_qa(question, "Thinking...")
-        
-        system_prompt = f"""You are a User who knows the COMPLETE requirement for a task.
+    def build_system_prompt(self) -> str:
+        prompt = f"""You are a User who knows the COMPLETE requirement for a task.
 
         The Agent only has an INCOMPLETE version and is asking clarification questions.
         You have access to the COMPLETE requirement and should answer based strictly on that.
@@ -78,6 +76,15 @@ class LLMUserInterface:
         - Do not make up new constraints that aren't in the complete requirement.
         - Answer like a human user would.
         """
+        if not self.persona_text:
+            return prompt
+        return prompt + f"\n        PERSONA:\n{self.persona_text}\n"
+
+    def answer_clarification_question(self, question: str) -> str:
+        # Log the question immediately
+        self._log_qa(question, "Thinking...")
+        
+        system_prompt = self.build_system_prompt()
 
         user_prompt = f"""The Agent asks:
         "{question}"

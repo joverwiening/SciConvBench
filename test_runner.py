@@ -2,6 +2,8 @@ import os
 import json
 import time
 import argparse
+from dataclasses import dataclass
+from typing import Optional
 from config import Config
 from main import ConvAgent
 from utils import LLMService
@@ -48,6 +50,42 @@ def save_statistics(file_path, agent_stats, turns_needed, max_turns_allowed, suc
 
     with open(file_path, "w") as f:
         json.dump(stats_data, f, indent=4)
+
+
+@dataclass
+class DialogueResult:
+    final_spec: Optional[str]
+    turns: int
+    completed_by_agent: bool
+    cap_hit: bool
+    error: Optional[str] = None
+
+
+def run_dialogue(agent, simulated_user, initial_input, max_turns, sleep=0.5):
+    """Upstream question loop; on the turn cap the agent is forced to write its final spec."""
+    current_input = initial_input
+    turn = 0
+    try:
+        while turn < max_turns:
+            turn += 1
+            print(f"  [Turn {turn}] Agent Thinking...")
+
+            agent_response = agent.chat(current_input)
+
+            if "[COMPLETE]" in agent_response:
+                final_summary = agent_response.replace(
+                    "[COMPLETE]", "").strip()
+                return DialogueResult(final_summary, turn, True, False)
+
+            user_response = simulated_user.answer_clarification_question(
+                agent_response)
+            current_input = user_response
+            time.sleep(sleep)
+
+        return DialogueResult(agent.get_final_attempt(), turn, False, True)
+
+    except Exception as e:
+        return DialogueResult(None, turn, False, False, str(e))
 
 
 def run_single_case(case_data, config, task_mode, output_root, baseline=False,
@@ -109,45 +147,18 @@ def run_single_case(case_data, config, task_mode, output_root, baseline=False,
         log_file=log_file
     )
 
-    # Run Loop
-    current_input = incomplete_req
-    turn = 0
-    success = False
-
-    try:
-        while turn < max_turns:
-            turn += 1
-            print(f"  [Turn {turn}] Agent Thinking...")
-
-            agent_response = agent.chat(current_input)
-
-            # Check Completion
-            if "[COMPLETE]" in agent_response:
-                print(f"  Case {case_id} COMPLETED in {turn} turns.")
-                final_summary = agent_response.replace(
-                    "[COMPLETE]", "").strip()
-
-                with open(result_file, "w") as f:
-                    f.write(final_summary)
-
-                success = True
-                break
-
-            # User Turn
-            user_response = simulated_user.answer_clarification_question(
-                agent_response)
-            current_input = user_response
-            time.sleep(0.5)
-
-        if not success:
-            print(f"  Case {case_id} reached max turns ({max_turns}).")
-            final_summary = agent.get_final_attempt()
-            with open(result_file, "w") as f:
-                f.write(final_summary)
-            success = True
-
-    except Exception as e:
-        print(f"  Error in case {case_id}: {e}")
+    result = run_dialogue(agent, simulated_user, incomplete_req, max_turns)
+    if result.error is not None:
+        print(f"  Error in case {case_id}: {result.error}")
+    elif result.completed_by_agent:
+        print(f"  Case {case_id} COMPLETED in {result.turns} turns.")
+    else:
+        print(f"  Case {case_id} reached max turns ({max_turns}).")
+    if result.final_spec is not None:
+        with open(result_file, "w") as f:
+            f.write(result.final_spec)
+    turn = result.turns
+    success = result.final_spec is not None
 
     # Save Stats
     agent_stats = agent.llm.get_statistics()

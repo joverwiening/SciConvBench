@@ -41,6 +41,11 @@ class LLMService:
         self.total_tokens = 0
         self.failed_calls = 0
         self.retry_count = 0
+        # provider-reported usage (langchain usage_metadata); includes reasoning tokens the estimates miss
+        self.api_usage_calls = 0
+        self.api_input_tokens = 0
+        self.api_output_tokens = 0
+        self.api_reasoning_tokens = 0
 
         self._initialize_llm()
 
@@ -368,6 +373,7 @@ class LLMService:
                 # Standard Langchain Integration
                 else:
                     response = self.llm.invoke(messages)
+                    self._record_api_usage(response)
                     raw_content = response.content
                     if isinstance(raw_content, list):
                         text_parts = []
@@ -413,6 +419,16 @@ class LLMService:
                     f"Error: {str(e)}. Retrying in {sleep_time:.2f}s (attempt {retry_count}/{max_retries})")
                 time.sleep(sleep_time)
 
+    def _record_api_usage(self, response) -> None:
+        usage = getattr(response, "usage_metadata", None)
+        if not usage:
+            return
+        self.api_usage_calls += 1
+        self.api_input_tokens += usage.get("input_tokens", 0) or 0
+        self.api_output_tokens += usage.get("output_tokens", 0) or 0
+        details = usage.get("output_token_details") or {}
+        self.api_reasoning_tokens += details.get("reasoning", 0) or 0
+
     def print_statistics(self, name: str = "LLM Service") -> None:
         """Print the current statistics of the LLM service."""
         print(f"\n<Statistics: {name}>")
@@ -432,5 +448,9 @@ class LLMService:
             "total_retries": self.retry_count,
             "total_tokens": self.total_tokens,
             "prompt_tokens": self.total_prompt_tokens,
-            "completion_tokens": self.total_completion_tokens
+            "completion_tokens": self.total_completion_tokens,
+            "api_usage_calls": self.api_usage_calls,
+            "api_input_tokens": self.api_input_tokens,
+            "api_output_tokens": self.api_output_tokens,
+            "api_reasoning_tokens": self.api_reasoning_tokens
         }
