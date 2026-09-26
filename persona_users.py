@@ -16,8 +16,9 @@ REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 PERSONA_DIR = os.path.join(REPO_DIR, "persona", "personas")
 
 PRECEDENCE = ("The persona below describes how you talk and behave in this conversation. "
-              "Where it conflicts with the style instructions above, follow the persona. "
-              "It never changes the facts: every value you give must come from the COMPLETE requirement.")
+              "Where it conflicts with the style instructions above, follow the persona, with two limits: "
+              "every value you give must come from the COMPLETE requirement, and you do not give information "
+              "that was not asked for unless the persona explicitly tells you to.")
 MUTE_REPLY = "Make a reasonable assumption based on best practices."
 DETERMINISTIC_ARMS = ("oracle", "mute")
 MODE_LABEL = {"disambiguation": "Disambiguation", "inconsistency": "Inconsistency"}
@@ -49,11 +50,17 @@ def load_personas(persona_dir: str = PERSONA_DIR) -> Dict[str, dict]:
 
 
 def trait_ids(personas: Dict[str, dict]) -> List[str]:
-    return [pid for pid, p in personas.items() if p["kind"] != "neutral"]
+    return [pid for pid, p in personas.items() if p["kind"] not in ("neutral", "placebo")]
+
+
+def placebo_ids(personas: Dict[str, dict]) -> List[str]:
+    return [pid for pid, p in personas.items() if p["kind"] == "placebo"]
 
 
 def render_persona(trait_id: Optional[str], personas: Optional[Dict[str, dict]] = None) -> str:
     personas = personas or load_personas()
+    if trait_id is not None and personas[trait_id]["kind"] == "placebo":
+        return "\n\n".join([PRECEDENCE, personas[trait_id]["text"]])
     parts = [PRECEDENCE, personas["neutral"]["text"]]
     if trait_id is not None and trait_id != "neutral":
         parts.append(personas[trait_id]["text"])
@@ -69,7 +76,7 @@ def persona_text_for_arm(arm: str, personas: Optional[Dict[str, dict]] = None) -
 
 
 def valid_arms(personas: Dict[str, dict]) -> List[str]:
-    return ["paper", "neutral"] + trait_ids(personas) + list(DETERMINISTIC_ARMS)
+    return ["paper", "neutral"] + placebo_ids(personas) + trait_ids(personas) + list(DETERMINISTIC_ARMS)
 
 
 @dataclass

@@ -383,6 +383,20 @@ def trait_turn(llm, trait_defs, question, answer):
     return out
 
 
+def attribution_flags(card_id, turns):
+    levels = [t["conveyed"].get(card_id, {}).get("level") for t in turns]
+    delivered = "full" in levels
+    # leak: conveyed in full in a turn that does not ask for it, before any turn has asked for it
+    asked_before, leak = False, False
+    for t in turns:
+        asked_now = card_id in t["asked"]
+        if t["conveyed"].get(card_id, {}).get("level") == "full" and not asked_now and not asked_before:
+            leak = True
+        asked_before = asked_before or asked_now
+    return {"asked": any(card_id in t["asked"] for t in turns), "delivered": delivered,
+            "partial": (not delivered) and "partial" in levels, "unasked_delivered": leak}
+
+
 # ---- per case ----
 
 def norm_entity(s):
@@ -465,12 +479,9 @@ def eval_case(folder, ctx):
         card = card_by_index.get(i)
         r = {"index": i, "item": item, "card_id": card["card_id"] if card else None,
              "has_card": card is not None, "asked": None, "delivered": None, "partial": None,
-             "recovered": recovered[i], "grounded": None, "silent": None}
+             "unasked_delivered": None, "recovered": recovered[i], "grounded": None, "silent": None}
         if attribution is not None and card is not None:
-            levels = [t["conveyed"].get(card["card_id"], {}).get("level") for t in attribution["turns"]]
-            r["asked"] = any(card["card_id"] in t["asked"] for t in attribution["turns"])
-            r["delivered"] = "full" in levels
-            r["partial"] = (not r["delivered"]) and "partial" in levels
+            r.update(attribution_flags(card["card_id"], attribution["turns"]))
         if r["recovered"] is not None and r["delivered"] is not None:
             r["grounded"] = r["recovered"] and r["delivered"]
             r["silent"] = r["recovered"] and not r["delivered"]
@@ -504,7 +515,8 @@ def eval_case(folder, ctx):
         "arm": arm, "trait": run.get("trait"), "rep": run["rep"], "case_id": case_id,
         "domain": domain, "mode": mode, "agent_label": agent_label, "n_items": len(items),
         "native": native, "items": item_rows,
-        "item_rates": {k: rate(k) for k in ("asked", "delivered", "partial", "recovered", "grounded", "silent")},
+        "item_rates": {k: rate(k) for k in ("asked", "delivered", "partial", "unasked_delivered", "recovered", "grounded",
+                                           "silent")},
         "unmatched_recovered_entities": unmatched,
         "turns": run.get("turns"), "questions": len(turns), "cap_hit": run.get("cap_hit"),
         "completed_by_agent": run.get("completed_by_agent"),
