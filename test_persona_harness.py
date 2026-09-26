@@ -34,6 +34,11 @@ DOMAIN, MODE = "pde", "disambiguation"
 CASES = pu.load_cases(DOMAIN, MODE)
 CASE_IDS = list(CASES)[:2]
 GT_TO_ENTITIES = {c["complete_user_req"].strip(): c["missing_entities"] for c in CASES.values()}
+INC_MODE = "inconsistency"
+INC_CASES = pu.load_cases(DOMAIN, INC_MODE)
+INC_CASE_IDS = list(INC_CASES)[:2]
+# fake FR judge resolves every inconsistency of the first case and none of the second
+INC_RESOLVED = {INC_CASES[cid]["correct_prompt"].strip(): k == 0 for k, cid in enumerate(INC_CASE_IDS)}
 
 BUILT = []
 CALLS = []
@@ -74,6 +79,17 @@ class FakeLLM:
         sp = system_prompt or ""
         with _lock:
             CALLS.append((self.model_version, sp, user_prompt))
+        if "[KNOWN_INCONSISTENCIES]" in sp:
+            n = len(re.findall(r"Inconsistency #\d+:", between("KNOWN_INCONSISTENCIES", user_prompt)))
+            ok = INC_RESOLVED.get(between("GROUND_TRUTH_PROMPT", user_prompt), False)
+            return fj({"score": "1/1" if ok else "0/1", "status": "RESOLVED" if ok else "FAILED",
+                       "breakdown": [{"inconsistency_index": i + 1, "resolved": ok, "reasoning": "r"}
+                                     for i in range(n)]})
+        if "[PLANTED_INCONSISTENCIES]" in sp:
+            return fj({"questions_about_inconsistencies": {"reasoning": "r", "count": 1},
+                       "relevant_questions": {"reasoning": "r", "count": 1},
+                       "explicit_warnings": {"reasoning": "r", "count": 0},
+                       "memory_consistency": {"reasoning": "r", "is_consistent": 1}})
         if "Requirement Analyst" in sp:
             if "Time is up" in sp:
                 return "FINAL SPEC (forced)"
@@ -247,12 +263,12 @@ RUN_FILES = ["conversation_log.txt", "generated_prompt.txt", "complete_prompt.tx
              "user_statistics.json", "persona_run.json"]
 
 
-def synthetic_cards(path):
+def synthetic_cards(path, mode=MODE, cases=CASES, case_ids=CASE_IDS):
     data = {"meta": {"model": None}, "cases": {}}
-    for cid in CASE_IDS:
+    for cid in case_ids:
         cards = []
-        for i, item in enumerate(CASES[cid]["missing_entities"]):
-            cards.append({"card_id": f"{DOMAIN}/{MODE}/{cid}#{i}", "case_id": cid, "index": i, "item": item,
+        for i, item in enumerate(cases[cid][pu.ITEMS_KEY[mode]]):
+            cards.append({"card_id": f"{DOMAIN}/{mode}/{cid}#{i}", "case_id": cid, "index": i, "item": item,
                           "spans": [], "statement": "", "text": f"FACT {cid} number {i}",
                           "checks": {}, "status": "ok"})
         data["cases"][cid] = {"status": "ok", "cards": cards}
@@ -442,7 +458,7 @@ class TestAnalysis(unittest.TestCase):
                         rec = rng.random() < (0.9 if delivered else 0.1) if arm not in ("oracle", "mute") \
                             else rng.random() < pr
                         items.append({"index": i, "asked": True, "delivered": delivered, "partial": False,
-                                      "recovered": rec, "grounded": rec and delivered,
+                                      "unasked_delivered": False, "recovered": rec, "grounded": rec and delivered,
                                       "silent": rec and not delivered})
                     rate = lambda k: sum(it[k] for it in items) / len(items)
                     fr = int(all(it["recovered"] for it in items))
@@ -469,6 +485,178 @@ class TestAnalysis(unittest.TestCase):
         self.assertEqual(man["neutral"]["terse"], 0.0)
         md = pan.render_markdown(res)
         self.assertIn("Paired effect vs neutral", md)
+
+
+class TestInconsistencyEval(unittest.TestCase):
+    def test_runner_and_eval(self):
+        tmp = tempfile.mkdtemp()
+        cards = os.path.join(tmp, "cards.json")
+        synthetic_cards(cards, INC_MODE, INC_CASES, INC_CASE_IDS)
+        out = os.path.join(tmp, "run")
+        arms = ["neutral", "terse", "oracle"]
+        res = prun.main(["--domain", DOMAIN, "--mode", INC_MODE, "--cases", ",".join(INC_CASE_IDS),
+                         "--arms", ",".join(arms), "--agent_model", "or_gpt_5_2", "--user_model", "or_sonnet_4_6",
+                         "--reps", "1", "--workers", "2", "--out", out, "--cards", cards])
+        self.assertEqual(res, {"jobs": 6, "skipped": 0, "done": 6, "errors": 0})
+        res = pev.main(["--run_dir", out, "--judge_model", "or_gemini_2_5_pro", "--aux_model",
+                        "or_gemini_2_5_flash", "--workers", "2"])
+        self.assertEqual(res, {"rows": 6, "errors": 0})
+        for arm in arms:
+            for cid in INC_CASE_IDS:
+                d = prun.case_dir(out, arm, 1, DOMAIN, "or_gpt_5_2", INC_MODE, cid)
+                for f in pev.NATIVE_FILES[INC_MODE] + ["persona_eval.json", "persona_attribution.json"]:
+                    self.assertTrue(os.path.exists(os.path.join(d, f)), (d, f))
+                fr = jload(os.path.join(d, "llm_judge_inconsistency_score.json"))
+                self.assertEqual(len(fr["breakdown"]), len(INC_CASES[cid]["inconsistencies"]))
+                chat = jload(os.path.join(d, "llm_judge_inconsistency_chat_score.json"))
+                self.assertEqual(chat["total_planted_inconsistencies"], len(INC_CASES[cid]["inconsistencies"]))
+                self.assertIn("error_detection_rate", chat["metrics"])
+        rows = [json.loads(l) for l in readf(os.path.join(out, "results.jsonl")).splitlines()]
+        self.assertEqual(len(rows), 6)
+        for r in rows:
+            self.assertEqual(r["mode"], INC_MODE)
+            self.assertIsNotNone(r["native"])
+            want = INC_RESOLVED[INC_CASES[r["case_id"]]["correct_prompt"].strip()]
+            self.assertEqual(len(r["items"]), len(INC_CASES[r["case_id"]]["inconsistencies"]))
+            self.assertTrue(all(it["recovered"] is want for it in r["items"]))
+            self.assertEqual(r["item_rates"]["recovered"], float(want))
+            self.assertEqual(r["native"]["FR_raw"], int(want))
+        shutil.rmtree(tmp)
+
+
+class TestAttributionFlags(unittest.TestCase):
+    def test_unasked_delivered(self):
+        turns = [{"asked": ["A"], "conveyed": {"A": {"level": "full"}, "B": {"level": "full"}}}]
+        a, b = pev.attribution_flags("A", turns), pev.attribution_flags("B", turns)
+        self.assertEqual((a["asked"], a["delivered"], a["unasked_delivered"]), (True, True, False))
+        self.assertEqual((b["asked"], b["delivered"], b["unasked_delivered"]), (False, True, True))
+        turns = [{"asked": ["C"], "conveyed": {}}, {"asked": [], "conveyed": {"C": {"level": "full"}}}]
+        c = pev.attribution_flags("C", turns)
+        self.assertEqual((c["asked"], c["delivered"], c["unasked_delivered"]), (True, True, False))
+
+
+def synthetic_rows(n_cases=100, seed=3):
+    import random
+    rng = random.Random(seed)
+    shift = {"neutral": 0.0, "terse": 0.2, "verbose": 0.0, "jargon": 0.0, "uncertain": 0.0}
+    rows = []
+    for c in range(n_cases):
+        base = rng.uniform(0.2, 0.6)
+        probs = dict({a: base + d for a, d in shift.items()}, oracle=0.95, mute=0.1)
+        for arm, pr in probs.items():
+            for rep in (1, 2):
+                items = []
+                for i in range(5):
+                    rec = rng.random() < pr
+                    delivered = arm != "mute" and (rec or rng.random() < 0.2)
+                    items.append({"index": i, "asked": True, "delivered": delivered, "partial": False,
+                                  "unasked_delivered": False, "recovered": rec, "grounded": rec and delivered,
+                                  "silent": rec and not delivered})
+                rate = lambda k: sum(it[k] for it in items) / len(items)
+                fr = int(all(it["recovered"] for it in items))
+                rows.append({"arm": arm, "rep": rep, "domain": "pde", "mode": "disambiguation",
+                             "case_id": f"c{c}", "native": {"FR": fr, "CGRR": fr, "SRR": 0, "IC": 1},
+                             "items": items, "item_rates": {k: rate(k) for k in pan.ITEM_METRICS},
+                             "turns": 3, "questions": 2, "cap_hit": False,
+                             "trait_present_share": None, "trait_by_turn": None})
+    for r in [r for r in rows if r["arm"] == "neutral"]:
+        for arm in ("neutral_b", "neutral_c"):
+            rows.append(dict(json.loads(json.dumps(r)), arm=arm))
+    return rows
+
+
+class TestAnalysisPrereg(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.rows = synthetic_rows()
+        cls.res = pan.analyse(cls.rows)
+
+    def eff(self, arm, m="recovered", table="paired"):
+        return [e for e in self.res[table] if e["arm"] == arm and e["metric"] == m][0]
+
+    def test_trait_effects(self):
+        self.assertEqual(set(self.res["placebo_arms"]), {"neutral_b", "neutral_c"})
+        self.assertEqual(set(self.res["trait_arms"]), {"terse", "verbose", "jargon", "uncertain"})
+        planted, zero = self.eff("terse"), self.eff("verbose")
+        self.assertEqual(planted["n_cases"], 100)
+        self.assertLess(planted["p_holm"], 0.05)
+        self.assertTrue(planted["beats_placebo"])
+        self.assertGreater(zero["p_holm"], 0.05)
+        self.assertGreaterEqual(planted["p_holm"], planted["p"])
+
+    def test_placebo(self):
+        for arm in ("neutral_b", "neutral_c"):
+            e = self.eff(arm, table="placebo")
+            self.assertEqual((e["effect"], e["ci_lo"], e["ci_hi"]), (0.0, 0.0, 0.0))
+            self.assertLessEqual(e["ci_lo"], 0.0)
+            self.assertGreaterEqual(e["ci_hi"], 0.0)
+        self.assertFalse(any(e["arm"] in ("neutral_b", "neutral_c") for e in self.res["paired"]))
+
+    def test_selection_and_blocks(self):
+        sel = {s["arm"]: s for s in self.res["selection"]}
+        self.assertGreaterEqual(len(sel), 4)
+        self.assertGreater(sel["terse"]["p_top"], 0.9)
+        self.assertEqual(sel["terse"]["rank"], 1)
+        terc = [t for t in self.res["gap_tercile"] if t["arm"] == "terse"]
+        self.assertEqual({t["tercile"] for t in terc}, {"low", "mid", "high"})
+        self.assertEqual(sum(t["n_cases"] for t in terc), 100)
+        diff = {d["stratum"]: d for d in self.res["difficulty"] if d["arm"] == "terse"}
+        self.assertEqual(set(diff), {"easy", "hard"})
+        self.assertGreater(diff["hard"]["effect"], 0)
+        means = {m["arm"]: m for m in self.res["arm_means"]}
+        self.assertEqual((means["terse"]["turns"], means["terse"]["questions"], means["terse"]["cap_hit"]),
+                         (3.0, 2.0, 0.0))
+        self.assertIn("unasked_delivered", means["terse"])
+        md = pan.render_markdown(self.res)
+        self.assertIn("Primary outcome: item-recovery rate", md.split("\n## ")[0])
+        self.assertIn("## Secondary", md)
+        self.assertIn("descriptive (conditions on a post-treatment variable)", md)
+
+    def test_counts_rule(self):
+        # manip check decides `counts` for an otherwise significant, placebo-beating trait
+        def with_traits(on_rate, neutral_rate):
+            rows = []
+            for r in self.rows:
+                r = dict(r)
+                if r["arm"] in ("terse", "neutral"):
+                    rate = on_rate if r["arm"] == "terse" else neutral_rate
+                    r["trait_by_turn"] = [{"turn": k, "present": {"terse": int(k <= 10 * rate)}}
+                                          for k in range(1, 11)]
+                rows.append(r)
+            return [e for e in pan.analyse(rows)["paired"]
+                    if e["arm"] == "terse" and e["metric"] == "recovered"][0]
+        ok = with_traits(0.8, 0.1)
+        self.assertTrue(ok["manip_pass"])
+        self.assertTrue(ok["counts"])
+        weak = with_traits(0.8, 0.6)  # on-target high but only 20 pp above neutral
+        self.assertFalse(weak["manip_pass"])
+        self.assertFalse(weak["counts"])
+        self.assertFalse(self.eff("verbose")["counts"])
+
+    def test_missing_arms(self):
+        rows = [r for r in self.rows if r["arm"] not in ("neutral_b", "neutral_c", "oracle", "mute")]
+        rows = [r for r in rows if not (r["arm"] == "verbose" and r["case_id"] == "c0")]
+        res = pan.analyse(rows)
+        md = pan.render_markdown(res)
+        self.assertIn("No placebo arm", md)
+        self.assertIn("No `oracle` and/or `mute` arm", md)
+        self.assertIn("No `mute` arm", md)
+        self.assertEqual(res["gap_tercile"], [])
+        self.assertIsNone([e for e in res["paired"] if e["arm"] == "terse"][0]["beats_placebo"])
+        self.assertEqual([e for e in res["paired"] if e["arm"] == "verbose"][0]["n_cases"], 99)
+        self.assertEqual([e for e in res["paired"] if e["arm"] == "terse"][0]["n_cases"], 100)
+        self.assertEqual(res["selection_n"], 99)
+        md = pan.render_markdown(pan.analyse([r for r in rows if r["arm"] != "neutral"]))
+        self.assertIn("No `neutral` arm", md)
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "results.jsonl")
+        with open(path, "w") as f:
+            f.writelines(json.dumps(r) + "\n" for r in rows)
+        pan.main(["--results", path, "--out", os.path.join(tmp, "an")])
+        for name in ("analysis.md", "paired.csv", "placebo.csv", "selection.csv", "gap_tercile.csv",
+                     "difficulty.csv"):
+            self.assertTrue(os.path.exists(os.path.join(tmp, "an", name)), name)
+        shutil.rmtree(tmp)
 
 
 if __name__ == "__main__":

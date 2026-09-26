@@ -7,12 +7,15 @@ the same cases, so effects are compared within case.
 Primary mode: disambiguation (570 cases, 2119 missing entities). Inconsistency is supported by the
 same code path.
 
+Preregistration (outcomes, sample, analysis plan, amendments): PERSONA_PREREG.md.
+
 ## Arms
 
 | arm | user | purpose |
 |---|---|---|
 | `paper` | upstream `LLMUserInterface`, prompt byte-identical to upstream | replication of the paper's setup |
 | `neutral` | paper prompt + neutral persona block | control for every trait arm |
+| `neutral_b`, `neutral_c` | paper prompt + precedence + a reworded neutral text (in place of the neutral text) | placebo: null distribution for rewording effects |
 | `<trait>` | paper prompt + neutral block + one trait paragraph | the manipulation |
 | `oracle` | deterministic: every reply = all fact-card texts | ceiling: all information delivered |
 | `mute` | deterministic: every reply = "Make a reasonable assumption based on best practices." (the paper user's own fallback line) | floor: no information delivered |
@@ -26,9 +29,11 @@ Traits (persona/personas/*.json, `kind` in {style, policy}):
   jargon, uncertain
 - policy (may change which facts reach the agent): reluctant, volunteering, skeptical
 
-The persona block states precedence: it overrides the paper prompt's style lines ("Be concise", "Do
-not provide information not asked for") where they conflict, and never overrides the facts of the
-complete requirement.
+The persona block states precedence (`persona_users.PRECEDENCE`): where it conflicts with the paper
+prompt's style lines ("Be concise", ...), the persona wins, with two limits: every value must come from
+the COMPLETE requirement, and the user does not give information that was not asked for unless the
+persona explicitly says to. So style personas cannot volunteer information; only a persona that says so
+explicitly (volunteering) may.
 
 ## Fact cards (persona/fact_cards/<domain>/<mode>_<domain>.cards.json)
 
@@ -89,6 +94,7 @@ by arm (style can change how detectable a fact is).
 - `persona_runner.py` arms × reps × cases, parallel, resumable, per-role token/cost log
 - `persona_eval.py` native judges + attribution + trait check → per-case `persona_eval.json`, run-level `results.jsonl`
 - `persona_analysis.py` paired effects with case-bootstrap CIs, gap-normalised effects, decomposition, manipulation-check tables, case screen
+- `persona_validate.py` judge validity: blind hand-label export, card audit sheet, scorer
 - `test_persona_harness.py` offline end-to-end test with fake models (no API calls)
 
 ## Implementation notes (where the code pins down or departs from the above)
