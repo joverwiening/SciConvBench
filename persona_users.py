@@ -57,13 +57,21 @@ def placebo_ids(personas: Dict[str, dict]) -> List[str]:
     return [pid for pid, p in personas.items() if p["kind"] == "placebo"]
 
 
+EXAMPLES_HEADER = ("Examples of how you write (style only; [brackets] stand for values that must come from the "
+                   "COMPLETE requirement, never invented):")
+
+
+def persona_block(p: dict) -> str:
+    if not p.get("examples"):
+        return p["text"]
+    return p["text"] + "\n\n" + "\n".join([EXAMPLES_HEADER] + [f'"{e}"' for e in p["examples"]])
+
+
 def render_persona(trait_id: Optional[str], personas: Optional[Dict[str, dict]] = None) -> str:
     personas = personas or load_personas()
-    if trait_id is not None and personas[trait_id]["kind"] == "placebo":
-        return "\n\n".join([PRECEDENCE, personas[trait_id]["text"]])
     parts = [PRECEDENCE, personas["neutral"]["text"]]
     if trait_id is not None and trait_id != "neutral":
-        parts.append(personas[trait_id]["text"])
+        parts.append(persona_block(personas[trait_id]))
     return "\n\n".join(parts)
 
 
@@ -73,6 +81,16 @@ def persona_text_for_arm(arm: str, personas: Optional[Dict[str, dict]] = None) -
     if arm == "neutral":
         return render_persona(None, personas)
     return render_persona(arm, personas)
+
+
+def turn_note_for_arm(arm: str, personas: Optional[Dict[str, dict]] = None) -> str:
+    if arm == "paper" or arm in DETERMINISTIC_ARMS:
+        return ""
+    personas = personas or load_personas()
+    notes = [personas["neutral"]["reminder"]]
+    if arm != "neutral":
+        notes.append(personas[arm]["reminder"])
+    return f"(Stay in character. {' '.join(notes)})"
 
 
 def valid_arms(personas: Dict[str, dict]) -> List[str]:
@@ -90,7 +108,8 @@ class ScriptedUser(LLMUserInterface):
         self.clarifications.append({
             "question": question,
             "answer": answer,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "deferred": False
         })
         self._update_last_log_entry(answer)
         return answer
@@ -110,6 +129,27 @@ class MuteUser(ScriptedUser):
         return MUTE_REPLY
 
 
+@dataclass
+class BusyUser(LLMUserInterface):
+    """Defers questions 1, 3, 5, ... with a fixed reply and no LLM call; the rest go to the LLM."""
+    defer_reply: str = ""
+    n_questions: int = 0
+
+    def answer_clarification_question(self, question: str) -> str:
+        self.n_questions += 1
+        if self.n_questions % 2 == 0:
+            return super().answer_clarification_question(question)
+        self._log_qa(question, "Thinking...")
+        self.clarifications.append({
+            "question": question,
+            "answer": self.defer_reply,
+            "timestamp": time.time(),
+            "deferred": True
+        })
+        self._update_last_log_entry(self.defer_reply)
+        return self.defer_reply
+
+
 def make_user(arm: str, llm_service, incomplete_requirement: str, complete_requirement: str,
               log_file: str, cards: Optional[List[dict]] = None,
               personas: Optional[Dict[str, dict]] = None) -> LLMUserInterface:
@@ -121,8 +161,12 @@ def make_user(arm: str, llm_service, incomplete_requirement: str, complete_requi
         return OracleUser(llm_service=None, cards=cards, **common)
     if arm == "mute":
         return MuteUser(llm_service=None, **common)
-    return LLMUserInterface(llm_service=llm_service,
-                            persona_text=persona_text_for_arm(arm, personas), **common)
+    personas = personas or load_personas()
+    common.update(llm_service=llm_service, persona_text=persona_text_for_arm(arm, personas),
+                  turn_note=turn_note_for_arm(arm, personas))
+    if personas.get(arm, {}).get("defer") == "odd":
+        return BusyUser(defer_reply=personas[arm]["defer_reply"], **common)
+    return LLMUserInterface(**common)
 
 
 @dataclass
@@ -179,6 +223,11 @@ def parse_final_json(response_text: str) -> Optional[dict]:
                 clean_json_str = cleaned_text[start_idx:end_idx+1]
             else:
                 return None
+        try:
+            parsed = json.loads(clean_json_str)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            pass
         clean_json_str = re.sub(r'[\xa0 ​]', ' ', clean_json_str)
         clean_json_str = re.sub(r'```json\s*', '', clean_json_str)
         clean_json_str = re.sub(r'```\s*', '', clean_json_str)

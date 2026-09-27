@@ -15,6 +15,7 @@ class LLMUserInterface:
     clarifications: List[Dict[str, Any]] = field(default_factory=list)
     log_file: str = "conversation_log.txt"
     persona_text: str = ""
+    turn_note: str = ""
 
     def __post_init__(self):
         """Ensures the log file exists, even if no conversation happens"""
@@ -90,6 +91,8 @@ class LLMUserInterface:
         "{question}"
 
         Please provide a clear answer based on the COMPLETE requirement."""
+        if self.turn_note:
+            user_prompt += "\n\n" + self.turn_note
 
         try:
             answer = self.llm_service.invoke(user_prompt, system_prompt)
@@ -98,7 +101,8 @@ class LLMUserInterface:
             self.clarifications.append({
                 "question": question,
                 "answer": answer,
-                "timestamp": time.time()
+                "timestamp": time.time(),
+                "deferred": False
             })
             
             # Update log with actual answer

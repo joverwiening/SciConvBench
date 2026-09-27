@@ -15,6 +15,7 @@ import test_runner
 import persona_users as pu
 
 JOB_SEED = 0
+MAX_ATTEMPTS = 3  # PERSONA_PREREG.md, Sample: errored jobs are rerun up to twice
 
 
 def parse_cases(spec: str):
@@ -32,6 +33,7 @@ def case_dir(out, arm, rep, domain, agent_profile, mode, case_id):
 def user_prompt_template_sha() -> str:
     src = "".join(inspect.getsource(getattr(LLMUserInterface, name))
                   for name in ("get_full_context", "build_system_prompt", "answer_clarification_question"))
+    src += "".join(inspect.getsource(obj) for obj in (pu.render_persona, pu.turn_note_for_arm, pu.BusyUser))
     return pu.sha256_text(src)
 
 
@@ -121,6 +123,11 @@ def run_job(job, ctx):
     complete_req = case.get(keys["ground_truth"], "")
     folder = case_dir(args.out, arm, rep, args.domain, ctx["agent_cfg"].profile, args.mode, case_id)
     os.makedirs(folder, exist_ok=True)
+    run_path = os.path.join(folder, "persona_run.json")
+    prev_attempts = 0
+    if os.path.exists(run_path):
+        with open(run_path) as f:
+            prev_attempts = json.load(f).get("attempts", 1)
     log_file = os.path.join(folder, "conversation_log.txt")
     result_file = os.path.join(folder, "generated_prompt.txt")
     # a rerun after an error must not append to or reuse the failed attempt's files
@@ -139,11 +146,12 @@ def run_job(job, ctx):
         "baseline": bool(args.baseline),
         "models": {"agent": ctx["agent_cfg"].as_dict(), "user": user_cfg.as_dict() if user_cfg else None},
         "turns": None, "cap_hit": None, "completed_by_agent": None,
+        "deferred": None, "attempts": prev_attempts + 1,
         "status": "error", "error": None,
         "started": time.strftime("%Y-%m-%d %H:%M:%S"), "finished": None,
         "usage": {"agent": None, "user": None},
     }
-    agent, user_llm = None, None
+    agent, user_llm, user = None, None, None
     try:
         agent = ConvAgent(ctx["agent_cfg"], "baseline" if args.baseline else None)
         user_llm = LLMService(user_cfg) if user_cfg else None
@@ -175,8 +183,13 @@ def run_job(job, ctx):
     with open(os.path.join(folder, "user_statistics.json"), "w") as f:
         json.dump({"user_model": user_cfg.model_version if user_cfg else None,
                    "user_arm": arm, "user_llm_usage": user_stats}, f, indent=4)
+    clar = user.clarifications if user is not None else []
+    record["deferred"] = sum(bool(c.get("deferred")) for c in clar)
+    with open(os.path.join(folder, "clarifications.json"), "w") as f:
+        json.dump([{"turn": k, "question": c["question"], "answer": c["answer"],
+                    "deferred": bool(c.get("deferred"))} for k, c in enumerate(clar, 1)], f, indent=2)
     record["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    with open(os.path.join(folder, "persona_run.json"), "w") as f:
+    with open(run_path, "w") as f:
         json.dump(record, f, indent=2)
     return record
 
@@ -231,17 +244,21 @@ def main(argv=None):
 
     jobs = [(arm, rep, cid) for arm in arms for rep in range(1, args.reps + 1) for cid in case_ids]
     random.Random(JOB_SEED).shuffle(jobs)
-    todo, skipped = [], 0
+    todo, skipped, capped = [], 0, []
     for job in jobs:
         run_path = os.path.join(case_dir(args.out, job[0], job[1], args.domain, agent_cfg.profile,
                                          args.mode, job[2]), "persona_run.json")
         if os.path.exists(run_path):
             with open(run_path) as f:
-                if json.load(f).get("status") == "done":
-                    skipped += 1
-                    continue
+                old = json.load(f)
+            if old.get("status") == "done":
+                skipped += 1
+                continue
+            if old.get("attempts", 1) >= MAX_ATTEMPTS:
+                capped.append(job)
+                continue
         todo.append(job)
-    print(f"{len(jobs)} jobs: {skipped} done, {len(todo)} to run")
+    print(f"{len(jobs)} jobs: {skipped} done, {len(capped)} capped, {len(todo)} to run")
 
     ctx = {"args": args, "cases": cases, "cards": cards, "personas": personas,
            "traits": set(pu.trait_ids(personas)), "agent_cfg": agent_cfg, "user_cfg": user_cfg}
@@ -259,6 +276,10 @@ def main(argv=None):
             n_err += not ok
             print(f"[{n_done + n_err}/{len(todo)}] {job}: {'done' if ok else 'error ' + str(rec.get('error'))}")
     print(f"finished: {n_done} done, {n_err} errors, {skipped} skipped")
+    if capped:
+        print(f"{len(capped)} jobs not rerun (error after {MAX_ATTEMPTS} attempts):")
+        for job in sorted(capped):
+            print(f"  {job}")
     return {"jobs": len(jobs), "skipped": skipped, "done": n_done, "errors": n_err}
 
 

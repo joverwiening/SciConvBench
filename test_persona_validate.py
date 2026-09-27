@@ -72,6 +72,8 @@ class FakeLLM:
                        "memory_consistency": {"reasoning": "r", "is_consistent": 1}})
         if "faithful to the overall intent" in sp:
             return fj({"score": "1/1", "status": "FAITHFUL", "reasoning": "r"})
+        if "You label one question of a clarification dialogue" in sp:
+            return fj({"asked": [c["card_id"] for c in json.loads(between("FACT_CARDS", user_prompt))]})
         if "You label one turn of a clarification dialogue" in sp:
             cards = json.loads(between("FACT_CARDS", user_prompt))
             answer = between("ANSWER", user_prompt)
@@ -113,7 +115,7 @@ def tearDownModule():
 
 
 def synthetic_cards(path):
-    data = {"meta": {"model": None}, "cases": {}}
+    data = {"meta": {"model": None, "source_sha256": pu.sha256_file(pu.data_path(DOMAIN, MODE))}, "cases": {}}
     for cid in CASE_IDS:
         words = CASES[cid]["complete_user_req"].split()
         cards = []
@@ -232,8 +234,8 @@ class TestValidate(unittest.TestCase):
             self.assertEqual(t["n_labelled"], t["n_rows"])
             for d in t["per_arm"].values():
                 self.assertEqual(d["accuracy"], 1.0)
-            m = t["max_arm_error_diff"]
-            self.assertEqual((m["diff"], m["ci_lo"], m["ci_hi"]), (0.0, 0.0, 0.0))
+            for m in t["arm_vs_neutral"].values():
+                self.assertEqual((m["diff"], m["ci_lo"], m["ci_hi"], m["ci_excludes_0"]), (0.0, 0.0, 0.0, False))
         self.assertEqual(res["attribution"]["overall"]["per_class"]["full"]["precision"], 1.0)
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "perfect", "validation_report.md")))
 
@@ -254,14 +256,14 @@ class TestValidate(unittest.TestCase):
         a = res["attribution"]["per_arm"][arm]
         self.assertAlmostEqual(a["accuracy"], (a["n"] - 2) / a["n"])
         self.assertAlmostEqual(a["binary_accuracy"], (a["n"] - 2) / a["n"])
-        m = res["attribution"]["max_arm_error_diff"]
-        self.assertAlmostEqual(m["diff"], 2 / a["n"])
-        self.assertEqual(m["arm_max"], arm)
-        self.assertLessEqual(m["ci_lo"], m["diff"])
-        self.assertGreaterEqual(m["ci_hi"], m["diff"])
+        for m in res["attribution"]["arm_vs_neutral"].values():
+            self.assertAlmostEqual(m["diff"], -2 / a["n"])
+            self.assertLessEqual(m["ci_lo"], m["diff"])
+            self.assertGreaterEqual(m["ci_hi"], m["diff"])
         f = res["fr"]["per_arm"][arm]
         self.assertAlmostEqual(f["accuracy"], (f["n"] - 1) / f["n"])
-        self.assertAlmostEqual(res["fr"]["max_arm_error_diff"]["diff"], 1 / f["n"])
+        for m in res["fr"]["arm_vs_neutral"].values():
+            self.assertAlmostEqual(m["diff"], -1 / f["n"])
         for other in ARMS:
             if other != arm:
                 self.assertEqual(res["fr"]["per_arm"][other]["accuracy"], 1.0)

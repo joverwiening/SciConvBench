@@ -13,10 +13,11 @@ import persona_users as pu
 import persona_eval as pev
 
 ATTR_FILE, FR_FILE, KEY_FILE = "attribution_sample.csv", "fr_sample.csv", "key.json"
-ATTR_COLS = ["row_id", "question", "answer", "card_item", "card_text", "label_a", "label_b"]
+ATTR_COLS = ["row_id", "question", "answer", "card_item", "card_text", "label_a", "asked_a", "label_b", "asked_b"]
 FR_COLS = ["row_id", "entity", "complete_requirement", "final_spec", "label_a", "label_b"]
 LEVELS = ("full", "partial", "none")
 FR_LABELS = ("1", "0")
+ASKED_LABELS = ("1", "0")
 
 
 def read_text(path):
@@ -70,13 +71,13 @@ def collect_pools(run_dir):
                 skipped["attribution_cards_sha_mismatch"] += 1
             else:
                 cards = [c for c in cards_rec["data"]["cases"].get(case_id, {}).get("cards") or [] if c.get("text")]
-                turns = pev.dialogue_turns(folder)
+                turns, _ = pev.dialogue_turns(folder)
                 if len(turns) != len(attribution["turns"]):
                     skipped["attribution_turn_mismatch"] += 1
                 elif cards:
-                    for k, ((q, a), t) in enumerate(zip(turns, attribution["turns"]), 1):
-                        attr_pool.setdefault(arm, []).append(dict(base, turn=k, question=q, answer=a,
-                                                                  cards=cards, labels=t))
+                    for k, (d, t) in enumerate(zip(turns, attribution["turns"]), 1):
+                        attr_pool.setdefault(arm, []).append(dict(base, turn=k, question=d["question"],
+                                                                  answer=d["answer"], cards=cards, labels=t))
 
         final_spec = read_text(os.path.join(folder, "generated_prompt.txt"))
         if not (final_spec or "").strip():
@@ -88,8 +89,7 @@ def collect_pools(run_dir):
             continue
         items = row.get(pu.ITEMS_KEY[mode], []) or []
         if mode == "disambiguation":
-            rec_set = {pev.norm_entity(e) for e in fr_file.get("recovered_entities", []) or []}
-            recovered = [pev.norm_entity(e) in rec_set for e in items]
+            recovered = [m is not None for m in pev.match_entities(items, fr_file.get("recovered_entities", []) or [])]
         else:
             bd = fr_file.get("breakdown", []) or []
             recovered = [bool(bd[i].get("resolved") is True) if i < len(bd) else False for i in range(len(items))]
@@ -130,13 +130,18 @@ def export(run_dir, n_per_arm, seed, out):
     attr_rows = []
     for arm, units in attr_sample.items():
         for u in units:
+            conveyed, asked = u["labels"].get("conveyed"), u["labels"].get("asked")
             for c in u["cards"]:
-                level = u["labels"]["conveyed"].get(c["card_id"], {}).get("level") or "none"
+                # None = the judge output for this turn could not be parsed; such rows are not scored
+                level = None if conveyed is None else (conveyed.get(c["card_id"], {}).get("level") or "none")
+                model_asked = None if asked is None else str(int(c["card_id"] in asked))
                 meta = {k: u[k] for k in ("arm", "rep", "case_dir", "domain", "mode", "case_id", "turn")}
                 attr_rows.append(({"question": u["question"], "answer": u["answer"], "card_item": c["item"],
                                    "card_text": c["text"]},
                                   dict(meta, card_id=c["card_id"], card_index=c["index"], model_label=level,
-                                       attribution_parse_failure=bool(u["labels"].get("parse_failure")))))
+                                       model_asked=model_asked,
+                                       attribution_parse_failure=bool(u["labels"].get("parse_failure")),
+                                       ask_parse_failure=bool(u["labels"].get("ask_parse_failure")))))
     fr_rows = []
     for arm, units in fr_sample.items():
         for u in units:
@@ -228,36 +233,54 @@ def cohen_kappa(a, b, labels):
     return (po - pe) / (1 - pe)
 
 
-def max_arm_diff(errors_by_arm, B=10000, seed=0):
-    arms = sorted(a for a, e in errors_by_arm.items() if len(e))
-    if len(arms) < 2:
+def arm_vs_neutral(errors, B=10000, seed=0, ref="neutral"):
+    """errors: [(arm, case, 0/1)]. Per arm: error rate minus the ref arm's, with a 95% bootstrap CI that
+    resamples cases (all rows of a drawn case, in every arm), not rows."""
+    arms = sorted({a for a, _, _ in errors})
+    if ref not in arms or len(arms) < 2:
         return None
-    rates = {a: float(np.mean(errors_by_arm[a])) for a in arms}
+    cases = sorted({c for _, c, _ in errors})
+    ai, ci = {a: k for k, a in enumerate(arms)}, {c: k for k, c in enumerate(cases)}
+    s, n = np.zeros((len(arms), len(cases))), np.zeros((len(arms), len(cases)))
+    for a, c, e in errors:
+        s[ai[a], ci[c]] += e
+        n[ai[a], ci[c]] += 1
     rng = np.random.default_rng(seed)
-    boots = np.empty((len(arms), B))
-    for k, a in enumerate(arms):
-        e = np.asarray(errors_by_arm[a], dtype=float)
-        boots[k] = e[rng.integers(0, len(e), size=(B, len(e)))].mean(axis=1)
-    stat = boots.max(axis=0) - boots.min(axis=0)
-    hi, lo = max(rates, key=rates.get), min(rates, key=rates.get)
-    return {"diff": rates[hi] - rates[lo], "arm_max": hi, "arm_min": lo,
-            "ci_lo": float(np.percentile(stat, 2.5)), "ci_hi": float(np.percentile(stat, 97.5)), "B": B,
-            "error_rate": rates}
+    w = np.zeros((B, len(cases)))
+    np.add.at(w, (np.arange(B)[:, None], rng.integers(0, len(cases), size=(B, len(cases)))), 1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        boot = (w @ s.T) / (w @ n.T)  # B x arms; nan where a draw has no rows of an arm
+    rates = s.sum(axis=1) / n.sum(axis=1)
+    r = ai[ref]
+    out = {}
+    for a in arms:
+        if a == ref:
+            continue
+        d = boot[:, ai[a]] - boot[:, r]
+        d = d[~np.isnan(d)]
+        lo, hi = (float(np.percentile(d, 2.5)), float(np.percentile(d, 97.5))) if len(d) else (None, None)
+        out[a] = {"diff": float(rates[ai[a]] - rates[r]), "error_rate": float(rates[ai[a]]),
+                  "ref_error_rate": float(rates[r]), "n": int(n[ai[a]].sum()), "n_ref": int(n[r].sum()),
+                  "n_cases": len(cases), "ci_lo": lo, "ci_hi": hi,
+                  "ci_excludes_0": lo is not None and (lo > 0 or hi < 0), "B": B, "B_valid": len(d)}
+    return out
 
 
-def labelled_rows(path, key, allowed, task):
+def labelled_rows(path, key, allowed, task, cols=("label_a", "label_b"), model_key="model_label"):
     rows = read_csv(path)
     out, bad = [], []
     for r in rows:
         rid = r["row_id"]
         if rid not in key or key[rid]["task"] != task:
             sys.exit(f"{path}: row {rid} not in the key")
-        la, lb = r.get("label_a", "").strip().lower(), r.get("label_b", "").strip().lower()
+        la, lb = (r.get(cols[0]) or "").strip().lower(), (r.get(cols[1]) or "").strip().lower()
         for v in (la, lb):
             if v and v not in allowed:
                 bad.append(f"{rid}={v!r}")
-        out.append({"row_id": rid, "a": la, "b": lb, "ref": la or lb, "arm": key[rid]["arm"],
-                    "model": str(key[rid]["model_label"])})
+        k = key[rid]
+        model = k.get(model_key)
+        out.append({"row_id": rid, "a": la, "b": lb, "ref": la or lb, "arm": k["arm"],
+                    "case": (k["domain"], k["mode"], k["case_id"]), "model": None if model is None else str(model)})
     if bad:
         sys.exit(f"{path}: invalid labels (allowed {allowed}): {', '.join(bad[:20])}")
     return out, len(rows)
@@ -275,7 +298,7 @@ def prec_rec(rows, labels):
 
 
 def score_task(rows, n_total, labels, binary_fn, B, seed):
-    lab = [r for r in rows if r["ref"]]
+    lab = [r for r in rows if r["ref"] and r["model"] is not None]
     by_arm = {}
     for r in lab:
         by_arm.setdefault(r["arm"], []).append(r)
@@ -293,9 +316,9 @@ def score_task(rows, n_total, labels, binary_fn, B, seed):
     both = [r for r in rows if r["a"] and r["b"]]
     kappa = {"n": len(both), "kappa": cohen_kappa([r["a"] for r in both], [r["b"] for r in both], labels)}
     to_bin = binary_fn or (lambda x: x)
-    errors = {arm: [int(to_bin(r["model"]) != to_bin(r["ref"])) for r in rs] for arm, rs in by_arm.items()}
+    errors = [(r["arm"], r["case"], int(to_bin(r["model"]) != to_bin(r["ref"]))) for r in lab]
     return {"n_rows": n_total, "n_labelled": len(lab), "per_arm": per_arm, "overall": overall,
-            "kappa_a_b": kappa, "max_arm_error_diff": max_arm_diff(errors, B, seed)}
+            "kappa_a_b": kappa, "arm_vs_neutral": arm_vs_neutral(errors, B, seed)}
 
 
 def fmt(x):
@@ -304,12 +327,14 @@ def fmt(x):
 
 def render_markdown(res):
     lines = ["# Judge validation", ""]
-    for task, title in (("attribution", "Attribution judge"), ("fr", "FR judge")):
+    for task, title in (("attribution", "Attribution judge"), ("attribution_asked", "Ask judge"), ("fr", "FR judge")):
         t = res.get(task)
         if t is None:
             continue
         binary = task == "attribution"
-        lines += [f"## {title}", "", f"labelled {t['n_labelled']} / {t['n_rows']} rows. Reference = label_a, else label_b.", ""]
+        cols = "asked_a, else asked_b" if task == "attribution_asked" else "label_a, else label_b"
+        lines += [f"## {title}", "", f"labelled {t['n_labelled']} / {t['n_rows']} rows (rows whose judge output "
+                                     f"was unparsed are excluded). Reference = {cols}.", ""]
         head = "| arm | n | accuracy |" + (" binary acc (full vs not) |" if binary else "")
         lines += [head, "|" + "---|" * (head.count("|") - 1)]
         for arm, d in list(t["per_arm"].items()) + [("ALL", t["overall"])]:
@@ -325,13 +350,17 @@ def render_markdown(res):
         k = t["kappa_a_b"]
         lines += ["", f"Cohen's kappa label_a vs label_b ({'3-class' if binary else 'binary'}): "
                       f"{fmt(k['kappa'])} (n={k['n']})", ""]
-        m = t["max_arm_error_diff"]
+        m = t["arm_vs_neutral"]
         if m is None:
-            lines += ["Max between-arm error-rate difference: fewer than 2 labelled arms.", ""]
+            lines += ["Arm vs neutral error-rate difference: no labelled `neutral` arm or no other arm.", ""]
         else:
-            lines += [f"Max between-arm model error-rate difference{' (full vs not)' if binary else ''}: "
-                      f"{fmt(m['diff'])} ({m['arm_max']} - {m['arm_min']}), 95% bootstrap CI "
-                      f"[{fmt(m['ci_lo'])}, {fmt(m['ci_hi'])}] (B={m['B']}, rows resampled within arm)", ""]
+            lines += [f"Model error-rate difference arm - neutral{' (full vs not)' if binary else ''}, "
+                      f"95% bootstrap CI resampling cases:", "",
+                      "| arm | error rate | neutral | diff | 95% CI | CI excludes 0 |", "|---|---|---|---|---|---|"]
+            for arm, d in m.items():
+                lines.append(f"| {arm} | {fmt(d['error_rate'])} | {fmt(d['ref_error_rate'])} | {fmt(d['diff'])} | "
+                             f"[{fmt(d['ci_lo'])}, {fmt(d['ci_hi'])}] | {d['ci_excludes_0']} |")
+            lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -344,6 +373,8 @@ def score(export_dir, key_path=None, B=10000, seed=0):
     if os.path.exists(path):
         rows, n = labelled_rows(path, key, LEVELS, "attribution")
         res["attribution"] = score_task(rows, n, LEVELS, lambda x: x == "full", B, seed)
+        rows, n = labelled_rows(path, key, ASKED_LABELS, "attribution", ("asked_a", "asked_b"), "model_asked")
+        res["attribution_asked"] = score_task(rows, n, ASKED_LABELS, None, B, seed)
     path = os.path.join(export_dir, FR_FILE)
     if os.path.exists(path):
         rows, n = labelled_rows(path, key, FR_LABELS, "fr")

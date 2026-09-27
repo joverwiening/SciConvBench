@@ -93,17 +93,25 @@ def build_user_prompt(mode: str, base_text: str, source_text: str, items: List[s
     return prompt
 
 
-def coverage(base_text: str, source_text: str, spans: List[str]) -> dict:
-    """Word-level diff base -> source; share of inserted/replaced source tokens not inside any span."""
+SPAN_IN_DIFF_MIN = 0.5  # below this share of a card's span tokens inside the diff, the span is too broad
+SPAN_OVERLAP_MAX = 0.5  # two cards sharing more than this share of the shorter span's tokens overlap
+
+
+def token_index(base_text: str, source_text: str) -> dict:
+    """Source tokens, their character starts in the space-joined source, and the inserted/replaced ones."""
     a, b = base_text.split(), source_text.split()
     sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
     changed = [j for tag, i1, i2, j1, j2 in sm.get_opcodes()
                if tag in ("insert", "replace") for j in range(j1, j2)]
-    joined = " ".join(b)
     starts, pos = [], 0
     for tok in b:
         starts.append(pos)
         pos += len(tok) + 1
+    return {"tokens": b, "joined": " ".join(b), "starts": starts, "changed": changed}
+
+
+def span_tokens(idx: dict, spans: List[str]) -> set:
+    b, joined, starts = idx["tokens"], idx["joined"], idx["starts"]
     covered = set()
     for span in spans:
         q = pu.norm_ws(span)
@@ -116,9 +124,37 @@ def coverage(base_text: str, source_text: str, spans: List[str]) -> dict:
                 if st < e and st + len(b[j]) > s:
                     covered.add(j)
             s = joined.find(q, s + 1)
-    uncovered = [b[j] for j in changed if j not in covered]
+    return covered
+
+
+def coverage(base_text: str, source_text: str, spans: List[str]) -> dict:
+    """Word-level diff base -> source; share of inserted/replaced source tokens not inside any span."""
+    idx = token_index(base_text, source_text)
+    changed, covered = idx["changed"], span_tokens(idx, spans)
+    uncovered = [idx["tokens"][j] for j in changed if j not in covered]
     return {"changed_tokens": len(changed), "uncovered_tokens": uncovered,
             "uncovered_share": (len(uncovered) / len(changed)) if changed else 0.0}
+
+
+def review_spans(base_text: str, source_text: str, cards: List[dict]) -> None:
+    """Sets needs_review (with review_reason) on ok cards whose span is too broad or overlaps another card's."""
+    idx = token_index(base_text, source_text)
+    changed = set(idx["changed"])
+    toks = [span_tokens(idx, c["spans"]) for c in cards]
+    for k, c in enumerate(cards):
+        reasons = ["non-verbatim span(s) dropped"] if c["checks"]["dropped_spans"] else []
+        if toks[k]:
+            share = len(toks[k] & changed) / len(toks[k])
+            c["checks"]["span_in_diff_share"] = share
+            if share < SPAN_IN_DIFF_MIN:
+                reasons.append(f"span too broad: {share:.0%} of its tokens are inserted/replaced")
+        for m, other in enumerate(toks):
+            if m != k and toks[k] and other and \
+                    len(toks[k] & other) > SPAN_OVERLAP_MAX * min(len(toks[k]), len(other)):
+                reasons.append(f"span overlaps card {cards[m]['index']}")
+        c["review_reason"] = "; ".join(reasons) or None
+        if c["status"] == "ok" and reasons:
+            c["status"] = "needs_review"
 
 
 def check_case(domain: str, mode: str, case: dict, llm_items: Optional[List[dict]],
@@ -172,6 +208,8 @@ def check_case(domain: str, mode: str, case: dict, llm_items: Optional[List[dict
             "status": status,
         })
 
+    if mode == "disambiguation":
+        review_spans(base_text, source_text, cards)
     cov = coverage(base_text, source_text, kept_all)
     high_uncovered = mode == "disambiguation" and cov["uncovered_share"] > max_uncovered_share
     if high_uncovered:

@@ -109,11 +109,22 @@ class FakeLLM:
         if "faithful to the overall intent" in sp:
             return fj({"score": "1/1", "status": "FAITHFUL", "reasoning": "r"})
         if "You build fact cards" in sp:
-            complete = between("COMPLETE_TEXT", user_prompt)
+            idx = pfc.token_index(between("INCOMPLETE_TEXT", user_prompt), between("COMPLETE_TEXT", user_prompt))
             n_items = len(re.findall(r"^\s*\[\d+\]", between("ITEMS", user_prompt), re.M))
-            span = " ".join(complete.split()[:6])
-            spans = [span] if "previous answer failed" in user_prompt else [span, "a span that is not in the text"]
-            return fj({"items": [{"index": i, "spans": spans, "statement": "s"} for i in range(n_items)]})
+            runs, prev = [], None
+            for j in idx["changed"]:
+                if prev is None or j != prev + 1:
+                    runs.append([])
+                runs[-1].append(idx["tokens"][j])
+                prev = j
+            items = []
+            for i in range(n_items):
+                span = " ".join(runs[i % len(runs)])
+                spans = [span] if "previous answer failed" in user_prompt else [span, "a span that is not in the text"]
+                items.append({"index": i, "spans": spans, "statement": "s"})
+            return fj({"items": items})
+        if "You label one question of a clarification dialogue" in sp:
+            return fj({"asked": [c["card_id"] for c in json.loads(between("FACT_CARDS", user_prompt))]})
         if "You label one turn of a clarification dialogue" in sp:
             cards = json.loads(between("FACT_CARDS", user_prompt))
             answer = between("ANSWER", user_prompt)
@@ -264,7 +275,7 @@ RUN_FILES = ["conversation_log.txt", "generated_prompt.txt", "complete_prompt.tx
 
 
 def synthetic_cards(path, mode=MODE, cases=CASES, case_ids=CASE_IDS):
-    data = {"meta": {"model": None}, "cases": {}}
+    data = {"meta": {"model": None, "source_sha256": pu.sha256_file(pu.data_path(DOMAIN, mode))}, "cases": {}}
     for cid in case_ids:
         cards = []
         for i, item in enumerate(cases[cid][pu.ITEMS_KEY[mode]]):
@@ -374,7 +385,7 @@ class TestRunnerAndEval(unittest.TestCase):
             self.assertIn("Nonexistent entity", r["unmatched_recovered_entities"])
             self.assertGreater(r["dropped"]["attribution_evidence"], 0)
             self.assertGreater(r["dropped"]["attribution_unknown_ids"], 0)
-            self.assertEqual(r["parse_failures"], {"native": 0, "attribution": 0, "traits": 0})
+            self.assertEqual(r["parse_failures"], {"native": 0, "attribution": 0, "ask": 0, "traits": 0})
             self.assertEqual(r["usage"]["agent"]["token_source"], "api")
             self.assertIsNotNone(r["usage"]["judge"]["cost_usd"])
             if r["arm"] == "oracle":
@@ -458,7 +469,7 @@ class TestAnalysis(unittest.TestCase):
                         rec = rng.random() < (0.9 if delivered else 0.1) if arm not in ("oracle", "mute") \
                             else rng.random() < pr
                         items.append({"index": i, "asked": True, "delivered": delivered, "partial": False,
-                                      "unasked_delivered": False, "recovered": rec, "grounded": rec and delivered,
+                                      "unasked_delivered": False, "unasked_partial": False, "recovered": rec, "grounded": rec and delivered,
                                       "silent": rec and not delivered})
                     rate = lambda k: sum(it[k] for it in items) / len(items)
                     fr = int(all(it["recovered"] for it in items))
@@ -466,13 +477,13 @@ class TestAnalysis(unittest.TestCase):
                         "arm": arm, "rep": rep, "domain": "pde", "mode": "disambiguation", "case_id": f"c{c}",
                         "native": {"FR": fr, "CGRR": fr, "SRR": 0, "IC": 1, "MC": 1, "CR": 1.0, "CP": 1.0},
                         "items": items,
-                        "item_rates": {k: rate(k) for k in pan.ITEM_METRICS},
+                        "item_rates": dict({k: rate(k) for k in pan.ITEM_METRICS}, recovered_judge=rate("recovered")),
                         "trait_present_share": None if arm in ("oracle", "mute") else {"terse": float(arm == "terse")},
                         "trait_by_turn": None if arm in ("oracle", "mute") else
                         [{"turn": 1, "present": {"terse": int(arm == "terse")}}],
                     })
         res = pan.analyse(rows)
-        eff = [e for e in res["paired"] if e["arm"] == "terse" and e["metric"] == "recovered"][0]
+        eff = [e for e in res["paired"] if e["arm"] == "terse" and e["metric"] == pan.PRIMARY][0]
         self.assertLess(eff["effect"], 0)
         self.assertLess(eff["ci_hi"], 0)
         gap = [e for e in res["gap_normalised"] if e["arm"] == "terse"][0]
@@ -550,13 +561,14 @@ def synthetic_rows(n_cases=100, seed=3):
                     rec = rng.random() < pr
                     delivered = arm != "mute" and (rec or rng.random() < 0.2)
                     items.append({"index": i, "asked": True, "delivered": delivered, "partial": False,
-                                  "unasked_delivered": False, "recovered": rec, "grounded": rec and delivered,
+                                  "unasked_delivered": False, "unasked_partial": False, "recovered": rec, "grounded": rec and delivered,
                                   "silent": rec and not delivered})
                 rate = lambda k: sum(it[k] for it in items) / len(items)
                 fr = int(all(it["recovered"] for it in items))
                 rows.append({"arm": arm, "rep": rep, "domain": "pde", "mode": "disambiguation",
                              "case_id": f"c{c}", "native": {"FR": fr, "CGRR": fr, "SRR": 0, "IC": 1},
-                             "items": items, "item_rates": {k: rate(k) for k in pan.ITEM_METRICS},
+                             "items": items,
+                             "item_rates": dict({k: rate(k) for k in pan.ITEM_METRICS}, recovered_judge=rate("recovered")),
                              "turns": 3, "questions": 2, "cap_hit": False,
                              "trait_present_share": None, "trait_by_turn": None})
     for r in [r for r in rows if r["arm"] == "neutral"]:
@@ -571,7 +583,7 @@ class TestAnalysisPrereg(unittest.TestCase):
         cls.rows = synthetic_rows()
         cls.res = pan.analyse(cls.rows)
 
-    def eff(self, arm, m="recovered", table="paired"):
+    def eff(self, arm, m=pan.PRIMARY, table="paired"):
         return [e for e in self.res[table] if e["arm"] == arm and e["metric"] == m][0]
 
     def test_trait_effects(self):
@@ -624,7 +636,7 @@ class TestAnalysisPrereg(unittest.TestCase):
                                           for k in range(1, 11)]
                 rows.append(r)
             return [e for e in pan.analyse(rows)["paired"]
-                    if e["arm"] == "terse" and e["metric"] == "recovered"][0]
+                    if e["arm"] == "terse" and e["metric"] == pan.PRIMARY][0]
         ok = with_traits(0.8, 0.1)
         self.assertTrue(ok["manip_pass"])
         self.assertTrue(ok["counts"])
