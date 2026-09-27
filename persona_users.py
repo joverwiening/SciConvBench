@@ -219,8 +219,9 @@ class BigFiveUser(LLMUserInterface):
         for c in self.clarifications:
             messages.append({"role": "user", "content": f"Message from the assistant:\n{c['question']}"})
             messages.append({"role": "assistant", "content": c["answer"]})
-        messages.append({"role": "user",
-                         "content": f"Message from the assistant:\n{question}\n\n{self.persona['reminder']}"})
+        # shared suffix: the rule in the system prompt alone did not stop false "I already told you" claims
+        reminder = " ".join(x for x in (self.persona["reminder"], self.shared.get("reminder_suffix", "")) if x)
+        messages.append({"role": "user", "content": f"Message from the assistant:\n{question}\n\n{reminder}"})
         return messages
 
     @staticmethod

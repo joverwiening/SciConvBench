@@ -67,6 +67,7 @@ class TestBigFiveUser(unittest.TestCase):
         self.assertEqual(answers, ["first", "second", "third"])
         p, sh = BF["personas"]["bf_low_A"], BF["shared"]
         sp = svc.calls[0][1]
+        rem = p["reminder"] + " " + sh["reminder_suffix"]
         self.assertEqual(sp, "\n\n".join([sh["identity"], p["sheet"], sh["situation"], p["appraisal"],
                                           sh["notes_intro"], "<notes>\nCOMPLETE spec: value 42.\n</notes>",
                                           sh["request_intro"], f"<your_request>\n{SENTINEL}\n</your_request>",
@@ -76,13 +77,13 @@ class TestBigFiveUser(unittest.TestCase):
             self.assertEqual(s.count(SENTINEL), 1)
             self.assertNotIn(SENTINEL, json.dumps(msgs))
             self.assertEqual([m["role"] for m in msgs], ["user", "assistant"] * (len(msgs) // 2) + ["user"])
-            self.assertTrue(msgs[-1]["content"].endswith("\n\n" + p["reminder"]))
+            self.assertTrue(msgs[-1]["content"].endswith("\n\n" + rem))
             for m in msgs[:-1]:
                 self.assertNotIn(p["reminder"], m["content"])
         last = svc.calls[2][0]
         self.assertEqual(last[0]["content"], "Message from the assistant:\nQ1?")
         self.assertEqual([last[1]["content"], last[3]["content"]], ["first", "second"])
-        self.assertEqual(last[4]["content"], "Message from the assistant:\nQ3?\n\n" + p["reminder"])
+        self.assertEqual(last[4]["content"], "Message from the assistant:\nQ3?\n\n" + rem)
         lines = jl(os.path.join(self.tmp, "case", "user_calls.jsonl"))
         self.assertEqual([l["turn"] for l in lines], [1, 2, 3])
         self.assertEqual(lines[0]["raw"], "<think>hmm</think>Sam Keller: first")
