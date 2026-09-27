@@ -21,11 +21,11 @@ ITEM_METRICS = ["asked", "delivered", "partial", "unasked_delivered", "unasked_p
 PROCESS_METRICS = ["cap_hit", "turns", "questions"]
 SECONDARY_METRICS = NATIVE_METRICS + [m for m in ITEM_METRICS if m != PRIMARY]
 REPLICATION_METRICS = ["FR", "CGRR", "SRR", "IC", "MC", "CR", "CP"]
-REFERENCE_ARMS = ("paper", "neutral", "oracle", "mute")
 PERSONAS = pu.load_personas()
 PLACEBO_ARMS = tuple(pu.placebo_ids(PERSONAS))
 HOLM_FAMILY = tuple(sorted(pid for pid, p in PERSONAS.items() if p["kind"] in ("style", "policy")))
 ENFORCED_ARMS = tuple(sorted(pid for pid, p in PERSONAS.items() if p.get("enforced") == "code"))
+FAMILIES = ("old", "bigfive")
 MAX_ATTEMPTS = 3
 EFFECT_COLS = ["arm", "metric", "n_cases", "effect", "ci_lo", "ci_hi", "p", "p_holm", "abs_lo", "beats_placebo"]
 # PERSONA_PREREG.md, Analysis 2-3: a trait counts only if Holm, placebo and manipulation check all pass
@@ -108,7 +108,21 @@ def holm(ps):
     return out
 
 
-def paired_diffs(rows, arm, m, ref="neutral"):
+def family_arms(family):
+    """Reference arm, placebo arms, trait arms (None = every non-reference, non-placebo arm) and primary Holm family."""
+    if family == "old":
+        return {"ref": "neutral", "placebos": PLACEBO_ARMS, "traits": None, "holm": HOLM_FAMILY}
+    if family == "bigfive":
+        bf = pu.load_bigfive()["personas"]
+        ref = [pid for pid, p in bf.items() if p["kind"] == "neutral"]
+        assert len(ref) == 1, f"Big Five family needs exactly one neutral persona, found {ref}"
+        traits = tuple(sorted(pid for pid, p in bf.items() if p["kind"] == "trait"))
+        return {"ref": ref[0], "placebos": tuple(sorted(pid for pid, p in bf.items() if p["kind"] == "placebo")),
+                "traits": traits, "holm": traits}
+    raise ValueError(f"unknown family {family!r}")
+
+
+def paired_diffs(rows, arm, m, ref):
     a, n = per_case_mean(rows, arm, m), per_case_mean(rows, ref, m)
     cases = sorted(set(a) & set(n))
     return cases, np.array([a[c] - n[c] for c in cases])
@@ -121,25 +135,25 @@ def mean_effect(d, rec, b=B):
     return dict(rec, n_cases=len(d), effect=float(d.mean()), ci_lo=lo, ci_hi=hi, p=boot_p(vals))
 
 
-def paired_effect(rows, arm, m, ref="neutral"):
+def paired_effect(rows, arm, m, ref):
     _, d = paired_diffs(rows, arm, m, ref)
     return mean_effect(d, {"arm": arm, "metric": m}, b=b_for(m))
 
 
-def placebo_effects(rows, placebos, metrics):
-    return [paired_effect(rows, a, m) for a in placebos for m in metrics]
+def placebo_effects(rows, placebos, metrics, ref):
+    return [paired_effect(rows, a, m, ref) for a in placebos for m in metrics]
 
 
-def trait_effects(rows, traits, metrics, placebo, check_m=False):
-    """Primary Holm runs over the style/policy family only; secondary Holm (descriptive) over all trait arms."""
+def trait_effects(rows, traits, metrics, placebo, ref, holm_family, check_m=False):
+    """Primary Holm runs over holm_family only; secondary Holm (descriptive) over all trait arms."""
     out = []
     for m in metrics:
-        recs = [paired_effect(rows, a, m) for a in traits]
-        fam = [r for r in recs if r["arm"] in HOLM_FAMILY] if m == PRIMARY else recs
+        recs = [paired_effect(rows, a, m, ref) for a in traits]
+        fam = [r for r in recs if r["arm"] in holm_family] if m == PRIMARY else recs
         adj = dict(zip((r["arm"] for r in fam), holm([r["p"] for r in fam])))
         if m == PRIMARY and check_m:
             n_p = sum(r["p"] is not None for r in fam)
-            want = len([a for a in HOLM_FAMILY if a in traits])
+            want = len([a for a in holm_family if a in traits])
             assert n_p == want, f"Holm m = {n_p} but {want} family arms are present: an arm has no paired cases"
         for r in recs:
             r["p_holm"] = adj.get(r["arm"])
@@ -150,10 +164,10 @@ def trait_effects(rows, traits, metrics, placebo, check_m=False):
     return out
 
 
-def selection(rows, traits, m=PRIMARY, k=TOP_K):
+def selection(rows, traits, ref, m=PRIMARY, k=TOP_K):
     diffs = {}
     for a in traits:
-        cases, d = paired_diffs(rows, a, m)
+        cases, d = paired_diffs(rows, a, m, ref)
         if cases:
             diffs[a] = dict(zip(cases, d))
     if not diffs:
@@ -184,9 +198,9 @@ def screened_cases(rows, m=PRIMARY):
     return {c for c, g in gap.items() if g > 0}, o, u
 
 
-def gap_normalised(rows, arm, m=PRIMARY):
+def gap_normalised(rows, arm, ref, m=PRIMARY):
     screen, o, u = screened_cases(rows, m)
-    a, n = per_case_mean(rows, arm, m), per_case_mean(rows, "neutral", m)
+    a, n = per_case_mean(rows, arm, m), per_case_mean(rows, ref, m)
     cases = sorted(screen & set(a) & set(n))
     num = np.array([a[c] - n[c] for c in cases])
     den = np.array([o[c] - u[c] for c in cases])
@@ -203,7 +217,7 @@ def gap_normalised(rows, arm, m=PRIMARY):
             "ci_lo": lo, "ci_hi": hi}
 
 
-def gap_terciles(rows, traits, m=PRIMARY):
+def gap_terciles(rows, traits, ref, m=PRIMARY):
     """Δ per trait within oracle−mute gap terciles; cut points are the 1/3 and 2/3 quantiles over all cases."""
     gap, _, _ = oracle_mute_gap(rows, m)
     if not gap:
@@ -212,7 +226,7 @@ def gap_terciles(rows, traits, m=PRIMARY):
     tercile = {c: ("low" if g <= q1 else "mid" if g <= q2 else "high") for c, g in gap.items()}
     out = []
     for a in traits:
-        cases, d = paired_diffs(rows, a, m)
+        cases, d = paired_diffs(rows, a, m, ref)
         for t in ("low", "mid", "high"):
             sel = np.array([d[i] for i, c in enumerate(cases) if tercile.get(c) == t])
             gaps = [gap[c] for c in cases if tercile.get(c) == t]
@@ -242,9 +256,9 @@ def item_counts(rows, arm):
     return acc
 
 
-def decomposition(rows, arm):
-    a, n = item_counts(rows, arm), item_counts(rows, "neutral")
-    da, dn = per_case_mean(rows, arm, "delivered"), per_case_mean(rows, "neutral", "delivered")
+def decomposition(rows, arm, ref):
+    a, n = item_counts(rows, arm), item_counts(rows, ref)
+    da, dn = per_case_mean(rows, arm, "delivered"), per_case_mean(rows, ref, "delivered")
     cases = sorted(set(a) & set(n) & set(da) & set(dn))
     if not cases:
         return []
@@ -284,12 +298,12 @@ def item_recovery(rows, arm):
     return {k: float(np.mean(v)) for k, v in acc.items()}
 
 
-def by_difficulty(rows, traits):
+def by_difficulty(rows, traits, ref):
     """Δ recovery per case restricted to items the mute arm recovers (easy, mean ≥ 0.5) or not (hard)."""
     mute = item_recovery(rows, "mute")
     if not mute:
         return []
-    neu = item_recovery(rows, "neutral")
+    neu = item_recovery(rows, ref)
     out = []
     for a in traits:
         tr = item_recovery(rows, a)
@@ -437,14 +451,19 @@ def load_runs(run_dir):
 def failure_table(runs, rows):
     have = {job_key(r) for r in rows}
     acc = defaultdict(lambda: {"jobs": 0, "done": 0, "error": 0, "attempts_capped": 0, "no_eval_row": 0})
+    budget = defaultdict(int)
     for run in runs:
         a = acc[run["arm"]]
+        status = run.get("status")
         a["jobs"] += 1
-        a["done"] += run.get("status") == "done"
-        a["error"] += run.get("status") != "done"
-        a["attempts_capped"] += run.get("status") != "done" and run.get("attempts", 1) >= MAX_ATTEMPTS
+        a["done"] += status == "done"
+        budget[run["arm"]] += status == "skipped_budget"
+        failed = status not in ("done", "skipped_budget")
+        a["error"] += failed
+        a["attempts_capped"] += failed and run.get("attempts", 1) >= MAX_ATTEMPTS
         a["no_eval_row"] += job_key(run) not in have
-    return [dict({"arm": arm}, **acc[arm]) for arm in sorted(acc)]
+    return [dict({"arm": arm}, **acc[arm], **({"skipped_budget": budget[arm]} if budget[arm] else {}))
+            for arm in sorted(acc)]
 
 
 def fill_deferred(rows, runs):
@@ -513,51 +532,56 @@ def write_csv(path, recs):
         w.writerows(recs)
 
 
-def analyse(rows, runs=None):
+def analyse(rows, runs=None, family="old"):
+    fam = family_arms(family)
+    ref, holm_family = fam["ref"], fam["holm"]
+    reference_arms = ("paper", ref, "oracle", "mute")
     raw = rows
     rows, excluded = exclude_rows(rows)
     if runs is not None:
         rows = fill_deferred(rows, runs)
     arms = sorted({r["arm"] for r in rows})
-    placebos = [a for a in arms if a in PLACEBO_ARMS]
-    trait_arms = [a for a in arms if a not in REFERENCE_ARMS and a not in PLACEBO_ARMS]
+    placebos = [a for a in arms if a in fam["placebos"]]
+    trait_arms = [a for a in arms if a not in reference_arms and a not in fam["placebos"]] if fam["traits"] is None \
+        else [a for a in arms if a in fam["traits"]]
     traits = sorted(({t for r in rows for t in ((r.get("trait_present_share") or {}).keys())}
                      | {t for r in rows for turn in (r.get("trait_by_turn") or []) for t in turn["present"]})
                     - set(ENFORCED_ARMS))
     has = set(arms)
-    missing = {"neutral": "neutral" not in has, "placebo": not placebos,
+    missing = {ref: ref not in has, "placebo": not placebos,
                "oracle_mute": not {"oracle", "mute"} <= has, "mute": "mute" not in has}
     screen, o, u = screened_cases(rows)
-    placebo = placebo_effects(rows, placebos, [PRIMARY] + SECONDARY_METRICS) if not missing["neutral"] else []
+    placebo = placebo_effects(rows, placebos, [PRIMARY] + SECONDARY_METRICS, ref) if not missing[ref] else []
     complete = complete_cases(rows)
     srows = [r for r in rows if case_key(r) in complete]
-    splacebo = placebo_effects(srows, placebos, [PRIMARY]) if not missing["neutral"] else []
+    splacebo = placebo_effects(srows, placebos, [PRIMARY], ref) if not missing[ref] else []
     reps, reps_summary = rep_counts(rows)
     res = {
-        "arms": arms, "placebo_arms": placebos, "trait_arms": trait_arms, "missing": missing,
+        "family": family, "reference": ref, "arms": arms, "placebo_arms": placebos, "trait_arms": trait_arms, "missing": missing,
         "excluded": excluded,
-        "holm_family": list(HOLM_FAMILY), "holm_missing": [a for a in HOLM_FAMILY if a not in has],
-        "holm_m": len([a for a in HOLM_FAMILY if a in has]),
+        "holm_family": list(holm_family), "holm_missing": [a for a in holm_family if a not in has],
+        "holm_m": len([a for a in holm_family if a in has]),
         "reps": reps, "reps_summary": reps_summary,
         "failures": failure_table(runs, raw) if runs is not None else None,
         "arm_means": arm_means(rows),
-        "paired": trait_effects(rows, trait_arms, [PRIMARY] + SECONDARY_METRICS, placebo, check_m=True)
-        if not missing["neutral"] else [],
-        "sensitivity": trait_effects(srows, trait_arms, [PRIMARY], splacebo) if not missing["neutral"] else [],
+        "paired": trait_effects(rows, trait_arms, [PRIMARY] + SECONDARY_METRICS, placebo, ref, holm_family,
+                                check_m=True) if not missing[ref] else [],
+        "sensitivity": trait_effects(srows, trait_arms, [PRIMARY], splacebo, ref, holm_family)
+        if not missing[ref] else [],
         "sensitivity_n": len(complete),
         "placebo": placebo,
         "screen": [{"domain": c[0], "mode": c[1], "case_id": c[2], "oracle_recovered": o[c],
                     "mute_recovered": u[c], "passes": c in screen} for c in sorted(set(o) & set(u))],
-        "gap_normalised": [gap_normalised(rows, a) for a in trait_arms]
-        if not (missing["neutral"] or missing["oracle_mute"]) else [],
-        "decomposition": [d for a in trait_arms for d in decomposition(rows, a)] if not missing["neutral"] else [],
-        "difficulty": by_difficulty(rows, trait_arms) if not missing["neutral"] else [],
+        "gap_normalised": [gap_normalised(rows, a, ref) for a in trait_arms]
+        if not (missing[ref] or missing["oracle_mute"]) else [],
+        "decomposition": [d for a in trait_arms for d in decomposition(rows, a, ref)] if not missing[ref] else [],
+        "difficulty": by_difficulty(rows, trait_arms, ref) if not missing[ref] else [],
         "replication": replication(rows),
         "attribution_sanity": attribution_sanity(rows),
     }
-    res["selection"], res["selection_n"] = selection(rows, trait_arms) if not missing["neutral"] else ([], 0)
-    res["gap_tercile"], res["gap_cuts"] = gap_terciles(rows, trait_arms) \
-        if not (missing["neutral"] or missing["oracle_mute"]) else ([], None)
+    res["selection"], res["selection_n"] = selection(rows, trait_arms, ref) if not missing[ref] else ([], 0)
+    res["gap_tercile"], res["gap_cuts"] = gap_terciles(rows, trait_arms, ref) \
+        if not (missing[ref] or missing["oracle_mute"]) else ([], None)
     res["manipulation"], res["manipulation_by_turn"] = manipulation(rows, traits)
     res["traits"] = traits
     res["bigfive_check"] = bigfive_check(rows)
@@ -569,7 +593,7 @@ def analyse(rows, runs=None):
             r["manip_pass"] = (manip.get(r["arm"]) or {}).get("manip_pass")
         else:
             on = (manip.get(r["arm"]) or {}).get("on_target")
-            base = (manip.get("neutral") or {}).get(r["arm"])
+            base = (manip.get(ref) or {}).get(r["arm"])
             r["manip_pass"] = (on >= MANIP_MIN_ON_TARGET and on - base >= MANIP_MIN_ABOVE_NEUTRAL) \
                 if (on is not None and base is not None) else None
         r["counts"] = bool(r["p_holm"] is not None and r["p_holm"] < ALPHA and r["beats_placebo"]
@@ -584,9 +608,11 @@ def render_markdown(res):
     effect_cols = ["arm", "metric", "n_cases", "effect", "ci_lo", "ci_hi"]
     n_pass = sum(s["passes"] for s in res["screen"])
     miss = res["missing"]
+    ref = res["reference"]
+    holm_desc = "style/policy personas" if res["family"] == "old" else "Big Five trait personas"
     primary = [r for r in res["paired"] if r["metric"] == PRIMARY]
     secondary = [r for r in res["paired"] if r["metric"] != PRIMARY]
-    no_neutral = "No `neutral` arm in the results: no paired comparison."
+    no_neutral = f"No `{ref}` arm in the results: no paired comparison."
     no_om = "No `oracle` and/or `mute` arm in the results: block skipped."
     per_arm_cols = ["arm", "n_rows", "n_cases"]
     ex = res["excluded"]
@@ -595,6 +621,8 @@ def render_markdown(res):
                  if res["holm_missing"] else
                  f"Holm family complete: m = {res['holm_m']} ({', '.join(res['holm_family'])}).")
     fail_cols = ["arm", "jobs", "done", "error", "attempts_capped", "no_eval_row"]
+    if any("skipped_budget" in f for f in res["failures"] or []):
+        fail_cols.insert(4, "skipped_budget")
     manip_cols = ["arm", "n_answers", "on_target", "max_off_target"] + res["traits"]
     if any("note" in r for r in res["manipulation"]):
         manip_cols += ["n_cases_with_q", "mean_deferred", "manip_pass", "note"]
@@ -605,7 +633,7 @@ def render_markdown(res):
         holm_warn,
         f"Bootstrap: {B_PRIMARY} case resamples for the primary metric, {B} for everything else, seed {SEED}, "
         "95% percentile CI. Two-sided bootstrap p = 2·min(P(Δ*≤0), P(Δ*≥0)), capped at 1. Primary Holm over the "
-        "style/policy personas (placebos excluded); Holm on secondary metrics is descriptive. "
+        f"{holm_desc} (placebos excluded); Holm on secondary metrics is descriptive. "
         "|Δ| lower bound (abs_lo) = 0 if the CI spans 0, else min(|lo|, |hi|). beats_placebo = abs_lo > the "
         "largest placebo |Δ| point estimate for that metric.",
         f"Arms: {', '.join(res['arms'])}. Traits: {', '.join(res['trait_arms']) or '—'}. "
@@ -620,39 +648,39 @@ def render_markdown(res):
         md_table(res["reps_summary"], ["arm", "n_cases", "max_reps", "min_reps", "n_short", "short_cases"]),
         "## Per-arm means (primary, item and process metrics)",
         md_table(res["arm_means"], per_arm_cols + [PRIMARY] + ITEM_METRICS + PROCESS_METRICS),
-        f"## Primary: Paired effect vs neutral on {PRIMARY} (per case mean over reps, trait − neutral)",
+        f"## Primary: Paired effect vs {ref} on {PRIMARY} (per case mean over reps, trait − {ref})",
         (f"Available cases per arm. counts = Holm p < {ALPHA} AND beats_placebo AND manip_pass (on-target ≥ "
-         f"{MANIP_MIN_ON_TARGET:.0%} of the arm's answers and ≥ {MANIP_MIN_ABOVE_NEUTRAL:.0%} above the neutral "
+         f"{MANIP_MIN_ON_TARGET:.0%} of the arm's answers and ≥ {MANIP_MIN_ABOVE_NEUTRAL:.0%} above the {ref} "
          "arm's rate for that trait; code-enforced personas: see the manipulation check). "
          "Only traits with counts = True are read as trait effects.\n\n" + md_table(primary, PRIMARY_COLS))
-        if not miss["neutral"] else no_neutral,
+        if not miss[ref] else no_neutral,
         "### Sensitivity: complete cases only",
         (f"Same test on the {res['sensitivity_n']} cases present in every arm except paper with that arm's full "
          "number of reps.\n\n" + md_table(res["sensitivity"], PRIMARY_COLS))
-        if not miss["neutral"] else no_neutral,
-        "## Placebo arms: Δ(placebo − neutral)",
+        if not miss[ref] else no_neutral,
+        f"## Placebo arms: Δ(placebo − {ref})",
         (md_table([r for r in res["placebo"] if r["metric"] == PRIMARY], effect_cols + ["p"])
          if res["placebo"] else ("No placebo arm in the results: beats_placebo is undefined."
                                  if miss["placebo"] else no_neutral)),
         "## Selection",
         f"Selected (traits with counts = True, top {TOP_K} by |Δ|): {', '.join(res['selected']) or 'none'}.",
         f"### Bootstrap P(trait in top {TOP_K} by |Δ| on {PRIMARY}), descriptive",
-        (f"One resample index matrix ({B} × {res['selection_n']} cases with neutral and every trait arm) "
+        (f"One resample index matrix ({B} × {res['selection_n']} cases with {ref} and every trait arm) "
          "shared by all traits.\n\n" + md_table(res["selection"], ["arm", "n_cases", "effect", "rank", "p_top"]))
-        if res["selection"] else (no_neutral if miss["neutral"] else "No trait arm in the results."),
+        if res["selection"] else (no_neutral if miss[ref] else "No trait arm in the results."),
         "## Secondary",
-        "Native strict FR / CGRR / SRR (IC-gated) and the other item metrics, paired Δ vs neutral.",
+        f"Native strict FR / CGRR / SRR (IC-gated) and the other item metrics, paired Δ vs {ref}.",
         "### Per-arm means (native)",
         md_table(res["arm_means"], per_arm_cols + NATIVE_METRICS),
-        "### Paired effect vs neutral",
-        md_table(secondary, EFFECT_COLS, {"p_holm": "p_holm (descriptive)"}) if not miss["neutral"] else no_neutral,
+        f"### Paired effect vs {ref}",
+        md_table(secondary, EFFECT_COLS, {"p_holm": "p_holm (descriptive)"}) if not miss[ref] else no_neutral,
         "### Placebo Δ, secondary metrics",
         md_table([r for r in res["placebo"] if r["metric"] != PRIMARY], effect_cols + ["p"])
         if res["placebo"] else "No placebo comparison.",
         "## Oracle − mute gap (covariate, descriptive)",
         f"### Case screen\n{n_pass}/{len(res['screen'])} cases with oracle item-recovery > mute item-recovery."
         if not miss["oracle_mute"] else no_om,
-        "### Gap-normalised effect on screened cases: Σ(trait − neutral) / Σ(oracle − mute)",
+        f"### Gap-normalised effect on screened cases: Σ(trait − {ref}) / Σ(oracle − mute)",
         md_table(res["gap_normalised"], effect_cols) if not miss["oracle_mute"] else no_om,
         "### Δ by gap tercile (all cases with oracle and mute)",
         (f"Cut points (1/3, 2/3 quantiles of the per-case gap): {fmt(res['gap_cuts'][0])}, "
@@ -660,13 +688,13 @@ def render_markdown(res):
          + md_table(res["gap_tercile"], ["arm", "tercile", "gap_min", "gap_max", "n_cases", "effect", "ci_lo",
                                          "ci_hi"]))
         if res["gap_cuts"] is not None else (no_om if miss["oracle_mute"] else no_neutral),
-        "## Decomposition vs neutral — descriptive (conditions on a post-treatment variable)",
+        f"## Decomposition vs {ref} — descriptive (conditions on a post-treatment variable)",
         md_table(res["decomposition"], ["arm", "quantity", "n_cases", "effect", "ci_lo", "ci_hi"])
-        if not miss["neutral"] else no_neutral,
+        if not miss[ref] else no_neutral,
         f"### Δ {PRIMARY} by item difficulty (easy = recovered in the mute arm, mean over mute reps ≥ 0.5)",
         (md_table(res["difficulty"], ["arm", "stratum", "n_cases", "n_items", "effect", "ci_lo", "ci_hi"])
          if not miss["mute"] else "No `mute` arm in the results: difficulty strata undefined.")
-        if not miss["neutral"] else no_neutral,
+        if not miss[ref] else no_neutral,
         "## Manipulation check (share of user answers flagged per trait)",
         md_table(res["manipulation"], manip_cols),
         "### On-target rate by turn index",
@@ -688,9 +716,11 @@ def main(argv=None):
     parser.add_argument("--results", required=True)
     parser.add_argument("--out", required=True, help="Output directory for analysis.md and csv files")
     parser.add_argument("--run_dir", default=None, help="Runner output tree, for failure accounting")
+    parser.add_argument("--family", choices=FAMILIES, default="old",
+                        help="old: neutral reference, style/policy traits; bigfive: bf_neutral reference, bf_* traits")
     args = parser.parse_args(argv)
     rows = load_rows(args.results)
-    res = analyse(rows, load_runs(args.run_dir) if args.run_dir else None)
+    res = analyse(rows, load_runs(args.run_dir) if args.run_dir else None, family=args.family)
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "analysis.md"), "w") as f:
         f.write(render_markdown(res))

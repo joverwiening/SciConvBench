@@ -560,8 +560,10 @@ def bigfive_judge(llm, turns, order):
         intensity = None
     ev = parsed.get("evidence") if isinstance(parsed.get("evidence"), str) else ""
     scientist = "\n".join(t["answer"] for t in turns)
+    masked_scientist = "\n".join(mask_constructs(t["answer"]) for t in turns)
     out.update(choice=pole(parsed.get("choice")), second=pole(parsed.get("second")), intensity=intensity,
-               evidence=ev, evidence_ok=pu.is_verbatim(ev, scientist), parse_failure=False)
+               evidence=ev, evidence_ok=pu.is_verbatim(ev, scientist) or pu.is_verbatim(ev, masked_scientist),
+               parse_failure=False)
     return out
 
 

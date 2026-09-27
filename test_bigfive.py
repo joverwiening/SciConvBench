@@ -254,6 +254,8 @@ class TestTraitJudge(unittest.TestCase):
         self.assertEqual((r["choice"], r["second"], r["intensity"], r["evidence_ok"], r["parse_failure"]),
                          ("high_neuroticism", None, 3, True, False))
         self.assertIn("Scientist: I am so […] about this", llm.prompts[0])
+        llm = L(th.fj({"choice": letter, "intensity": 1, "evidence": "so […] about this"}))
+        self.assertEqual(pev.bigfive_judge(llm, turns, o1)["evidence_ok"], True)
         llm = L(th.fj({"choice": letter, "intensity": 1, "evidence": "not said"}))
         self.assertEqual(pev.bigfive_judge(llm, turns, o1)["evidence_ok"], False)
         r = pev.bigfive_judge(L("garbage"), turns, o1)
@@ -332,6 +334,74 @@ class TestRunnerBigFive(unittest.TestCase):
         bf = {r["arm"]: r for r in res["bigfive_check"]}
         self.assertEqual((bf["bf_low_A"]["n"], bf["bf_low_A"]["hit_rate"]), (2, 1.0))
         self.assertIsNone(bf["bf_neutral"]["hit_rate"])
+
+
+def bf_rows(n_cases=20):
+    shift = {"bf_neutral": 0.0, "bf_neutral_b": 0.0, "bf_low_A": -0.3, "bf_high_N": 0.1, "bf_low_C": 0.0,
+             "neutral": 0.2, "terse": -0.2, "neutral_b": 0.2, "paper": 0.0, "oracle": 0.4, "mute": -0.3}
+    rows = []
+    for c in range(n_cases):
+        base = 0.4 + 0.01 * c
+        for arm, d in shift.items():
+            items = [{"index": i, "asked": True, "delivered": i < 2, "partial": False, "unasked_delivered": False,
+                      "unasked_partial": False, "recovered": i < 2, "grounded": False, "silent": False}
+                     for i in range(4)]
+            rates = {k: sum(it[k] for it in items) / len(items) for k in pan.ITEM_METRICS}
+            rates[pan.PRIMARY] = base + d
+            rows.append({"arm": arm, "rep": 1, "domain": "pde", "mode": "disambiguation", "case_id": f"c{c}",
+                         "native": {"FR": 0, "CGRR": 0, "SRR": 0, "IC": 1}, "items": items, "item_rates": rates,
+                         "turns": 3, "questions": 2, "cap_hit": False, "deferred": 0,
+                         "trait_present_share": None, "trait_by_turn": None})
+    return rows
+
+
+class TestAnalysisBigFive(unittest.TestCase):
+    def test_family_bigfive(self):
+        rows = bf_rows()
+        res = pan.analyse(rows, family="bigfive")
+        self.assertEqual((res["family"], res["reference"]), ("bigfive", "bf_neutral"))
+        self.assertEqual(res["placebo_arms"], ["bf_neutral_b"])
+        self.assertEqual(res["trait_arms"], ["bf_high_N", "bf_low_A", "bf_low_C"])
+        self.assertEqual((res["holm_family"], res["holm_m"], res["holm_missing"]),
+                         (["bf_high_N", "bf_low_A", "bf_low_C"], 3, []))
+        prim = {r["arm"]: r for r in res["paired"] if r["metric"] == pan.PRIMARY}
+        self.assertEqual(sorted(prim), res["trait_arms"])
+        self.assertAlmostEqual(prim["bf_low_A"]["effect"], -0.3)
+        self.assertAlmostEqual(prim["bf_high_N"]["effect"], 0.1)
+        self.assertAlmostEqual(prim["bf_low_C"]["effect"], 0.0)
+        self.assertEqual({r["arm"] for r in res["placebo"]}, {"bf_neutral_b"})
+        self.assertAlmostEqual([r for r in res["placebo"] if r["metric"] == pan.PRIMARY][0]["effect"], 0.0)
+        self.assertEqual({r["arm"] for r in res["selection"]}, set(res["trait_arms"]))
+        self.assertEqual({r["arm"] for r in res["decomposition"]}, set(res["trait_arms"]))
+        self.assertEqual({r["arm"] for r in res["difficulty"]}, set(res["trait_arms"]))
+        gap = {r["arm"]: r for r in res["gap_normalised"]}
+        self.assertAlmostEqual(gap["bf_low_A"]["effect"], -0.3 / 0.7)
+        md = pan.render_markdown(res)
+        self.assertIn(f"Paired effect vs bf_neutral on {pan.PRIMARY}", md)
+        self.assertIn("Δ(placebo − bf_neutral)", md)
+        self.assertIn("Big Five trait personas", md)
+        self.assertNotIn("terse", res["trait_arms"])
+        old = pan.analyse(rows)
+        self.assertEqual(old["reference"], "neutral")
+        self.assertAlmostEqual({r["arm"]: r for r in old["paired"] if r["metric"] == pan.PRIMARY}["terse"]["effect"],
+                               -0.4)
+        res = pan.analyse([r for r in rows if r["arm"] != "bf_neutral"], family="bigfive")
+        self.assertTrue(res["missing"]["bf_neutral"])
+        self.assertEqual(res["paired"], [])
+        self.assertIn("No `bf_neutral` arm in the results", pan.render_markdown(res))
+
+    def test_failure_table_skipped_budget(self):
+        runs = [{"arm": "bf_low_A", "rep": 1, "domain": "pde", "mode": "disambiguation", "case_id": f"c{i}",
+                 "status": st, "attempts": att} for i, (st, att) in
+                enumerate([("done", 1), ("skipped_budget", 0), ("skipped_budget", 3), ("error", 3)])]
+        runs.append(dict(runs[0], arm="bf_neutral"))
+        rows = [{"arm": r["arm"], "rep": 1, "domain": "pde", "mode": "disambiguation", "case_id": r["case_id"]}
+                for r in runs if r["status"] == "done"]
+        fail = {f["arm"]: f for f in pan.failure_table(runs, rows)}
+        self.assertEqual(fail["bf_low_A"], {"arm": "bf_low_A", "jobs": 4, "done": 1, "error": 1, "attempts_capped": 1,
+                                            "no_eval_row": 3, "skipped_budget": 2})
+        self.assertEqual(fail["bf_neutral"], {"arm": "bf_neutral", "jobs": 1, "done": 1, "error": 0,
+                                              "attempts_capped": 0, "no_eval_row": 0})
 
 
 if __name__ == "__main__":
