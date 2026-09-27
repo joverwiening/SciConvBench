@@ -370,6 +370,23 @@ def bigfive_check(rows):
     return out
 
 
+def bigfive_pole_shares(rows):
+    """arm -> (target pole, {pole: share of parsed dialogues judged as that pole})."""
+    acc = defaultdict(list)
+    for r in rows:
+        bf = r.get("bf_trait")
+        if bf and not bf.get("parse_failure"):
+            acc[r["arm"]].append(bf)
+    out = {}
+    for arm, v in acc.items():
+        dist = defaultdict(int)
+        for b in v:
+            dist[b["choice"]] += 1
+        target = next((b.get("target") for b in v if b.get("target")), None)
+        out[arm] = (target, {k: n / len(v) for k, n in dist.items()})
+    return out
+
+
 def enforced_check(rows, arm):
     """Code-enforced persona: passes iff mean deferred turns per case ≥ 1 over cases with ≥ 1 question."""
     acc = defaultdict(list)
@@ -585,11 +602,20 @@ def analyse(rows, runs=None, family="old"):
     res["manipulation"], res["manipulation_by_turn"] = manipulation(rows, traits)
     res["traits"] = traits
     res["bigfive_check"] = bigfive_check(rows)
+    bf_shares = bigfive_pole_shares(rows)
     manip = {r["arm"]: r for r in res["manipulation"]}
     for r in res["paired"] + res["sensitivity"]:
         if r["metric"] != PRIMARY:
             continue
-        if r["arm"] in ENFORCED_ARMS:
+        if family == "bigfive":
+            # blind multiple-choice judge: the arm's target pole must be picked in >= 60 % of its dialogues and
+            # >= 30 points more often than in the reference arm's dialogues
+            target, shares = bf_shares.get(r["arm"], (None, {}))
+            on = shares.get(target, 0.0) if target else None
+            base = bf_shares[ref][1].get(target, 0.0) if (target and ref in bf_shares) else None
+            r["manip_pass"] = (on >= MANIP_MIN_ON_TARGET and on - base >= MANIP_MIN_ABOVE_NEUTRAL) \
+                if (on is not None and base is not None) else None
+        elif r["arm"] in ENFORCED_ARMS:
             r["manip_pass"] = (manip.get(r["arm"]) or {}).get("manip_pass")
         else:
             on = (manip.get(r["arm"]) or {}).get("on_target")
@@ -650,7 +676,7 @@ def render_markdown(res):
         md_table(res["arm_means"], per_arm_cols + [PRIMARY] + ITEM_METRICS + PROCESS_METRICS),
         f"## Primary: Paired effect vs {ref} on {PRIMARY} (per case mean over reps, trait − {ref})",
         (f"Available cases per arm. counts = Holm p < {ALPHA} AND beats_placebo AND manip_pass (on-target ≥ "
-         f"{MANIP_MIN_ON_TARGET:.0%} of the arm's answers and ≥ {MANIP_MIN_ABOVE_NEUTRAL:.0%} above the {ref} "
+         f"{MANIP_MIN_ON_TARGET:.0%} of the arm's {'dialogues (blind Big Five judge)' if res['family'] == 'bigfive' else 'answers'} and ≥ {MANIP_MIN_ABOVE_NEUTRAL:.0%} above the {ref} "
          "arm's rate for that trait; code-enforced personas: see the manipulation check). "
          "Only traits with counts = True are read as trait effects.\n\n" + md_table(primary, PRIMARY_COLS))
         if not miss[ref] else no_neutral,

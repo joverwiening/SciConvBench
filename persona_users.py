@@ -208,8 +208,11 @@ class BigFiveUser(LLMUserInterface):
 
     def build_system_prompt(self) -> str:
         sh, p = self.shared, self.persona
+        # the user sees its own opening request, as in a real chat window; without it the sim accuses the agent
+        # of ignoring facts that were never sent (stage-1 smoke, bf_low_A)
         return "\n\n".join([sh["identity"], p["sheet"], sh["situation"], p["appraisal"], sh["notes_intro"],
-                             f"<notes>\n{self.complete_requirement}\n</notes>", sh["rules"]])
+                             f"<notes>\n{self.complete_requirement}\n</notes>", sh["request_intro"],
+                             f"<your_request>\n{self.incomplete_requirement}\n</your_request>", sh["rules"]])
 
     def build_messages(self, question: str) -> List[dict]:
         messages = []

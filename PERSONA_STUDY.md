@@ -53,11 +53,14 @@ since a work Q&A gives it nothing to decline. Paper, oracle and mute arms stay a
 
 User prompt (`persona_users.BigFiveUser`), in order: shared identity, persona sheet, shared situation, persona
 appraisal (one sentence of feelings about the situation), shared notes intro, the COMPLETE requirement as the
-user's notes, shared rules. Shared text is `persona/bigfive/shared.json`, byte-identical in every bf arm; persona
-text is `persona/bigfive/personas/*.json`.
-- Differences from the paper user: the INCOMPLETE requirement is never shown, so the user does not know which
-  facts the agent lacks. No "be concise", "do not provide information not asked for", "provide concrete values",
-  and no canned "Make a reasonable assumption" reply. Kept: never state a value that is not in the notes.
+user's notes, the INCOMPLETE requirement as "the request you sent", shared rules. Shared text is
+`persona/bigfive/shared.json`, byte-identical in every bf arm; persona text is `persona/bigfive/personas/*.json`.
+- Differences from the paper user: the incomplete text is framed as the user's own message, as in a chat window,
+  and nothing says the agent lacks facts or asks the user to compare. No "be concise", "do not provide information
+  not asked for", "provide concrete values", and no canned "Make a reasonable assumption" reply. Kept: never state
+  a value that is not in the notes.
+- The request is shown because without it (stage-1 smoke, 2026-09-27, runs/smoke_bf) bf_low_A accused the agent of
+  ignoring facts that were never in the request.
 - Persona text carries personality, facts about the person's life, and feelings about them, never rules on
   sharing or claims about what the person knows. Lint in `test_bigfive.py`.
 - History goes as real chat turns (agent = user role, persona = assistant role). A one-line reminder is appended to

@@ -6,6 +6,7 @@ import time
 import shutil
 import tempfile
 import unittest
+from collections import defaultdict
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO)
@@ -68,9 +69,12 @@ class TestBigFiveUser(unittest.TestCase):
         sp = svc.calls[0][1]
         self.assertEqual(sp, "\n\n".join([sh["identity"], p["sheet"], sh["situation"], p["appraisal"],
                                           sh["notes_intro"], "<notes>\nCOMPLETE spec: value 42.\n</notes>",
+                                          sh["request_intro"], f"<your_request>\n{SENTINEL}\n</your_request>",
                                           sh["rules"]]))
         for msgs, s in svc.calls:
-            self.assertNotIn(SENTINEL, s + json.dumps(msgs))
+            # the incomplete request appears once, as the user's own message, never in the chat turns
+            self.assertEqual(s.count(SENTINEL), 1)
+            self.assertNotIn(SENTINEL, json.dumps(msgs))
             self.assertEqual([m["role"] for m in msgs], ["user", "assistant"] * (len(msgs) // 2) + ["user"])
             self.assertTrue(msgs[-1]["content"].endswith("\n\n" + p["reminder"]))
             for m in msgs[:-1]:
@@ -303,8 +307,8 @@ class TestRunnerBigFive(unittest.TestCase):
                 self.assertEqual(len(jl(os.path.join(d, "user_calls.jsonl"))), 2)
                 clar = th.jload(os.path.join(d, "clarifications.json"))
                 self.assertEqual(clar[0]["answer"], "Fine, it is 42. Stop wasting my time.")
-                self.assertNotIn(th.CASES[cid]["incomplete_user_req"],
-                                 th.readf(os.path.join(d, "user_system_prompt.txt")))
+                self.assertIn(f"<your_request>\n{th.CASES[cid]['incomplete_user_req']}\n</your_request>",
+                              th.readf(os.path.join(d, "user_system_prompt.txt")))
             self.assertIn("The boundary value is 42.",
                           th.readf(os.path.join(self.folder("paper", cid), "conversation_log.txt")))
         m = th.jload(os.path.join(self.out, "manifest.json"))
@@ -389,6 +393,31 @@ class TestAnalysisBigFive(unittest.TestCase):
         self.assertTrue(res["missing"]["bf_neutral"])
         self.assertEqual(res["paired"], [])
         self.assertIn("No `bf_neutral` arm in the results", pan.render_markdown(res))
+
+    def test_bigfive_manipulation_gate(self):
+        rows = [dict(r) for r in bf_rows()]
+        pole = {"bf_low_A": "low_agreeableness", "bf_high_N": "high_neuroticism", "bf_low_C": "low_conscientiousness"}
+        seen = defaultdict(int)
+        for r in rows:
+            if not r["arm"].startswith("bf_"):
+                continue
+            k = seen[r["arm"]]
+            seen[r["arm"]] += 1
+            tgt = pole.get(r["arm"])
+            if r["arm"] == "bf_low_A":      # target picked always; neutral never → pass
+                choice = tgt
+            elif r["arm"] == "bf_high_N":   # target picked in every other dialogue → below 60 %
+                choice = tgt if k % 2 == 0 else "ordinary"
+            elif r["arm"] == "bf_low_C":    # always picked, but neutral also reads as low C → not 30 pts above
+                choice = tgt
+            else:
+                choice = "low_conscientiousness" if r["arm"] == "bf_neutral" else "ordinary"
+            r["bf_trait"] = {"choice": choice, "target": tgt, "hit": (choice == tgt) if tgt else None,
+                             "parse_failure": False}
+        res = pan.analyse(rows, family="bigfive")
+        prim = {r["arm"]: r for r in res["paired"] if r["metric"] == pan.PRIMARY}
+        self.assertEqual({a: prim[a]["manip_pass"] for a in pole},
+                         {"bf_low_A": True, "bf_high_N": False, "bf_low_C": False})
 
     def test_failure_table_skipped_budget(self):
         runs = [{"arm": "bf_low_A", "rep": 1, "domain": "pde", "mode": "disambiguation", "case_id": f"c{i}",
