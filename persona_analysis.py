@@ -336,6 +336,26 @@ def manipulation(rows, traits):
     return table, turn_rows
 
 
+def bigfive_check(rows):
+    """Blind Big Five judge (persona_eval --trait_check bigfive): per arm, parsed dialogues only."""
+    acc = defaultdict(list)
+    for r in rows:
+        bf = r.get("bf_trait")
+        if bf and not bf.get("parse_failure"):
+            acc[r["arm"]].append(bf)
+    out = []
+    for arm in sorted(acc):
+        v = acc[arm]
+        hits = [b["hit"] for b in v if b.get("hit") is not None]
+        dist = defaultdict(int)
+        for b in v:
+            dist[b["choice"]] += 1
+        out.append({"arm": arm, "n": len(v), "hit_rate": (sum(hits) / len(hits)) if hits else None,
+                    "ordinary_share": sum(b["choice"] == "ordinary" for b in v) / len(v),
+                    "choices": "; ".join(f"{k} {n}" for k, n in sorted(dist.items(), key=lambda x: (-x[1], x[0])))})
+    return out
+
+
 def enforced_check(rows, arm):
     """Code-enforced persona: passes iff mean deferred turns per case ≥ 1 over cases with ≥ 1 question."""
     acc = defaultdict(list)
@@ -540,6 +560,7 @@ def analyse(rows, runs=None):
         if not (missing["neutral"] or missing["oracle_mute"]) else ([], None)
     res["manipulation"], res["manipulation_by_turn"] = manipulation(rows, traits)
     res["traits"] = traits
+    res["bigfive_check"] = bigfive_check(rows)
     manip = {r["arm"]: r for r in res["manipulation"]}
     for r in res["paired"] + res["sensitivity"]:
         if r["metric"] != PRIMARY:
@@ -655,6 +676,10 @@ def render_markdown(res):
         "## Attribution sanity",
         md_table([res["attribution_sanity"]], list(res["attribution_sanity"].keys())),
     ]
+    if res.get("bigfive_check"):
+        parts += ["## Big Five manipulation check (blind judge, one call per dialogue)",
+                  "hit_rate: share of trait-arm dialogues whose judged pole is the arm's target.\n\n"
+                  + md_table(res["bigfive_check"], ["arm", "n", "hit_rate", "ordinary_share", "choices"])]
     return "\n\n".join(parts) + "\n"
 
 
@@ -675,6 +700,8 @@ def main(argv=None):
         write_csv(os.path.join(args.out, f"{name}.csv"), res[name])
     if res["failures"] is not None:
         write_csv(os.path.join(args.out, "failures.csv"), res["failures"])
+    if res["bigfive_check"]:
+        write_csv(os.path.join(args.out, "bigfive_check.csv"), res["bigfive_check"])
     write_csv(os.path.join(args.out, "replication.csv"), [res["replication"]])
     write_csv(os.path.join(args.out, "attribution_sanity.csv"), [res["attribution_sanity"]])
     if res["holm_missing"]:

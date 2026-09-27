@@ -144,6 +144,12 @@ class Config:
             "provider": "vertex_gemini",
             "model_version": "gemini-2.5-pro",
             "temperature": 0.0
+        },
+        "bedrock_glm5": {
+            "provider": "bedrock_boto3",
+            "model_version": "zai.glm-5",
+            "temperature": 0.0,
+            "max_tokens": 8192
         }
 
     }
@@ -152,6 +158,7 @@ class Config:
     model_provider = active_conf["provider"]
     model_version = active_conf["model_version"]
     temperature = active_conf["temperature"]
+    max_tokens = active_conf.get("max_tokens")
 
     # Paths
     COMPLETE_PROMPT_PATH = "ground_truth.txt"

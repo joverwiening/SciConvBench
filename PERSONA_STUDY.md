@@ -35,6 +35,43 @@ the COMPLETE requirement, and the user does not give information that was not as
 persona explicitly says to. So style personas cannot volunteer information; only a persona that says so
 explicitly (volunteering) may.
 
+## Big Five user (bf_* arms, 2026-09-27)
+
+Replaces the style/policy traits above for the next study: arms are Big Five personalities, and the paper user's
+own rules are removed because they fix how much the user shares whatever the persona says.
+
+| arm | persona |
+|---|---|
+| `bf_neutral` | all five domains average |
+| `bf_neutral_b` | reworded average (placebo) |
+| `bf_low_A` | very low agreeableness, other four average |
+| `bf_high_N` | very high neuroticism, other four average |
+| `bf_low_C` | very low conscientiousness, other four average |
+
+Low extraversion is not an arm: in a pilot on Kemp's testbed (GLM-5, 16 scripted turns) it was never recognised,
+since a work Q&A gives it nothing to decline. Paper, oracle and mute arms stay as above.
+
+User prompt (`persona_users.BigFiveUser`), in order: shared identity, persona sheet, shared situation, persona
+appraisal (one sentence of feelings about the situation), shared notes intro, the COMPLETE requirement as the
+user's notes, shared rules. Shared text is `persona/bigfive/shared.json`, byte-identical in every bf arm; persona
+text is `persona/bigfive/personas/*.json`.
+- Differences from the paper user: the INCOMPLETE requirement is never shown, so the user does not know which
+  facts the agent lacks. No "be concise", "do not provide information not asked for", "provide concrete values",
+  and no canned "Make a reasonable assumption" reply. Kept: never state a value that is not in the notes.
+- Persona text carries personality, facts about the person's life, and feelings about them, never rules on
+  sharing or claims about what the person knows. Lint in `test_bigfive.py`.
+- History goes as real chat turns (agent = user role, persona = assistant role). A one-line reminder is appended to
+  the current message only. No example exchanges, no private thought (in the pilot above the thought step shortened
+  replies and did not help recognition).
+- Every user call is logged raw to `user_calls.jsonl`; the system prompt to `user_system_prompt.txt`.
+
+Manipulation check (`persona_eval.py --trait_check bigfive`): one blind multiple-choice call per dialogue over the
+10 Big Five poles plus "ordinary", construct names masked, option order shuffled per case.
+
+Models: GLM-5 on Bedrock (`bedrock_glm5`) for agent, user, judges and aux. No released paper runs use GLM-5, so the
+paper arm is a within-study baseline, not a replication. Runner, eval and card builder take `--budget_usd` and stop
+scheduling work once the priced spend reaches it.
+
 ## Fact cards (persona/fact_cards/<domain>/<mode>_<domain>.cards.json)
 
 One card per missing entity (disambiguation) or per planted inconsistency. Built once by

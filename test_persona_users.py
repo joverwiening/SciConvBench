@@ -190,7 +190,7 @@ class TestRunnerRecords(unittest.TestCase):
         cid = th.CASE_IDS[0]
         argv = ["--domain", th.DOMAIN, "--mode", th.MODE, "--cases", cid, "--arms", ",".join(arms),
                 "--agent_model", "or_gpt_5_2", "--user_model", "or_sonnet_4_6", "--reps", "1",
-                "--workers", "2", "--out", out, "--cards", cards]
+                "--workers", "2", "--out", out, "--cards", cards, "--budget_usd", "1000"]
         th.FakeLLM.complete_after = 3
         with redirect_stdout(io.StringIO()):
             self.assertEqual(prun.main(argv), {"jobs": 4, "skipped": 0, "done": 4, "errors": 0})
@@ -233,6 +233,7 @@ class TestRunnerRecords(unittest.TestCase):
         base = "".join(inspect.getsource(getattr(LLMUserInterface, n))
                        for n in ("get_full_context", "build_system_prompt", "answer_clarification_question"))
         full = base + "".join(inspect.getsource(o) for o in (pu.render_persona, pu.turn_note_for_arm, pu.BusyUser))
+        full += inspect.getsource(pu.BigFiveUser) + pu.load_bigfive()["shared_text"]
         self.assertEqual(prun.user_prompt_template_sha(), pu.sha256_text(full))
 
 

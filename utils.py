@@ -2,16 +2,18 @@ import os
 import time
 import random
 import asyncio
+import threading
 from typing import Optional
 import requests
 import json
 from pathlib import Path
 import boto3
+from botocore.config import Config as BotoConfig
 from google import genai
 from langchain_aws import ChatBedrockConverse
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_ollama import ChatOllama
 
 from claude_agent_sdk import query, ClaudeAgentOptions
@@ -26,6 +28,11 @@ except ImportError:
     def count_tokens(text: str) -> int:
         return max(1, len((text or "").split()))
 
+# boto3 client creation is not thread-safe
+_BOTO3_LOCK = threading.Lock()
+BOTO3_CONFIG = dict(read_timeout=300, connect_timeout=30, retries={"max_attempts": 3, "mode": "adaptive"})
+CUSTOM_PROVIDERS = ["claude_sdk", "codex", "bedrock_boto3", "vertex_gemini"]
+
 
 class LLMService:
     def __init__(self, config: object):
@@ -33,7 +40,9 @@ class LLMService:
         self.model_provider = config.model_provider
         self.model_version = config.model_version
         self.temperature = config.temperature
+        self.max_tokens = getattr(config, "max_tokens", None)
         self.llm = None
+        self._boto3_client = None
 
         self.total_calls = 0
         self.total_prompt_tokens = 0
@@ -46,6 +55,7 @@ class LLMService:
         self.api_input_tokens = 0
         self.api_output_tokens = 0
         self.api_reasoning_tokens = 0
+        self.api_reasoning_chars = 0
 
         self._initialize_llm()
 
@@ -149,22 +159,45 @@ class LLMService:
             raise ValueError(
                 f"{self.model_provider} is not a supported model_provider")
 
+    def _get_boto3_client(self):
+        with _BOTO3_LOCK:
+            if self._boto3_client is None:
+                aws_region = os.getenv("AWS_DEFAULT_REGION", "us-west-2").strip()
+                self._boto3_client = boto3.client("bedrock-runtime", region_name=aws_region,
+                                                  config=BotoConfig(**BOTO3_CONFIG))
+            return self._boto3_client
+
     def _invoke_boto3_converse(self, system_prompt: Optional[str], user_prompt: str) -> str:
-        aws_region = os.getenv("AWS_DEFAULT_REGION", "us-west-2").strip()
-        client = boto3.client("bedrock-runtime", region_name=aws_region)
+        return self._boto3_converse_messages(system_prompt, [{"role": "user", "content": user_prompt}])
+
+    def _boto3_converse_messages(self, system_prompt: Optional[str], messages: list) -> str:
+        client = self._get_boto3_client()
 
         system_msgs = [{"text": system_prompt}] if system_prompt else []
-        messages = [{"role": "user", "content": [{"text": user_prompt}]}]
+        converse_messages = [{"role": m["role"], "content": [{"text": m["content"]}]} for m in messages]
+        inference_config = {"temperature": self.temperature}
+        if self.max_tokens:
+            inference_config["maxTokens"] = self.max_tokens
 
         resp = client.converse(
             modelId=self.model_version,
             system=system_msgs,
-            messages=messages,
-            inferenceConfig={"temperature": self.temperature}
+            messages=converse_messages,
+            inferenceConfig=inference_config
         )
 
-        text = "".join(p.get("text", "")
-                       for p in resp["output"]["message"]["content"] if "text" in p).strip()
+        # recorded before the empty-response check: empty responses are billed too
+        usage = resp.get("usage") or {}
+        self.api_usage_calls += 1
+        self.api_input_tokens += usage.get("inputTokens", 0) or 0
+        self.api_output_tokens += usage.get("outputTokens", 0) or 0
+        content = resp["output"]["message"]["content"]
+        for p in content:
+            reasoning = p.get("reasoningContent")
+            if isinstance(reasoning, dict):
+                self.api_reasoning_chars += len((reasoning.get("reasoningText") or {}).get("text", "") or "")
+
+        text = "".join(p.get("text", "") for p in content if "text" in p).strip()
         return text
 
     def _invoke_vertex_gemini(self, system_prompt: Optional[str], user_prompt: str) -> str:
@@ -343,7 +376,7 @@ class LLMService:
         prompt_tokens = 0
         messages = []
 
-        if self.model_provider in ["claude_sdk", "codex", "bedrock_boto3", "vertex_gemini"]:
+        if self.model_provider in CUSTOM_PROVIDERS:
             prompt_tokens = count_tokens(
                 system_prompt or "") + count_tokens(user_prompt)
         else:
@@ -354,45 +387,80 @@ class LLMService:
             for m in messages:
                 prompt_tokens += self.llm.get_num_tokens(m.content)
 
+        def call():
+            # Custom Integrations (Claude & Codex)
+            if self.model_provider == "claude_sdk":
+                return asyncio.run(self._invoke_claude_sdk(system_prompt, user_prompt))
+            if self.model_provider == "codex":
+                return self._invoke_codex(system_prompt, user_prompt)
+            if self.model_provider == "bedrock_boto3":
+                return self._invoke_boto3_converse(system_prompt, user_prompt)
+            if self.model_provider == "vertex_gemini":
+                return self._invoke_vertex_gemini(system_prompt, user_prompt)
+            # Standard Langchain Integration
+            return self._invoke_langchain(messages)
+
+        return self._run_with_retries(call, prompt_tokens, max_retries)
+
+    def invoke_messages(self,
+                        messages: list,
+                        system_prompt: Optional[str] = None,
+                        max_retries: int = 5) -> str:
+        """messages: [{"role": "user"|"assistant", "content": str}], starting with "user" and alternating."""
+        if not messages:
+            raise ValueError("messages must not be empty")
+        for i, m in enumerate(messages):
+            want = "user" if i % 2 == 0 else "assistant"
+            if m.get("role") != want:
+                raise ValueError(f"message {i} has role {m.get('role')!r}; expected {want!r} "
+                                 "(messages must start with 'user' and alternate)")
+        if self.model_provider in CUSTOM_PROVIDERS and self.model_provider != "bedrock_boto3":
+            raise NotImplementedError(f"invoke_messages is not supported for {self.model_provider}")
+
+        self.total_calls += 1
+        if self.model_provider == "bedrock_boto3":
+            prompt_tokens = count_tokens(system_prompt or "") + sum(count_tokens(m["content"]) for m in messages)
+
+            def call():
+                return self._boto3_converse_messages(system_prompt, messages)
+        else:
+            lc_messages = [SystemMessage(content=system_prompt)] if system_prompt else []
+            lc_messages += [HumanMessage(content=m["content"]) if m["role"] == "user"
+                            else AIMessage(content=m["content"]) for m in messages]
+            prompt_tokens = sum(self.llm.get_num_tokens(m.content) for m in lc_messages)
+
+            def call():
+                return self._invoke_langchain(lc_messages)
+
+        return self._run_with_retries(call, prompt_tokens, max_retries)
+
+    def _invoke_langchain(self, messages: list) -> str:
+        response = self.llm.invoke(messages)
+        self._record_api_usage(response)
+        raw_content = response.content
+        if isinstance(raw_content, list):
+            text_parts = []
+            for part in raw_content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                elif isinstance(part, str):
+                    text_parts.append(part)
+            return "".join(text_parts)
+        return str(raw_content)
+
+    def _run_with_retries(self, call, prompt_tokens: int, max_retries: int) -> str:
         retry_count = 0
         while True:
             try:
-                # Custom Integrations (Claude & Codex)
-                if self.model_provider == "claude_sdk":
-                    final_content = asyncio.run(
-                        self._invoke_claude_sdk(system_prompt, user_prompt))
-                elif self.model_provider == "codex":
-                    final_content = self._invoke_codex(
-                        system_prompt, user_prompt)
-                elif self.model_provider == "bedrock_boto3":
-                    final_content = self._invoke_boto3_converse(
-                        system_prompt, user_prompt)
-                elif self.model_provider == "vertex_gemini":
-                    final_content = self._invoke_vertex_gemini(
-                        system_prompt, user_prompt)
-                # Standard Langchain Integration
-                else:
-                    response = self.llm.invoke(messages)
-                    self._record_api_usage(response)
-                    raw_content = response.content
-                    if isinstance(raw_content, list):
-                        text_parts = []
-                        for part in raw_content:
-                            if isinstance(part, dict):
-                                if part.get("type") == "text":
-                                    text_parts.append(part.get("text", ""))
-                            elif isinstance(part, str):
-                                text_parts.append(part)
-                        final_content = "".join(text_parts)
-                    else:
-                        final_content = str(raw_content)
+                final_content = call()
 
                 # Post-processing and Token Counting
                 if not final_content or not final_content.strip():
                     raise ValueError(
                         f"Received empty response from {self.model_provider}.")
 
-                if self.model_provider in ["claude_sdk", "codex", "bedrock_boto3", "vertex_gemini"]:
+                if self.model_provider in CUSTOM_PROVIDERS:
                     completion_tokens = count_tokens(final_content)
                 else:
                     completion_tokens = self.llm.get_num_tokens(final_content)
@@ -452,5 +520,6 @@ class LLMService:
             "api_usage_calls": self.api_usage_calls,
             "api_input_tokens": self.api_input_tokens,
             "api_output_tokens": self.api_output_tokens,
-            "api_reasoning_tokens": self.api_reasoning_tokens
+            "api_reasoning_tokens": self.api_reasoning_tokens,
+            "api_reasoning_chars": self.api_reasoning_chars
         }

@@ -4,6 +4,8 @@ import sys
 import glob
 import json
 import time
+import random
+import string
 import argparse
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -118,8 +120,61 @@ TRAIT_USER = """
         </ANSWER>
         """
 
+# pole id -> plain description; letters are assigned per case after a deterministic shuffle
+BIGFIVE_OPTIONS = {
+    "high_openness": "curious, imaginative, drawn to new ideas",
+    "low_openness": "conventional, incurious, prefers the familiar",
+    "high_conscientiousness": "organised, careful, thorough, dependable",
+    "low_conscientiousness": "disorganised, careless, distractible, hurried",
+    "high_extraversion": "outgoing, talkative, energetic, assertive",
+    "low_extraversion": "reserved, quiet, withdrawn, low-key",
+    "high_agreeableness": "warm, polite, trusting, cooperative",
+    "low_agreeableness": "cold, blunt, critical, distrustful of others",
+    "high_neuroticism": "anxious, tense, insecure, easily upset",
+    "low_neuroticism": "calm, relaxed, emotionally steady, secure",
+    "ordinary": "ordinary: no trait stands out",
+}
+
+BIGFIVE_SYSTEM = """
+        You read a chat between an AI assistant and a scientist. The assistant is preparing a simulation setup for
+        the scientist and messages them with questions; the scientist replies.
+        Some words in the scientist's lines may be replaced by "[…]".
+
+        **YOUR TASK:**
+        Judge the personality of THE SCIENTIST (not the assistant) from how they write.
+        From the [OPTIONS], pick the letter of the description that best fits the scientist ("choice") and the
+        letter of the next best one ("second"). "intensity" is how strongly the choice shows: 0 (not at all),
+        1 (slightly), 2 (clearly), 3 (strongly). "evidence" is the passage of the scientist's lines that shows it
+        most clearly, copied VERBATIM.
+
+        **OUTPUT FORMAT:**
+        You must output your final evaluation as a JSON object enclosed EXACTLY within <FINAL_JSON> tags.
+        <FINAL_JSON>
+        {
+            "choice": "A",
+            "second": "B",
+            "intensity": 0,
+            "evidence": "verbatim passage of the scientist's lines"
+        }
+        </FINAL_JSON>
+        """
+
+BIGFIVE_USER = """
+        <OPTIONS>
+        {options}
+        </OPTIONS>
+
+        <CHAT>
+        {chat}
+        </CHAT>
+        """
+
+BIGFIVE_MASK = re.compile(r"\w*(?:neurotic|agreeabl|disagreeabl|conscientious|extravert|extrovert|introvert|openness|"
+                          r"personality)\w*|\bbig[\s-]*five\b", re.I)
+
 ATTRIBUTION_TEMPLATES_SHA = pu.sha256_text(ATTRIBUTION_SYSTEM + ATTRIBUTION_USER + ASK_SYSTEM + ASK_USER)
 TRAIT_TEMPLATES_SHA = pu.sha256_text(TRAIT_SYSTEM + TRAIT_USER)
+BIGFIVE_TEMPLATES_SHA = pu.sha256_text(BIGFIVE_SYSTEM + BIGFIVE_USER + json.dumps(BIGFIVE_OPTIONS, sort_keys=True))
 PARSE_TRIES = 3
 
 NATIVE_FILES = {
@@ -465,6 +520,51 @@ def trait_turn(llm, trait_defs, question, answer):
     return out
 
 
+def mask_constructs(text):
+    return BIGFIVE_MASK.sub("[…]", text)
+
+
+def bigfive_order(folder, run_dir):
+    rel = os.path.relpath(os.path.abspath(folder), os.path.abspath(run_dir))
+    order = list(BIGFIVE_OPTIONS)
+    random.Random(int(pu.sha256_text(rel), 16)).shuffle(order)
+    return order
+
+
+def bigfive_chat(turns):
+    lines = []
+    for t in turns:
+        lines.append(f"Assistant: {t['question']}")
+        lines.append(f"Scientist: {mask_constructs(t['answer'])}")
+    return "\n".join(lines)
+
+
+def bigfive_judge(llm, turns, order):
+    letters = string.ascii_uppercase[:len(order)]
+    options = "\n".join(f"{l}. {BIGFIVE_OPTIONS[pid]}" for l, pid in zip(letters, order))
+    parsed, attempts = invoke_parsed(llm, BIGFIVE_USER.format(options=options, chat=bigfive_chat(turns)),
+                                     BIGFIVE_SYSTEM)
+    by_letter = dict(zip(letters, order))
+
+    def pole(v):
+        return by_letter.get(v.strip().upper()) if isinstance(v, str) else None
+
+    out = {"order": order, "choice": None, "second": None, "intensity": None, "evidence": None,
+           "evidence_ok": None, "parse_failure": True, "attempts": attempts, "raw": parsed}
+    if parsed is None or pole(parsed.get("choice")) is None:
+        return out
+    try:
+        intensity = int(parsed.get("intensity"))
+        intensity = intensity if 0 <= intensity <= 3 else None
+    except (TypeError, ValueError):
+        intensity = None
+    ev = parsed.get("evidence") if isinstance(parsed.get("evidence"), str) else ""
+    scientist = "\n".join(t["answer"] for t in turns)
+    out.update(choice=pole(parsed.get("choice")), second=pole(parsed.get("second")), intensity=intensity,
+               evidence=ev, evidence_ok=pu.is_verbatim(ev, scientist), parse_failure=False)
+    return out
+
+
 # three-valued logic: None = unknown because a turn's judge output could not be parsed
 def _or(vals):
     vals = list(vals)
@@ -548,7 +648,11 @@ def eval_case(folder, ctx):
     items = row.get(pu.ITEMS_KEY[mode], []) or []
     prev = read_json(os.path.join(folder, "persona_eval.json")) or {}
     judge_cfg, aux_cfg = ctx["judge_cfg"], ctx["aux_cfg"]
+    trait_check = getattr(args, "trait_check", "per_turn")
     parse_failures = {"native": 0, "attribution": 0, "ask": 0, "traits": 0}
+    if trait_check == "bigfive":
+        parse_failures["bigfive"] = 0
+    fresh = []  # (model_version, stats) of calls made by this invocation, for the spend cap
 
     cards_rec = ctx["cards"].get((domain, mode))
     case_cards = cards_rec["data"]["cases"].get(case_id, {}) if cards_rec else {}
@@ -583,6 +687,7 @@ def eval_case(folder, ctx):
             fn = native_disambiguation if mode == "disambiguation" else native_inconsistency
             judges = fn(folder, row, judge_cfg)
             judge_usage = sum_usage(j.llm.get_statistics() for j in judges)
+            fresh.append((judge_cfg.model_version, judge_usage))
             parse_failures["native"] = sum(j.llm.parse_failures() for j in judges)
             native_ok = True
     else:
@@ -616,7 +721,7 @@ def eval_case(folder, ctx):
         recovered_judge = None
     item_match_mismatch = (sum(recovered) != judge_a) if fr_file is not None and judge_a is not None else None
 
-    attribution, traits, aux_usage = None, None, []
+    attribution, traits, bigfive, aux_usage = None, None, None, []
     if not args.skip_aux:
         attr_path = os.path.join(folder, "persona_attribution.json")
         attribution = read_json(attr_path)
@@ -627,9 +732,10 @@ def eval_case(folder, ctx):
             per_turn = [label_turn(llm, usable_cards, t) for t in turns] if usable_cards else []
             attribution = dict(key, turns=per_turn, usage=llm.get_statistics())
             write_json(attr_path, attribution)
+            fresh.append((aux_cfg.model_version, attribution["usage"]))
         aux_usage.append(attribution.get("usage"))
 
-        if arm not in pu.DETERMINISTIC_ARMS:
+        if arm not in pu.DETERMINISTIC_ARMS and trait_check == "per_turn":
             tr_path = os.path.join(folder, "persona_traits.json")
             traits = read_json(tr_path)
             key = dict(text_key, aux_model=aux_cfg.as_dict(), personas_sha256=ctx["personas_sha"],
@@ -639,7 +745,20 @@ def eval_case(folder, ctx):
                 per_turn = [trait_turn(llm, ctx["trait_defs"], t["question"], t["answer"]) for t in turns]
                 traits = dict(key, turns=per_turn, usage=llm.get_statistics())
                 write_json(tr_path, traits)
+                fresh.append((aux_cfg.model_version, traits["usage"]))
             aux_usage.append(traits.get("usage"))
+
+        if arm not in pu.DETERMINISTIC_ARMS and trait_check == "bigfive":
+            bf_path = os.path.join(folder, "persona_bigfive_trait.json")
+            bigfive = read_json(bf_path)
+            key = dict(text_key, aux_model=aux_cfg.as_dict(), prompt_sha256=BIGFIVE_TEMPLATES_SHA)
+            if not bigfive or {k: bigfive.get(k) for k in key} != key:
+                llm = LLMService(aux_cfg)
+                res = bigfive_judge(llm, turns, bigfive_order(folder, args.run_dir))
+                bigfive = dict(key, **res, usage=llm.get_statistics())
+                write_json(bf_path, bigfive)
+                fresh.append((aux_cfg.model_version, bigfive["usage"]))
+            aux_usage.append(bigfive.get("usage"))
 
     card_case_status = case_cards.get("status") if cards_rec else None
     item_rows = []
@@ -672,6 +791,14 @@ def eval_case(folder, ctx):
         parse_failures["ask"] = sum(t["ask_parse_failure"] for t in attribution["turns"])
     if traits is not None:
         parse_failures["traits"] = sum(t["parse_failure"] for t in traits["turns"])
+    bf_trait = None
+    if bigfive is not None:
+        parse_failures["bigfive"] = int(bigfive["parse_failure"])
+        target = pu.bigfive_target(arm, ctx.get("bigfive"))
+        bf_trait = {"choice": bigfive["choice"], "second": bigfive["second"], "intensity": bigfive["intensity"],
+                    "evidence_ok": bigfive["evidence_ok"], "target": target,
+                    "hit": None if target is None or bigfive["choice"] is None else bigfive["choice"] == target,
+                    "parse_failure": bigfive["parse_failure"]}
 
     usage_raw = {"agent": (run.get("usage") or {}).get("agent"), "user": (run.get("usage") or {}).get("user"),
                  "judge": judge_usage, "aux": sum_usage(aux_usage) if aux_usage else None}
@@ -696,6 +823,7 @@ def eval_case(folder, ctx):
         "completed_by_agent": run.get("completed_by_agent"),
         "deferred": run.get("deferred"), "attempts": run.get("attempts"),
         "trait_present_share": trait_share, "trait_by_turn": trait_by_turn,
+        **({"bf_trait": bf_trait} if trait_check == "bigfive" else {}),
         "usage": usage, "usage_raw": usage_raw,
         "native_judge": None if native_failed else judge_used, "native_key": native_key,
         "judge_model": role_models["judge"], "aux_model": role_models["aux"],
@@ -710,7 +838,16 @@ def eval_case(folder, ctx):
         },
     }
     write_json(os.path.join(folder, "persona_eval.json"), out)
+    if ctx.get("spend") is not None:
+        ctx["spend"].add(sum(pu.stats_cost(u, (prices or {}).get(m)) for m, u in fresh))
     return out
+
+
+def eval_or_skip(folder, ctx):
+    if ctx["spend"].exhausted():
+        return "skipped_budget"
+    eval_case(folder, ctx)
+    return "done"
 
 
 def rebuild_results(run_dir):
@@ -732,6 +869,11 @@ def main(argv=None):
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--skip_native", action="store_true")
     parser.add_argument("--skip_aux", action="store_true")
+    parser.add_argument("--trait_check", choices=["per_turn", "bigfive", "none"], default="per_turn",
+                        help="per_turn: per-answer multi-label trait judge; bigfive: one blind Big Five call per "
+                             "dialogue; none: no trait check")
+    parser.add_argument("--budget_usd", type=float, required=True,
+                        help="Spend cap for this invocation's judge/aux calls; no new case starts once reached")
     args = parser.parse_args(argv)
 
     manifest = read_json(os.path.join(args.run_dir, "manifest.json"))
@@ -750,7 +892,7 @@ def main(argv=None):
     ctx = {"args": args, "judge_cfg": pu.role_config(args.judge_model), "aux_cfg": pu.role_config(args.aux_model),
            "trait_defs": trait_defs,
            "personas_sha": pu.sha256_text(json.dumps(trait_defs, sort_keys=True)),
-           "datasets": {}, "cards": {}}
+           "datasets": {}, "cards": {}, "bigfive": pu.load_bigfive(), "spend": pu.SpendTracker(args.budget_usd)}
     for folder in folders:
         run = read_json(os.path.join(folder, "persona_run.json"))
         key = (run["domain"], run["mode"])
@@ -769,31 +911,40 @@ def main(argv=None):
 
     eval_manifest_path = os.path.join(args.run_dir, "eval_manifest.json")
     em = read_json(eval_manifest_path) or {"prices": {}, "invocations": []}
-    new_models = [m for m in {ctx["judge_cfg"].model_version, ctx["aux_cfg"].model_version}
-                  if m not in em["prices"]]
+    role_models = sorted({ctx["judge_cfg"].model_version, ctx["aux_cfg"].model_version})
+    new_models = [m for m in role_models if not pu.has_price(em["prices"].get(m))]
     if new_models:
-        fetched = pu.fetch_openrouter_prices(new_models) or {m: None for m in new_models}
-        em["prices"].update(fetched)
+        em["prices"].update(pu.fetch_prices(new_models))
+    pu.require_prices(em["prices"], role_models)
     em["invocations"].append({"argv": sys.argv if argv is None else ["persona_eval.py"] + list(argv),
                               "git": pu.git_state(), "created": time.strftime("%Y-%m-%d %H:%M:%S"),
                               "judge": ctx["judge_cfg"].as_dict(), "aux": ctx["aux_cfg"].as_dict(),
                               "attribution_prompt_sha256": ATTRIBUTION_TEMPLATES_SHA,
-                              "trait_prompt_sha256": TRAIT_TEMPLATES_SHA})
+                              "trait_prompt_sha256": TRAIT_TEMPLATES_SHA,
+                              "trait_check": args.trait_check,
+                              "bigfive_prompt_sha256": BIGFIVE_TEMPLATES_SHA,
+                              "budget_usd": args.budget_usd})
     write_json(eval_manifest_path, em)
     ctx["prices"] = dict(manifest.get("prices") or {}, **{k: v for k, v in em["prices"].items() if v})
 
-    n_err = 0
+    n_err = n_budget = 0
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futures = {ex.submit(eval_case, f, ctx): f for f in folders}
+        futures = {ex.submit(eval_or_skip, f, ctx): f for f in folders}
         for fut in as_completed(futures):
             try:
-                fut.result()
+                n_budget += fut.result() == "skipped_budget"
             except Exception as e:
                 n_err += 1
                 print(f"eval failed for {futures[fut]}: {type(e).__name__}: {e}")
     rows = rebuild_results(args.run_dir)
     print(f"results.jsonl: {len(rows)} rows, {n_err} eval errors")
-    return {"rows": len(rows), "errors": n_err}
+    if n_budget:
+        print(f"{n_budget} case dirs not evaluated: budget reached")
+    print(ctx["spend"].summary())
+    out = {"rows": len(rows), "errors": n_err}
+    if n_budget:
+        out["skipped_budget"] = n_budget
+    return out
 
 
 if __name__ == "__main__":

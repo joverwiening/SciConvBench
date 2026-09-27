@@ -296,7 +296,7 @@ class TestRunnerAndEval(unittest.TestCase):
         cls.out = os.path.join(cls.tmp, "run")
         cls.argv = ["--domain", DOMAIN, "--mode", MODE, "--cases", ",".join(CASE_IDS), "--arms", ",".join(ARMS),
                     "--agent_model", "or_gpt_5_2", "--user_model", "or_sonnet_4_6", "--reps", "2",
-                    "--workers", "4", "--out", cls.out, "--cards", cls.cards]
+                    "--workers", "4", "--out", cls.out, "--cards", cls.cards, "--budget_usd", "1000"]
         cls.first = prun.main(cls.argv)
 
     @classmethod
@@ -332,7 +332,8 @@ class TestRunnerAndEval(unittest.TestCase):
         self.assertEqual(m["roles"]["agent"]["model_version"], "openai/gpt-5.2")
         self.assertEqual(m["roles"]["user"]["model_version"], "anthropic/claude-sonnet-4.6")
         self.assertIn("agent_system_prompt", m["sha256"])
-        self.assertEqual(set(m["sha256"]["personas"]), set(pu.load_personas()))
+        self.assertEqual(set(m["sha256"]["personas"]),
+                         set(pu.load_personas()) | set(pu.load_bigfive()["personas"]) | {"bigfive/shared"})
         self.assertEqual(m["cards"][f"{DOMAIN}/{MODE}"]["sha256"], pu.sha256_file(self.cards))
 
     def test_b_resume_skips_done(self):
@@ -362,7 +363,7 @@ class TestRunnerAndEval(unittest.TestCase):
 
     def test_d_eval(self):
         argv = ["--run_dir", self.out, "--judge_model", "or_gemini_2_5_pro", "--aux_model", "or_gemini_2_5_flash",
-                "--workers", "4"]
+                "--workers", "4", "--budget_usd", "1000"]
         res = pev.main(argv)
         self.assertEqual(res, {"rows": 20, "errors": 0})
         d = self.folder("neutral", 1, CASE_IDS[0])
@@ -439,7 +440,7 @@ class TestFactCards(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         out = os.path.join(tmp, "cards.json")
         argv = ["--domain", DOMAIN, "--mode", MODE, "--model", "or_gpt_5_2", "--cases", CASE_IDS[0],
-                "--out", out, "--max_uncovered_share", "1.0"]
+                "--out", out, "--max_uncovered_share", "1.0", "--budget_usd", "1000"]
         n0 = len(CALLS)
         data = pfc.main(argv)
         rec = data["cases"][CASE_IDS[0]]
@@ -507,10 +508,10 @@ class TestInconsistencyEval(unittest.TestCase):
         arms = ["neutral", "terse", "oracle"]
         res = prun.main(["--domain", DOMAIN, "--mode", INC_MODE, "--cases", ",".join(INC_CASE_IDS),
                          "--arms", ",".join(arms), "--agent_model", "or_gpt_5_2", "--user_model", "or_sonnet_4_6",
-                         "--reps", "1", "--workers", "2", "--out", out, "--cards", cards])
+                         "--reps", "1", "--workers", "2", "--out", out, "--cards", cards, "--budget_usd", "1000"])
         self.assertEqual(res, {"jobs": 6, "skipped": 0, "done": 6, "errors": 0})
         res = pev.main(["--run_dir", out, "--judge_model", "or_gemini_2_5_pro", "--aux_model",
-                        "or_gemini_2_5_flash", "--workers", "2"])
+                        "or_gemini_2_5_flash", "--workers", "2", "--budget_usd", "1000"])
         self.assertEqual(res, {"rows": 6, "errors": 0})
         for arm in arms:
             for cid in INC_CASE_IDS:

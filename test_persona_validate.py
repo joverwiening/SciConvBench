@@ -104,7 +104,7 @@ def setUpModule():
     _saved["sleep"] = time.sleep
     time.sleep = lambda s: None
     _saved["prices"] = pu.fetch_openrouter_prices
-    pu.fetch_openrouter_prices = lambda ids: {i: None for i in ids}
+    pu.fetch_openrouter_prices = lambda ids: {i: {"prompt": "0", "completion": "0"} for i in ids}
 
 
 def tearDownModule():
@@ -149,9 +149,9 @@ class TestValidate(unittest.TestCase):
         cls.run_dir = os.path.join(cls.tmp, "run")
         prun.main(["--domain", DOMAIN, "--mode", MODE, "--cases", ",".join(CASE_IDS), "--arms", ",".join(ARMS),
                    "--agent_model", "or_gpt_5_2", "--user_model", "or_sonnet_4_6", "--reps", "2",
-                   "--workers", "4", "--out", cls.run_dir, "--cards", cls.cards])
+                   "--workers", "4", "--out", cls.run_dir, "--cards", cls.cards, "--budget_usd", "1000"])
         res = pev.main(["--run_dir", cls.run_dir, "--judge_model", "or_gemini_2_5_pro",
-                        "--aux_model", "or_gemini_2_5_flash", "--workers", "4"])
+                        "--aux_model", "or_gemini_2_5_flash", "--workers", "4", "--budget_usd", "1000"])
         assert res == {"rows": 12, "errors": 0}, res
         cls.exp = os.path.join(cls.tmp, "export")
         cls.counts = pv.export(cls.run_dir, 3, 0, cls.exp)

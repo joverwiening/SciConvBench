@@ -34,6 +34,7 @@ def user_prompt_template_sha() -> str:
     src = "".join(inspect.getsource(getattr(LLMUserInterface, name))
                   for name in ("get_full_context", "build_system_prompt", "answer_clarification_question"))
     src += "".join(inspect.getsource(obj) for obj in (pu.render_persona, pu.turn_note_for_arm, pu.BusyUser))
+    src += inspect.getsource(pu.BigFiveUser) + pu.load_bigfive()["shared_text"]
     return pu.sha256_text(src)
 
 
@@ -44,10 +45,16 @@ def load_cards(path):
         return json.load(f)
 
 
-def build_manifest(args, agent_cfg, user_cfg, personas, cards_path):
+def persona_hashes(personas, bigfive):
+    out = {pid: pu.sha256_file(p["path"]) for pid, p in personas.items()}
+    out["bigfive/shared"] = pu.sha256_file(bigfive["shared_path"])
+    out.update({pid: pu.sha256_file(p["path"]) for pid, p in bigfive["personas"].items()})
+    return out
+
+
+def build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, prices):
     prompt_mode = "baseline" if args.baseline else None
     agent_prompt = ConvAgent(agent_cfg, prompt_mode).system_prompt
-    models = sorted({c.model_version for c in (agent_cfg, user_cfg) if c is not None})
     return {
         "git": pu.git_state(),
         "argv": sys.argv if args._argv is None else ["persona_runner.py"] + list(args._argv),
@@ -58,10 +65,10 @@ def build_manifest(args, agent_cfg, user_cfg, personas, cards_path):
         "sha256": {
             "agent_system_prompt": pu.sha256_text(agent_prompt),
             "user_prompt_template": user_prompt_template_sha(),
-            "personas": {pid: pu.sha256_file(p["path"]) for pid, p in personas.items()},
+            "personas": persona_hashes(personas, bigfive),
         },
         "cards": {f"{args.domain}/{args.mode}": cards_entry(cards_path)},
-        "prices": pu.fetch_openrouter_prices(models),
+        "prices": prices,
     }
 
 
@@ -71,10 +78,10 @@ def cards_entry(cards_path):
     return {"path": os.path.abspath(cards_path), "sha256": pu.sha256_file(cards_path)}
 
 
-def check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path):
+def check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, prices):
     path = os.path.join(args.out, "manifest.json")
     key = f"{args.domain}/{args.mode}"
-    new = build_manifest(args, agent_cfg, user_cfg, personas, cards_path)
+    new = build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, prices)
     if not os.path.exists(path):
         os.makedirs(args.out, exist_ok=True)
         with open(path, "w") as f:
@@ -124,10 +131,21 @@ def run_job(job, ctx):
     folder = case_dir(args.out, arm, rep, args.domain, ctx["agent_cfg"].profile, args.mode, case_id)
     os.makedirs(folder, exist_ok=True)
     run_path = os.path.join(folder, "persona_run.json")
-    prev_attempts = 0
+    prev = None
     if os.path.exists(run_path):
         with open(run_path) as f:
-            prev_attempts = json.load(f).get("attempts", 1)
+            prev = json.load(f)
+    prev_attempts = prev.get("attempts", 1) if prev else 0
+    spend = ctx["spend"]
+    if spend.exhausted():
+        # not an attempt: an earlier record (e.g. an error) is left as is so its attempt count stands
+        rec = {"arm": arm, "rep": rep, "case_id": case_id, "domain": args.domain, "mode": args.mode,
+               "status": "skipped_budget", "attempts": prev_attempts, "error": None,
+               "finished": time.strftime("%Y-%m-%d %H:%M:%S")}
+        if prev is None:
+            with open(run_path, "w") as f:
+                json.dump(rec, f, indent=2)
+        return rec
     log_file = os.path.join(folder, "conversation_log.txt")
     result_file = os.path.join(folder, "generated_prompt.txt")
     # a rerun after an error must not append to or reuse the failed attempt's files
@@ -137,10 +155,18 @@ def run_job(job, ctx):
     with open(os.path.join(folder, "complete_prompt.txt"), "w") as f:
         f.write(complete_req)
 
-    persona_text = None if arm in pu.DETERMINISTIC_ARMS else pu.persona_text_for_arm(arm, ctx["personas"])
+    bf_persona = ctx["bigfive"]["personas"].get(arm)
+    if arm in pu.DETERMINISTIC_ARMS:
+        persona_text = None
+    elif bf_persona is not None:
+        persona_text = pu.bigfive_persona_text(bf_persona)
+    else:
+        persona_text = pu.persona_text_for_arm(arm, ctx["personas"])
     user_cfg = None if arm in pu.DETERMINISTIC_ARMS else ctx["user_cfg"]
+    trait = pu.bigfive_target(arm, ctx["bigfive"]) if bf_persona is not None else \
+        (arm if arm in ctx["traits"] else None)
     record = {
-        "arm": arm, "trait": arm if arm in ctx["traits"] else None,
+        "arm": arm, "trait": trait,
         "persona_text_sha256": None if persona_text is None else pu.sha256_text(persona_text),
         "rep": rep, "case_id": case_id, "domain": args.domain, "mode": args.mode,
         "baseline": bool(args.baseline),
@@ -159,7 +185,7 @@ def run_job(job, ctx):
         if ctx["cards"] is not None:
             cards = ctx["cards"]["cases"].get(case_id, {}).get("cards")
         user = pu.make_user(arm, user_llm, incomplete_req, complete_req, log_file,
-                            cards=cards, personas=ctx["personas"])
+                            cards=cards, personas=ctx["personas"], bigfive=ctx["bigfive"])
         result = test_runner.run_dialogue(agent, user, incomplete_req, args.max_turns)
         record.update(turns=result.turns, cap_hit=result.cap_hit,
                       completed_by_agent=result.completed_by_agent, error=result.error)
@@ -177,6 +203,9 @@ def run_job(job, ctx):
     agent_stats = agent.llm.get_statistics() if agent else {}
     user_stats = user_llm.get_statistics() if user_llm else {}
     record["usage"] = {"agent": agent_stats, "user": user_stats or None}
+    prices = ctx["prices"]
+    spend.add(pu.stats_cost(agent_stats, prices.get(ctx["agent_cfg"].model_version))
+              + (pu.stats_cost(user_stats, prices.get(user_cfg.model_version)) if user_cfg else 0.0))
     test_runner.save_statistics(os.path.join(folder, "statistics.json"), agent_stats,
                                 record["turns"] or 0, args.max_turns,
                                 os.path.exists(result_file), args.mode)
@@ -211,14 +240,18 @@ def main(argv=None):
     parser.add_argument("--user_temperature", type=float, default=None)
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--force", action="store_true", help="Continue despite a manifest mismatch")
+    parser.add_argument("--budget_usd", type=float, required=True,
+                        help="Spend cap for this invocation; no new job starts once it is reached")
     args = parser.parse_args(argv)
     args._argv = argv
 
     personas = pu.load_personas()
+    bigfive = pu.load_bigfive()
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
-    bad = [a for a in arms if a not in pu.valid_arms(personas)]
+    valid = pu.valid_arms(personas, bigfive)
+    bad = [a for a in arms if a not in valid]
     if bad:
-        sys.exit(f"Unknown arms {bad}; valid: {pu.valid_arms(personas)}")
+        sys.exit(f"Unknown arms {bad}; valid: {valid}")
     needs_user = any(a not in pu.DETERMINISTIC_ARMS for a in arms)
     if needs_user and not args.user_model:
         sys.exit("--user_model is required for LLM-user arms")
@@ -240,7 +273,10 @@ def main(argv=None):
 
     agent_cfg = pu.role_config(args.agent_model, args.agent_temperature)
     user_cfg = pu.role_config(args.user_model, args.user_temperature) if needs_user else None
-    check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path if cards else None)
+    models = sorted({c.model_version for c in (agent_cfg, user_cfg) if c is not None})
+    prices = pu.fetch_prices(models)
+    pu.require_prices(prices, models)
+    check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path if cards else None, bigfive, prices)
 
     jobs = [(arm, rep, cid) for arm in arms for rep in range(1, args.reps + 1) for cid in case_ids]
     random.Random(JOB_SEED).shuffle(jobs)
@@ -260,9 +296,11 @@ def main(argv=None):
         todo.append(job)
     print(f"{len(jobs)} jobs: {skipped} done, {len(capped)} capped, {len(todo)} to run")
 
-    ctx = {"args": args, "cases": cases, "cards": cards, "personas": personas,
-           "traits": set(pu.trait_ids(personas)), "agent_cfg": agent_cfg, "user_cfg": user_cfg}
-    n_done = n_err = 0
+    spend = pu.SpendTracker(args.budget_usd)
+    ctx = {"args": args, "cases": cases, "cards": cards, "personas": personas, "bigfive": bigfive,
+           "traits": set(pu.trait_ids(personas)), "agent_cfg": agent_cfg, "user_cfg": user_cfg,
+           "prices": prices, "spend": spend}
+    n_done = n_err = n_budget = 0
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futures = {ex.submit(run_job, job, ctx): job for job in todo}
         for fut in as_completed(futures):
@@ -272,15 +310,24 @@ def main(argv=None):
                 ok = rec["status"] == "done"
             except Exception as e:
                 rec, ok = {"error": str(e)}, False
+            if rec.get("status") == "skipped_budget":
+                n_budget += 1
+                continue
             n_done += ok
             n_err += not ok
             print(f"[{n_done + n_err}/{len(todo)}] {job}: {'done' if ok else 'error ' + str(rec.get('error'))}")
     print(f"finished: {n_done} done, {n_err} errors, {skipped} skipped")
+    if n_budget:
+        print(f"{n_budget} jobs not started: budget reached (status skipped_budget; rerun to continue)")
     if capped:
         print(f"{len(capped)} jobs not rerun (error after {MAX_ATTEMPTS} attempts):")
         for job in sorted(capped):
             print(f"  {job}")
-    return {"jobs": len(jobs), "skipped": skipped, "done": n_done, "errors": n_err}
+    print(spend.summary())
+    out = {"jobs": len(jobs), "skipped": skipped, "done": n_done, "errors": n_err}
+    if n_budget:
+        out["skipped_budget"] = n_budget
+    return out
 
 
 if __name__ == "__main__":

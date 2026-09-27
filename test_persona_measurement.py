@@ -477,10 +477,10 @@ class TestTraitDefs(Base):
         captured = {}
         saved = (pev.eval_case, pu.fetch_openrouter_prices)
         pev.eval_case = lambda folder, ctx: captured.update(ctx)
-        pu.fetch_openrouter_prices = lambda ids: {i: None for i in ids}
+        pu.fetch_openrouter_prices = lambda ids: {i: {"prompt": "0", "completion": "0"} for i in ids}
         try:
             pev.main(["--run_dir", c.run_dir, "--judge_model", "or_gemini_2_5_pro",
-                      "--aux_model", "or_gemini_2_5_flash", "--workers", "1"])
+                      "--aux_model", "or_gemini_2_5_flash", "--workers", "1", "--budget_usd", "1000"])
         finally:
             pev.eval_case, pu.fetch_openrouter_prices = saved
         personas = pu.load_personas()

@@ -261,6 +261,8 @@ def main(argv=None):
                         help="Re-run the deterministic checks on stored LLM output; no LLM calls")
     parser.add_argument("--max_uncovered_share", type=float, default=0.5,
                         help="Disambiguation cases above this uncovered share are needs_review")
+    parser.add_argument("--budget_usd", type=float, required=True,
+                        help="Spend cap for this invocation; no new case is queried once it is reached")
     args = parser.parse_args(argv)
 
     out = args.out or pu.default_cards_path(args.domain, args.mode)
@@ -293,19 +295,31 @@ def main(argv=None):
             data["cases"][cid] = new
         write_json_atomic(out, data)
     else:
+        role = pu.role_config(args.model)
+        prices = pu.fetch_prices([role.model_version])
+        pu.require_prices(prices, [role.model_version])
+        spend = pu.SpendTracker(args.budget_usd)
+        n_budget = 0
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
         for cid in wanted:
             if data["cases"].get(cid, {}).get("status") == "ok":
                 continue
-            llm = LLMService(pu.role_config(args.model))
+            if spend.exhausted():
+                n_budget += 1
+                continue
+            llm = LLMService(role)
             try:
                 rec = build_case(llm, args.domain, args.mode, cases[cid], args.max_uncovered_share)
             except Exception as e:
                 rec = {"status": "failed", "cards": [], "errors": [f"LLM call failed: {e}"]}
             rec["usage"] = llm.get_statistics()
+            spend.add(pu.stats_cost(rec["usage"], prices[role.model_version]))
             data["cases"][cid] = rec
             write_json_atomic(out, data)
             print(f"{cid}: {rec['status']}")
+        if n_budget:
+            print(f"{n_budget} cases not queried: budget reached (rerun to continue)")
+        print(spend.summary())
 
     counts = {}
     for rec in data["cases"].values():
