@@ -62,6 +62,7 @@ def build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, pri
         "roles": {"agent": agent_cfg.as_dict(), "user": user_cfg.as_dict() if user_cfg else None},
         "baseline": bool(args.baseline),
         "max_turns": args.max_turns,
+        "final_fix": True,
         "sha256": {
             "agent_system_prompt": pu.sha256_text(agent_prompt),
             "user_prompt_template": user_prompt_template_sha(),
@@ -96,7 +97,7 @@ def check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path, big
     # a run without an LLM user (only oracle/mute arms) is compatible with any user model
     if old_user and new_user and old_user != new_user:
         diffs.append("user role")
-    for k in ("baseline", "max_turns"):
+    for k in ("baseline", "max_turns", "final_fix"):
         if old.get(k) != new.get(k):
             diffs.append(k)
     for k in ("agent_system_prompt", "user_prompt_template", "personas"):
@@ -172,6 +173,7 @@ def run_job(job, ctx):
         "baseline": bool(args.baseline),
         "models": {"agent": ctx["agent_cfg"].as_dict(), "user": user_cfg.as_dict() if user_cfg else None},
         "turns": None, "cap_hit": None, "completed_by_agent": None,
+        "final_attempts": None, "final_valid": None, "truth_retries": None,
         "deferred": None, "attempts": prev_attempts + 1,
         "status": "error", "error": None,
         "started": time.strftime("%Y-%m-%d %H:%M:%S"), "finished": None,
@@ -186,9 +188,10 @@ def run_job(job, ctx):
             cards = ctx["cards"]["cases"].get(case_id, {}).get("cards")
         user = pu.make_user(arm, user_llm, incomplete_req, complete_req, log_file,
                             cards=cards, personas=ctx["personas"], bigfive=ctx["bigfive"])
-        result = test_runner.run_dialogue(agent, user, incomplete_req, args.max_turns)
+        result = test_runner.run_dialogue(agent, user, incomplete_req, args.max_turns, final_fix=True)
         record.update(turns=result.turns, cap_hit=result.cap_hit,
-                      completed_by_agent=result.completed_by_agent, error=result.error)
+                      completed_by_agent=result.completed_by_agent, error=result.error,
+                      final_attempts=result.final_attempts, final_valid=result.final_valid)
         if result.final_spec is not None:
             with open(result_file, "w") as f:
                 f.write(result.final_spec)
@@ -214,6 +217,7 @@ def run_job(job, ctx):
                    "user_arm": arm, "user_llm_usage": user_stats}, f, indent=4)
     clar = user.clarifications if user is not None else []
     record["deferred"] = sum(bool(c.get("deferred")) for c in clar)
+    record["truth_retries"] = getattr(user, "truth_retries", None)
     with open(os.path.join(folder, "clarifications.json"), "w") as f:
         json.dump([{"turn": k, "question": c["question"], "answer": c["answer"],
                     "deferred": bool(c.get("deferred"))} for k, c in enumerate(clar, 1)], f, indent=2)

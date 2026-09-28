@@ -59,10 +59,33 @@ class DialogueResult:
     completed_by_agent: bool
     cap_hit: bool
     error: Optional[str] = None
+    final_attempts: int = 0
+    final_valid: Optional[bool] = None
 
 
-def run_dialogue(agent, simulated_user, initial_input, max_turns, sleep=0.5):
-    """Upstream question loop; on the turn cap the agent is forced to write its final spec."""
+FINAL_MIN_CHARS = 300
+FINAL_RETRY_INSTRUCTION = ("Your previous output was not a specification. Output only the final specification, "
+                           "one sentence per line, with no questions.")
+
+
+def final_spec_valid(text: str) -> bool:
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    return len(text) >= FINAL_MIN_CHARS and not (lines and lines[-1].endswith("?"))
+
+
+def forced_final_fixed(agent, last_user_reply):
+    """(spec, attempts, valid): the cap-hit final spec with the user's last reply in history, one retry if invalid."""
+    agent.history.append(f"User: {last_user_reply}")
+    spec = agent.get_final_attempt_fixed().replace("[COMPLETE]", "").strip()
+    if final_spec_valid(spec):
+        return spec, 1, True
+    spec = agent.get_final_attempt_fixed(FINAL_RETRY_INSTRUCTION).replace("[COMPLETE]", "").strip()
+    return spec, 2, final_spec_valid(spec)
+
+
+def run_dialogue(agent, simulated_user, initial_input, max_turns, sleep=0.5, final_fix=False):
+    """Upstream question loop; on the turn cap the agent is forced to write its final spec.
+    final_fix: the forced call sees the user's last reply and is retried once if it is not a spec."""
     current_input = initial_input
     turn = 0
     try:
@@ -82,7 +105,10 @@ def run_dialogue(agent, simulated_user, initial_input, max_turns, sleep=0.5):
             current_input = user_response
             time.sleep(sleep)
 
-        return DialogueResult(agent.get_final_attempt(), turn, False, True)
+        if final_fix:
+            spec, attempts, valid = forced_final_fixed(agent, current_input)
+            return DialogueResult(spec, turn, False, True, final_attempts=attempts, final_valid=valid)
+        return DialogueResult(agent.get_final_attempt(), turn, False, True, final_attempts=1)
 
     except Exception as e:
         return DialogueResult(None, turn, False, False, str(e))

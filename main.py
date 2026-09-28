@@ -148,6 +148,19 @@ class ConvAgent:
         response = self.llm.invoke(conversation_context, final_prompt)
         return response
 
+    def get_final_attempt_fixed(self, extra_instruction: str = "") -> str:
+        """get_final_attempt with an optional instruction appended to the final prompt (persona harness retry);
+        the caller appends the user's last reply to history first."""
+        conversation_context = "\n".join(self.history)
+
+        final_prompt = self.system_prompt + "\n\nCRITICAL: Time is up. " \
+            "Do not ask any more questions. Output the final specification now based " \
+            "on current information. Do not include the '[COMPLETE]' tag."
+        if extra_instruction:
+            final_prompt += "\n\n" + extra_instruction
+
+        return self.llm.invoke(conversation_context, final_prompt)
+
 def main():
     cfg = Config()
     with open(cfg.COMPLETE_PROMPT_PATH, 'r') as f:

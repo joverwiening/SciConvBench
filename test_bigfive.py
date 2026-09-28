@@ -127,7 +127,7 @@ class TestBigFiveUser(unittest.TestCase):
     def test_lint_and_ids(self):
         self.assertIn("Sam Keller", BF["shared"]["identity"])
         for pid, p in BF["personas"].items():
-            text = " ".join([p["sheet"], p["appraisal"], p["reminder"]])
+            text = pu.bigfive_persona_text(p)  # includes example answers
             self.assertIsNone(LINT.search(text), (pid, LINT.search(text)))
         arms = pu.valid_arms(pu.load_personas(), BF)
         self.assertEqual(len(arms), len(set(arms)))

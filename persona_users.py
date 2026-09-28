@@ -113,7 +113,7 @@ def load_bigfive(bigfive_dir: str = BIGFIVE_DIR) -> dict:
 
 
 def bigfive_persona_text(p: dict) -> str:
-    return "\n\n".join([p["sheet"], p["appraisal"], p["reminder"]])
+    return "\n\n".join([p["sheet"], p["appraisal"], p["reminder"]] + [e["a"] for e in p.get("examples") or []])
 
 
 def bigfive_target(arm: str, bigfive: Optional[dict] = None) -> Optional[str]:
@@ -188,14 +188,21 @@ USER_FAILURE_REPLY = "I am unable to answer that at this time."
 _THINK_BLOCK = re.compile(r"<\s*(think(?:ing)?|thought)\b[^<>\n]*>?.*?(?:<\s*/\s*\1\s*>?|$)", re.S | re.I)
 _THINK_CLOSE = re.compile(r"<\s*/\s*(?:think(?:ing)?|thought)\s*>?", re.I)
 _SPEAKER_LABEL = re.compile(r"^\s*(?:\*\*)?(?:Dr\.?\s+)?(?:Sam\s+Keller|Sam|Keller)(?:\*\*)?\s*:(?:\*\*)?\s*", re.I)
+# same patterns as scripts/false_claims.py
+CLAIM = re.compile(r"\b(already (gave|told|sent|said|provided|specified|stated|listed|mentioned)|i (gave|told|sent|provided|specified|stated|listed) you|(as|like) i (said|told you|mentioned|wrote)|it'?s (right )?(there )?in (my|the) (request|message)|read (it|my request|what i sent|the request))", re.I)
+NUM = re.compile(r"\d+(?:\.\d+)?")
+TRUTH_RETRY_NOTE = ("\n\n(Your draft reply said you had already given the assistant something that is not in your "
+                    "request or your earlier replies. Write your reply again without claiming that.)")
 
 
 @dataclass
 class BigFiveUser(LLMUserInterface):
-    """Big Five simulated scientist: own system prompt, history as real chat turns, never sees the INCOMPLETE
-    requirement (the field is kept for interface compatibility only)."""
+    """Big Five simulated scientist: own system prompt (COMPLETE requirement as <notes>, INCOMPLETE requirement as
+    its own opening message <your_request>), history as real chat turns, optional persona example turns before
+    the real history, one regeneration when a reply falsely claims an earlier disclosure."""
     persona: dict = field(default_factory=dict)
     shared: dict = field(default_factory=dict)
+    truth_retries: int = 0
 
     def __post_init__(self):
         super().__post_init__()
@@ -212,10 +219,14 @@ class BigFiveUser(LLMUserInterface):
         # of ignoring facts that were never sent (stage-1 smoke, bf_low_A)
         return "\n\n".join([sh["identity"], p["sheet"], sh["situation"], p["appraisal"], sh["notes_intro"],
                              f"<notes>\n{self.complete_requirement}\n</notes>", sh["request_intro"],
-                             f"<your_request>\n{self.incomplete_requirement}\n</your_request>", sh["rules"]])
+                             f"<your_request>\n{self.incomplete_requirement}\n</your_request>", sh["rules"]]
+                            + ([sh["examples_intro"]] if p.get("examples") else []))
 
     def build_messages(self, question: str) -> List[dict]:
         messages = []
+        for e in self.persona.get("examples") or []:
+            messages.append({"role": "user", "content": f"Message from the assistant:\n{e['q']}"})
+            messages.append({"role": "assistant", "content": e["a"]})
         for c in self.clarifications:
             messages.append({"role": "user", "content": f"Message from the assistant:\n{c['question']}"})
             messages.append({"role": "assistant", "content": c["answer"]})
@@ -236,6 +247,16 @@ class BigFiveUser(LLMUserInterface):
         text = _SPEAKER_LABEL.sub("", text.strip(), count=1).strip()
         return text or (raw or "").strip()
 
+    def false_claim(self, reply: str) -> bool:
+        """Claims an earlier disclosure and carries a number from the notes that the sim has not sent yet."""
+        if not CLAIM.search(reply):
+            return False
+        sent = set(NUM.findall(self.incomplete_requirement or ""))
+        for c in self.clarifications:
+            sent |= set(NUM.findall(c["answer"] or ""))
+        novel = (set(NUM.findall(reply)) & set(NUM.findall(self.complete_requirement or ""))) - sent
+        return bool(novel)
+
     def answer_clarification_question(self, question: str) -> str:
         self._log_qa(question, "Thinking...")
         system_prompt = self.build_system_prompt()
@@ -245,10 +266,18 @@ class BigFiveUser(LLMUserInterface):
         try:
             raw = svc.invoke_messages(messages, system_prompt)
             reply = self.clean_reply(raw)
+            extra = {"truth_retry": False}
+            if self.false_claim(reply):
+                extra = {"truth_retry": True, "draft": reply, "draft_raw": raw}
+                self.truth_retries += 1
+                messages = [dict(m) for m in messages]
+                messages[-1]["content"] += TRUTH_RETRY_NOTE
+                raw = svc.invoke_messages(messages, system_prompt)
+                reply = self.clean_reply(raw)
             after = [getattr(svc, k, 0) for k in ("api_input_tokens", "api_output_tokens", "api_reasoning_chars")]
             with open(self.calls_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps({"turn": len(self.clarifications) + 1, "messages": messages, "raw": raw,
-                                    "reply": reply,
+                                    "reply": reply, **extra,
                                     "usage": {"input_tokens": after[0] - before[0],
                                               "output_tokens": after[1] - before[1]},
                                     "reasoning_chars": after[2] - before[2]}, ensure_ascii=False) + "\n")

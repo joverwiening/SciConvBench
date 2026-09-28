@@ -158,8 +158,8 @@ class TestGate(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp)
 
-    def write_gate(self, recs):
-        with open(os.path.join(self.tmp, "pairwise_gate.csv"), "w", newline="") as f:
+    def write_gate(self, recs, name="pairwise_gate.csv"):
+        with open(os.path.join(self.tmp, name), "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["target", "arm", "n", "hits", "hit_rate", "ci_lo", "ci_hi", "pass"])
             w.writeheader()
             for t, a, p in recs:
@@ -169,11 +169,15 @@ class TestGate(unittest.TestCase):
     def test_gate_and_counts(self):
         self.assertIsNone(pan.read_gate(self.tmp))
         self.assertIsNone(pan.read_gate(None))
-        self.write_gate([("low_agreeableness", "bf_low_A", False), ("low_agreeableness", "ALL", True),
+        self.write_gate([("low_agreeableness", "bf_low_A", True), ("low_agreeableness", "ALL", True),
                          ("high_neuroticism", "bf_high_N", True), ("high_neuroticism", "ALL", False),
                          ("low_conscientiousness", "ALL", True)])
-        self.assertEqual(pan.read_gate(self.tmp), {"low_agreeableness": True, "high_neuroticism": False,
-                                                   "low_conscientiousness": True})
+        self.assertIsNone(pan.read_gate(self.tmp))  # opposite-probe file missing
+        self.write_gate([("low_agreeableness", "bf_low_A", True), ("low_agreeableness", "ALL", True),
+                         ("high_neuroticism", "bf_high_N", True), ("high_neuroticism", "ALL", True),
+                         ("low_conscientiousness", "ALL", True)], "pairwise_gate_opposite.csv")
+        self.assertEqual({t: g["gate"] for t, g in pan.read_gate(self.tmp).items()},
+                         {"low_agreeableness": True, "high_neuroticism": False, "low_conscientiousness": None})
         res = pan.analyse(noisy_bf_rows(), family="bigfive", run_dir=self.tmp)
         self.assertTrue(res["pole_gate_found"])
         prim = {p["target"]: p for p in res["pole_effects"] if p["metric"] == pan.PRIMARY}
@@ -183,7 +187,7 @@ class TestGate(unittest.TestCase):
         self.assertGreater(prim["low_conscientiousness"]["p_holm"], 0.05)
         self.assertEqual({t: (p["gate"], p["counts"]) for t, p in prim.items()},
                          {"low_agreeableness": (True, True), "high_neuroticism": (False, False),
-                          "low_conscientiousness": (True, False)})
+                          "low_conscientiousness": (None, False)})
         self.assertIn("## Pole effects (wording as random effect)", pan.render_markdown(res))
 
     def test_main_outputs(self):

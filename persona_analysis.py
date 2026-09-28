@@ -22,6 +22,11 @@ ITEM_METRICS = ["asked", "delivered", "partial", "unasked_delivered", "unasked_p
 PROCESS_METRICS = ["cap_hit", "turns", "questions"]
 SECONDARY_METRICS = NATIVE_METRICS + [m for m in ITEM_METRICS if m != PRIMARY]
 REPLICATION_METRICS = ["FR", "CGRR", "SRR", "IC", "MC", "CR", "CP"]
+# pole section only: share of the case's items the agent asked about and the sim delivered in full, per item
+# asked AND delivered from the item records; delivered − unasked_delivered is not the same (an item leaked early
+# and asked later is in both)
+POLE_METRICS = [PRIMARY] + [x for m in SECONDARY_METRICS
+                            for x in ([m, "asked_delivered"] if m == "unasked_delivered" else [m])]
 PERSONAS = pu.load_personas()
 PLACEBO_ARMS = tuple(pu.placebo_ids(PERSONAS))
 HOLM_FAMILY = tuple(sorted(pid for pid, p in PERSONAS.items() if p["kind"] in ("style", "policy")))
@@ -48,7 +53,19 @@ def b_for(m):
     return B_PRIMARY if m == PRIMARY else B
 
 
+def asked_delivered_rate(r):
+    vals = []
+    for it in r.get("items") or []:
+        a, d = it.get("asked"), it.get("delivered")
+        v = False if (a is False or d is False) else (None if (a is None or d is None) else True)
+        if v is not None:
+            vals.append(v)
+    return (sum(vals) / len(vals)) if vals else None
+
+
 def metric(r, m):
+    if m == "asked_delivered":
+        return asked_delivered_rate(r)
     if m in ITEM_METRICS or m == PRIMARY:
         return (r.get("item_rates") or {}).get(m)
     if m in PROCESS_METRICS:
@@ -417,13 +434,31 @@ def case_counts(rng, n, b):
     return np.bincount((idx + n * np.arange(b)[:, None]).ravel(), minlength=b * n).reshape(b, n)
 
 
+GATE_FILES = {"target": "pairwise_gate.csv", "opposite": "pairwise_gate_opposite.csv"}
+
+
 def read_gate(run_dir):
-    """target -> pass of the pooled (arm == ALL) row of run_dir/pairwise_gate.csv; None if the file is absent."""
-    path = os.path.join(run_dir, "pairwise_gate.csv") if run_dir else None
-    if not path or not os.path.exists(path):
-        return None
-    with open(path) as f:
-        return {r["target"]: str(r["pass"]).strip().lower() == "true" for r in csv.DictReader(f) if r["arm"] == "ALL"}
+    """target -> {gate, gate_target, gate_opposite, gate_all_wordings}; None if either gate file is absent.
+    gate passes iff the target-probe ALL row, the opposite-probe ALL row and every per-wording row of both pass;
+    False if any component fails, None if one is missing."""
+    rows = {}
+    for probe, name in GATE_FILES.items():
+        path = os.path.join(run_dir, name) if run_dir else None
+        if not path or not os.path.exists(path):
+            return None
+        with open(path) as f:
+            rows[probe] = [dict(r, ok=str(r["pass"]).strip().lower() == "true") for r in csv.DictReader(f)]
+    out = {}
+    for t in sorted({r["target"] for rs in rows.values() for r in rs}):
+        comp = {}
+        for probe in GATE_FILES:
+            pooled = [r["ok"] for r in rows[probe] if r["target"] == t and r["arm"] == "ALL"]
+            comp[f"gate_{probe}"] = pooled[0] if pooled else None
+        words = [[r["ok"] for r in rows[probe] if r["target"] == t and r["arm"] != "ALL"] for probe in GATE_FILES]
+        comp["gate_all_wordings"] = all(w for ws in words for w in ws) if all(words) else None
+        v = list(comp.values())
+        out[t] = dict(comp, gate=False if False in v else (None if None in v else True))
+    return out
 
 
 def pole_effects(rows, neutral, targets, metrics, gate=None, b=None):
@@ -453,8 +488,8 @@ def pole_effects(rows, neutral, targets, metrics, gate=None, b=None):
             rec = {"target": t, "metric": m, "k_wordings": kw, "k_neutral": kn, "n_cases": n,
                    "wordings": ",".join(W), "tau_estimable": tau2 is not None}
             if n == 0:
-                recs.append(dict(rec, effect=None, v_case=None, tau2=tau2, se=None, ci_lo=None, ci_hi=None, p=None,
-                                 boot2_lo=None, boot2_hi=None, boot2_p=None, sign_consistent=None))
+                recs.append(dict(rec, effect=None, v_case=None, tau2=tau2, se=None, ci_lo=None, ci_hi=None, p_z=None,
+                                 boot2_lo=None, boot2_hi=None, boot2_p=None, p=None, sign_consistent=None))
                 continue
             means = Y.mean(axis=1)
             dw = means[:kw] - means[kw:].mean()
@@ -471,20 +506,29 @@ def pole_effects(rows, neutral, targets, metrics, gate=None, b=None):
             d_word, d_two = np.concatenate(d_word), np.concatenate(d_two)
             v_case = float(np.var(d_word.mean(axis=1), ddof=1)) if bm > 1 else 0.0
             se = float(np.sqrt(v_case + (tau2 or 0.0) * (1 / kw + 1 / kn)))
-            p = float(math.erfc(abs(est) / se / math.sqrt(2))) if se > 0 else (1.0 if est == 0 else 0.0)
-            rec.update(effect=est, v_case=v_case, tau2=tau2, se=se, ci_lo=est - 1.96 * se, ci_hi=est + 1.96 * se, p=p,
-                       boot2_lo=float(np.percentile(d_two, 2.5)), boot2_hi=float(np.percentile(d_two, 97.5)),
-                       boot2_p=boot_p(d_two), sign_consistent=bool(np.all(np.sign(dw) == np.sign(est))))
+            p_z = float(math.erfc(abs(est) / se / math.sqrt(2))) if se > 0 else (1.0 if est == 0 else 0.0)
+            # the normal p treats the truncated τ̂² as known; the two-stage bootstrap p guards against that
+            b2p = boot_p(d_two)
+            rec.update(effect=est, v_case=v_case, tau2=tau2, se=se, ci_lo=est - 1.96 * se, ci_hi=est + 1.96 * se,
+                       p_z=p_z, boot2_lo=float(np.percentile(d_two, 2.5)), boot2_hi=float(np.percentile(d_two, 97.5)),
+                       boot2_p=b2p, p=p_z if b2p is None else max(p_z, b2p),
+                       sign_consistent=bool(np.all(np.sign(dw) == np.sign(est))))
             recs.append(rec)
             for j, a in enumerate(W):
                 words.append({"target": t, "arm": a, "metric": m, "n_cases": n, "effect": float(dw[j]),
                               "ci_lo": float(np.percentile(d_word[:, j], 2.5)),
                               "ci_hi": float(np.percentile(d_word[:, j], 97.5)),
                               "same_sign_as_pole": bool(np.sign(dw[j]) == np.sign(est))})
+        if m == PRIMARY:
+            have = {r["target"] for r in recs if r["p"] is not None}
+            assert have == set(poles), f"pole Holm: no result for {sorted(set(poles) - have)} (no paired cases)"
         # primary: Holm over the poles present; secondary: descriptive
         for r, ph in zip(recs, holm([r["p"] for r in recs])):
             r["p_holm"] = ph
-            r["gate"] = gate.get(r["target"]) if gate is not None else None
+            g = (gate or {}).get(r["target"]) or {}
+            for k in ("gate_target", "gate_opposite", "gate_all_wordings"):
+                r[k] = g.get(k)
+            r["gate"] = g.get("gate")
             r["counts"] = bool(ph is not None and ph < ALPHA and r["gate"] is True) if m == PRIMARY else None
         out += recs
     return out, words, taus
@@ -735,7 +779,7 @@ def analyse(rows, runs=None, family="old", run_dir=None):
         gate = read_gate(run_dir)
         res["pole_gate_found"] = gate is not None
         res["pole_effects"], res["pole_wordings"], res["tau"] = pole_effects(
-            rows, [ref] + placebos, {a: bf[a]["target"] for a in trait_arms}, [PRIMARY] + SECONDARY_METRICS, gate) \
+            rows, [ref] + placebos, {a: bf[a]["target"] for a in trait_arms}, POLE_METRICS, gate) \
             if not missing[ref] else ([], [], [])
     return res
 
@@ -756,16 +800,19 @@ def pole_section(res, no_neutral):
                 if pooled["tau_estimable"] else
                 "**τ not estimable (need ≥2 wordings in some family): SE below uses the case-bootstrap variance "
                 "only (tau_estimable = False).**")
-    gate_line = ("Gate read from run_dir/pairwise_gate.csv (pooled row, arm = ALL)." if res["pole_gate_found"] else
-                 "No run_dir/pairwise_gate.csv: gate = None, so no pole counts.")
-    cols = ["target", "k_wordings", "k_neutral", "n_cases", "effect", "v_case", "se", "ci_lo", "ci_hi", "p",
-            "p_holm", "boot2_lo", "boot2_hi", "boot2_p", "sign_consistent", "gate", "counts"]
+    gate_line = ("Gate = gate_target (pairwise_gate.csv, arm = ALL row passes) AND gate_opposite "
+                 "(pairwise_gate_opposite.csv, ALL row passes) AND gate_all_wordings (every per-wording row of both "
+                 "files passes)." if res["pole_gate_found"] else
+                 "No run_dir/pairwise_gate.csv and/or pairwise_gate_opposite.csv: gate = None, so no pole counts.")
+    cols = ["target", "k_wordings", "k_neutral", "n_cases", "effect", "v_case", "se", "ci_lo", "ci_hi", "p_z",
+            "boot2_lo", "boot2_hi", "boot2_p", "p", "p_holm", "sign_consistent", "gate_target", "gate_opposite",
+            "gate_all_wordings", "gate", "counts"]
     return [
         head,
         f"A pole counts iff Holm p (over the {len(prim)} poles present) < {ALPHA} for Δ̂ = mean over the pole's "
-        f"wordings − mean over the neutral family ({neutral}), with SE = sqrt(V_case + τ̂²(1/k_wordings + "
-        "1/k_neutral)) and a two-sided normal p, AND its pooled pairwise manipulation gate passes; when poles have "
-        "several wordings the per-arm tables below are descriptive.",
+        f"wordings − mean over the neutral family ({neutral}), where p = max(p_z, boot2_p), p_z the two-sided "
+        "normal p with SE = sqrt(V_case + τ̂²(1/k_wordings + 1/k_neutral)), AND its pairwise manipulation gate "
+        "passes; when poles have several wordings the per-arm tables below are descriptive.",
         f"Cases: those present in every wording of the pole and every neutral arm. V_case: variance of Δ* over "
         f"{B_PRIMARY} case resamples (primary; {B} otherwise), seed {SEED}, one resampled case index for all arms. "
         "boot2: two-stage bootstrap (cases, then wordings with replacement within the pole and within the neutral "
@@ -779,8 +826,11 @@ def pole_section(res, no_neutral):
         "### Wording variance per family",
         md_table(tau, ["family", "k", "n", "s2", "sigma2", "tau2", "tau"]),
         "### Pole effects, secondary metrics (descriptive)",
+        "asked_delivered: per case, share of items with a card that the agent asked about AND the sim delivered in "
+        "full (from the item records; not delivered − unasked_delivered, since an item leaked before any ask and "
+        "asked later counts in both).",
         md_table([r for r in res["pole_effects"] if r["metric"] != PRIMARY],
-                 ["target", "metric"] + cols[1:-2], {"p_holm": "p_holm (descriptive)"}),
+                 ["target", "metric"] + cols[1:cols.index("sign_consistent") + 1], {"p_holm": "p_holm (descriptive)"}),
     ]
 
 
