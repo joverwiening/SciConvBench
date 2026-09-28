@@ -2,6 +2,7 @@ import os
 import csv
 import json
 import argparse
+import math
 from collections import defaultdict
 
 import numpy as np
@@ -387,6 +388,108 @@ def bigfive_pole_shares(rows):
     return out
 
 
+def arm_matrix(rows, arms, m):
+    """Cases present in every arm, and the arms × cases matrix of per-case means."""
+    pcm = [per_case_mean(rows, a, m) for a in arms]
+    cases = sorted(set.intersection(*(set(v) for v in pcm))) if pcm else []
+    return cases, np.array([[v[c] for c in cases] for v in pcm]).reshape(len(arms), len(cases))
+
+
+def wording_family_stats(Y):
+    """Y: wordings × cases. s² of wording means and the two-way (wording × case) residual mean square."""
+    k, n = Y.shape
+    resid = Y - Y.mean(axis=1, keepdims=True) - Y.mean(axis=0, keepdims=True) + Y.mean()
+    return {"k": k, "n": n, "s2": float(np.var(Y.mean(axis=1), ddof=1)),
+            "sigma2": float((resid ** 2).sum() / ((k - 1) * (n - 1)))}
+
+
+def pooled_tau2(fams):
+    """Method of moments: E[s²_F] = τ² + σ²_F / n_F under y = μ + case + wording + ε; None if no family has k ≥ 2."""
+    fams = [f for f in fams if f["k"] >= 2 and f["n"] >= 2]
+    if not fams:
+        return None
+    return max(0.0, sum((f["k"] - 1) * (f["s2"] - f["sigma2"] / f["n"]) for f in fams) / sum(f["k"] - 1 for f in fams))
+
+
+def case_counts(rng, n, b):
+    """(b, n) resample multiplicities of n cases, i.e. one shared resampled case index per row."""
+    idx = rng.integers(0, n, (b, n))
+    return np.bincount((idx + n * np.arange(b)[:, None]).ravel(), minlength=b * n).reshape(b, n)
+
+
+def read_gate(run_dir):
+    """target -> pass of the pooled (arm == ALL) row of run_dir/pairwise_gate.csv; None if the file is absent."""
+    path = os.path.join(run_dir, "pairwise_gate.csv") if run_dir else None
+    if not path or not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return {r["target"]: str(r["pass"]).strip().lower() == "true" for r in csv.DictReader(f) if r["arm"] == "ALL"}
+
+
+def pole_effects(rows, neutral, targets, metrics, gate=None, b=None):
+    """Pole-level Δ (mean over the pole's wordings − mean over the neutral family) with wording as a random effect.
+    neutral: reference + placebo arms; targets: trait arm -> pole. Returns (pole rows, wording rows, tau rows)."""
+    poles = defaultdict(list)
+    for a, t in sorted(targets.items()):
+        poles[t].append(a)
+    out, words, taus = [], [], []
+    for m in metrics:
+        bm = b or b_for(m)
+        fams = []
+        for name, arms in [("neutral", list(neutral))] + sorted(poles.items()):
+            cases, Y = arm_matrix(rows, arms, m)
+            if len(arms) >= 2 and len(cases) >= 2:
+                fams.append(dict({"metric": m, "family": name}, **wording_family_stats(Y)))
+        tau2 = pooled_tau2(fams)
+        taus += fams + [{"metric": m, "family": "POOLED", "k": sum(f["k"] for f in fams),
+                         "n": None, "s2": None, "sigma2": None, "tau2": tau2,
+                         "tau": None if tau2 is None else float(np.sqrt(tau2)), "tau_estimable": tau2 is not None}]
+        recs = []
+        for t, W in sorted(poles.items()):
+            arms = W + list(neutral)
+            kw, kn = len(W), len(neutral)
+            cases, Y = arm_matrix(rows, arms, m)
+            n = len(cases)
+            rec = {"target": t, "metric": m, "k_wordings": kw, "k_neutral": kn, "n_cases": n,
+                   "wordings": ",".join(W), "tau_estimable": tau2 is not None}
+            if n == 0:
+                recs.append(dict(rec, effect=None, v_case=None, tau2=tau2, se=None, ci_lo=None, ci_hi=None, p=None,
+                                 boot2_lo=None, boot2_hi=None, boot2_p=None, sign_consistent=None))
+                continue
+            means = Y.mean(axis=1)
+            dw = means[:kw] - means[kw:].mean()
+            est = float(dw.mean())
+            rng, rng_w = np.random.default_rng(SEED), np.random.default_rng(SEED + 1)
+            d_word, d_two = [], []
+            for i in range(0, bm, B_CHUNK):
+                bb = min(B_CHUNK, bm - i)
+                M = case_counts(rng, n, bb) @ Y.T / n
+                MW, MN = M[:, :kw], M[:, kw:]
+                d_word.append(MW - MN.mean(axis=1, keepdims=True))
+                d_two.append(np.take_along_axis(MW, rng_w.integers(0, kw, (bb, kw)), 1).mean(axis=1)
+                             - np.take_along_axis(MN, rng_w.integers(0, kn, (bb, kn)), 1).mean(axis=1))
+            d_word, d_two = np.concatenate(d_word), np.concatenate(d_two)
+            v_case = float(np.var(d_word.mean(axis=1), ddof=1)) if bm > 1 else 0.0
+            se = float(np.sqrt(v_case + (tau2 or 0.0) * (1 / kw + 1 / kn)))
+            p = float(math.erfc(abs(est) / se / math.sqrt(2))) if se > 0 else (1.0 if est == 0 else 0.0)
+            rec.update(effect=est, v_case=v_case, tau2=tau2, se=se, ci_lo=est - 1.96 * se, ci_hi=est + 1.96 * se, p=p,
+                       boot2_lo=float(np.percentile(d_two, 2.5)), boot2_hi=float(np.percentile(d_two, 97.5)),
+                       boot2_p=boot_p(d_two), sign_consistent=bool(np.all(np.sign(dw) == np.sign(est))))
+            recs.append(rec)
+            for j, a in enumerate(W):
+                words.append({"target": t, "arm": a, "metric": m, "n_cases": n, "effect": float(dw[j]),
+                              "ci_lo": float(np.percentile(d_word[:, j], 2.5)),
+                              "ci_hi": float(np.percentile(d_word[:, j], 97.5)),
+                              "same_sign_as_pole": bool(np.sign(dw[j]) == np.sign(est))})
+        # primary: Holm over the poles present; secondary: descriptive
+        for r, ph in zip(recs, holm([r["p"] for r in recs])):
+            r["p_holm"] = ph
+            r["gate"] = gate.get(r["target"]) if gate is not None else None
+            r["counts"] = bool(ph is not None and ph < ALPHA and r["gate"] is True) if m == PRIMARY else None
+        out += recs
+    return out, words, taus
+
+
 def enforced_check(rows, arm):
     """Code-enforced persona: passes iff mean deferred turns per case ≥ 1 over cases with ≥ 1 question."""
     acc = defaultdict(list)
@@ -549,7 +652,7 @@ def write_csv(path, recs):
         w.writerows(recs)
 
 
-def analyse(rows, runs=None, family="old"):
+def analyse(rows, runs=None, family="old", run_dir=None):
     fam = family_arms(family)
     ref, holm_family = fam["ref"], fam["holm"]
     reference_arms = ("paper", ref, "oracle", "mute")
@@ -627,7 +730,58 @@ def analyse(rows, runs=None, family="old"):
     passing = sorted((r for r in res["paired"] if r["metric"] == PRIMARY and r["counts"]),
                      key=lambda r: -abs(r["effect"]))
     res["selected"] = [r["arm"] for r in passing[:TOP_K]]
+    if family == "bigfive":
+        bf = pu.load_bigfive()["personas"]
+        gate = read_gate(run_dir)
+        res["pole_gate_found"] = gate is not None
+        res["pole_effects"], res["pole_wordings"], res["tau"] = pole_effects(
+            rows, [ref] + placebos, {a: bf[a]["target"] for a in trait_arms}, [PRIMARY] + SECONDARY_METRICS, gate) \
+            if not missing[ref] else ([], [], [])
     return res
+
+
+def pole_section(res, no_neutral):
+    if "pole_effects" not in res:
+        return []
+    head = "## Pole effects (wording as random effect)"
+    if res["missing"][res["reference"]]:
+        return [head, no_neutral]
+    ref = res["reference"]
+    prim = [r for r in res["pole_effects"] if r["metric"] == PRIMARY]
+    tau = [t for t in res["tau"] if t["metric"] == PRIMARY]
+    pooled = next(t for t in tau if t["family"] == "POOLED")
+    neutral = ", ".join([ref] + res["placebo_arms"])
+    tau_line = (f"τ̂ = {fmt(pooled['tau'])} (τ̂² = {fmt(pooled['tau2'])}), pooled by method of moments over the "
+                f"{len(tau) - 1} families with ≥ 2 wordings."
+                if pooled["tau_estimable"] else
+                "**τ not estimable (need ≥2 wordings in some family): SE below uses the case-bootstrap variance "
+                "only (tau_estimable = False).**")
+    gate_line = ("Gate read from run_dir/pairwise_gate.csv (pooled row, arm = ALL)." if res["pole_gate_found"] else
+                 "No run_dir/pairwise_gate.csv: gate = None, so no pole counts.")
+    cols = ["target", "k_wordings", "k_neutral", "n_cases", "effect", "v_case", "se", "ci_lo", "ci_hi", "p",
+            "p_holm", "boot2_lo", "boot2_hi", "boot2_p", "sign_consistent", "gate", "counts"]
+    return [
+        head,
+        f"A pole counts iff Holm p (over the {len(prim)} poles present) < {ALPHA} for Δ̂ = mean over the pole's "
+        f"wordings − mean over the neutral family ({neutral}), with SE = sqrt(V_case + τ̂²(1/k_wordings + "
+        "1/k_neutral)) and a two-sided normal p, AND its pooled pairwise manipulation gate passes; when poles have "
+        "several wordings the per-arm tables below are descriptive.",
+        f"Cases: those present in every wording of the pole and every neutral arm. V_case: variance of Δ* over "
+        f"{B_PRIMARY} case resamples (primary; {B} otherwise), seed {SEED}, one resampled case index for all arms. "
+        "boot2: two-stage bootstrap (cases, then wordings with replacement within the pole and within the neutral "
+        "family), percentile CI, sensitivity. sign_consistent: every wording's Δ has the pole's sign (descriptive). "
+        + gate_line,
+        tau_line,
+        md_table(prim, cols),
+        "### Per wording (Δ vs the neutral family mean, case-bootstrap CI)",
+        md_table([w for w in res["pole_wordings"] if w["metric"] == PRIMARY],
+                 ["target", "arm", "n_cases", "effect", "ci_lo", "ci_hi", "same_sign_as_pole"]),
+        "### Wording variance per family",
+        md_table(tau, ["family", "k", "n", "s2", "sigma2", "tau2", "tau"]),
+        "### Pole effects, secondary metrics (descriptive)",
+        md_table([r for r in res["pole_effects"] if r["metric"] != PRIMARY],
+                 ["target", "metric"] + cols[1:-2], {"p_holm": "p_holm (descriptive)"}),
+    ]
 
 
 def render_markdown(res):
@@ -674,6 +828,7 @@ def render_markdown(res):
         md_table(res["reps_summary"], ["arm", "n_cases", "max_reps", "min_reps", "n_short", "short_cases"]),
         "## Per-arm means (primary, item and process metrics)",
         md_table(res["arm_means"], per_arm_cols + [PRIMARY] + ITEM_METRICS + PROCESS_METRICS),
+        *pole_section(res, no_neutral),
         f"## Primary: Paired effect vs {ref} on {PRIMARY} (per case mean over reps, trait − {ref})",
         (f"Available cases per arm. counts = Holm p < {ALPHA} AND beats_placebo AND manip_pass (on-target ≥ "
          f"{MANIP_MIN_ON_TARGET:.0%} of the arm's {'dialogues (blind Big Five judge)' if res['family'] == 'bigfive' else 'answers'} and ≥ {MANIP_MIN_ABOVE_NEUTRAL:.0%} above the {ref} "
@@ -746,7 +901,7 @@ def main(argv=None):
                         help="old: neutral reference, style/policy traits; bigfive: bf_neutral reference, bf_* traits")
     args = parser.parse_args(argv)
     rows = load_rows(args.results)
-    res = analyse(rows, load_runs(args.run_dir) if args.run_dir else None, family=args.family)
+    res = analyse(rows, load_runs(args.run_dir) if args.run_dir else None, family=args.family, run_dir=args.run_dir)
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "analysis.md"), "w") as f:
         f.write(render_markdown(res))
@@ -754,6 +909,9 @@ def main(argv=None):
                  "gap_tercile", "decomposition", "difficulty", "manipulation", "manipulation_by_turn", "reps",
                  "reps_summary"):
         write_csv(os.path.join(args.out, f"{name}.csv"), res[name])
+    if "pole_effects" in res:
+        for name in ("pole_effects", "pole_wordings", "tau"):
+            write_csv(os.path.join(args.out, f"{name}.csv"), res[name])
     if res["failures"] is not None:
         write_csv(os.path.join(args.out, "failures.csv"), res["failures"])
     if res["bigfive_check"]:
