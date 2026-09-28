@@ -51,6 +51,13 @@ PAIRWISE_TEMPLATES_SHA = pu.sha256_text(PAIRWISE_SYSTEM + PAIRWISE_USER +
                                         json.dumps(pev.BIGFIVE_OPTIONS, sort_keys=True))
 GATE_HIT_RATE, GATE_CI_LO = 0.75, 0.5
 CSV_COLS = ["target", "arm", "n", "hits", "hit_rate", "ci_lo", "ci_hi", "pass", "n_parse_fail", "n_no_partner"]
+# --probe opposite asks about the opposite pole on the same pairs: a judge that just picks the more colourful
+# chat picks the trait chat there too, so it should pick it rarely (pass = hit_rate <= 0.25 and ci_hi < 0.5)
+SUFFIX = {"target": "", "opposite": "_opposite"}
+
+
+def opposite(target):
+    return "low_" + target[5:] if target.startswith("high_") else "high_" + target[4:]
 
 
 def _log_binom_pmf(k, n, p):
@@ -133,9 +140,9 @@ def trait_is_a(rel):
     return int(pu.sha256_text(rel), 16) % 2 == 0
 
 
-def pairwise_judge(llm, trait_turns, ref_turns, target, trait_is):
+def pairwise_judge(llm, trait_turns, ref_turns, target, trait_is, describe=None):
     chats = {"A": trait_turns, "B": ref_turns} if trait_is == "A" else {"A": ref_turns, "B": trait_turns}
-    system = PAIRWISE_SYSTEM.replace("__DESCRIPTION__", pev.BIGFIVE_OPTIONS[target])
+    system = PAIRWISE_SYSTEM.replace("__DESCRIPTION__", pev.BIGFIVE_OPTIONS[describe or target])
     user = PAIRWISE_USER.format(chat_a=pev.bigfive_chat(chats["A"]), chat_b=pev.bigfive_chat(chats["B"]))
     parsed, attempts = pev.invoke_parsed(llm, user, system)
     out = {"choice": None, "hit": None, "confidence": None, "evidence": None, "evidence_ok": None,
@@ -160,7 +167,8 @@ def pairwise_judge(llm, trait_turns, ref_turns, target, trait_is):
 
 def judge_pair(pair, ctx):
     folder, arm, target, partner = pair
-    path = os.path.join(folder, "persona_pairwise.json")
+    probe = ctx["args"].probe
+    path = os.path.join(folder, f"persona_pairwise{SUFFIX[probe]}.json")
     if not ctx["args"].force:
         rec = pev.read_json(path)
         if rec is not None:
@@ -171,9 +179,11 @@ def judge_pair(pair, ctx):
     rel = os.path.relpath(os.path.abspath(folder), os.path.abspath(run_dir))
     trait_is = "A" if trait_is_a(rel) else "B"
     llm = LLMService(ctx["judge_cfg"])
-    res = pairwise_judge(llm, pev.dialogue_turns(folder)[0], pev.dialogue_turns(partner)[0], target, trait_is)
+    describe = opposite(target) if probe == "opposite" else target
+    res = pairwise_judge(llm, pev.dialogue_turns(folder)[0], pev.dialogue_turns(partner)[0], target, trait_is,
+                         describe=describe)
     usage = llm.get_statistics()
-    rec = {"target": target, "arm": arm,
+    rec = {"target": target, "arm": arm, "probe": probe, "described": describe,
            "partner": os.path.relpath(os.path.abspath(partner), os.path.abspath(run_dir)),
            "trait_is": trait_is, **{k: res[k] for k in ("choice", "hit", "confidence", "evidence", "evidence_ok",
                                                        "attempts")},
@@ -183,17 +193,19 @@ def judge_pair(pair, ctx):
     return rec, "done"
 
 
-def gate_row(target, arm, recs, n_no_partner):
+def gate_row(target, arm, recs, n_no_partner, probe="target"):
     parsed = [r for r in recs if r.get("hit") is not None]
     n, hits = len(parsed), sum(bool(r["hit"]) for r in parsed)
     rate = hits / n if n else None
     lo, hi = clopper_pearson(hits, n)
+    ok = rate is not None and ((rate >= GATE_HIT_RATE and lo > GATE_CI_LO) if probe == "target" else
+                               (rate <= 1 - GATE_HIT_RATE and hi < 1 - GATE_CI_LO))
     return {"target": target, "arm": arm, "n": n, "hits": hits, "hit_rate": rate, "ci_lo": lo, "ci_hi": hi,
-            "pass": bool(rate is not None and rate >= GATE_HIT_RATE and lo > GATE_CI_LO),
+            "pass": bool(rate is not None and ok),
             "n_parse_fail": len(recs) - n, "n_no_partner": n_no_partner}
 
 
-def summarize(pairs, recs_by_folder):
+def summarize(pairs, recs_by_folder, probe="target"):
     groups = {}
     for folder, arm, target, partner in pairs:
         g = groups.setdefault((target, arm), {"recs": [], "no_partner": 0})
@@ -206,9 +218,9 @@ def summarize(pairs, recs_by_folder):
         arms = sorted(a for t, a in groups if t == target)
         for arm in arms:
             g = groups[(target, arm)]
-            rows.append(gate_row(target, arm, g["recs"], g["no_partner"]))
+            rows.append(gate_row(target, arm, g["recs"], g["no_partner"], probe))
         rows.append(gate_row(target, "ALL", [r for a in arms for r in groups[(target, a)]["recs"]],
-                             sum(groups[(target, a)]["no_partner"] for a in arms)))
+                             sum(groups[(target, a)]["no_partner"] for a in arms), probe))
     return rows
 
 
@@ -220,20 +232,24 @@ def fmt(v):
     return str(v)
 
 
-def write_summary(run_dir, rows):
-    with open(os.path.join(run_dir, "pairwise_gate.csv"), "w", newline="") as f:
+def write_summary(run_dir, rows, probe="target"):
+    sfx = SUFFIX[probe]
+    with open(os.path.join(run_dir, f"pairwise_gate{sfx}.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=CSV_COLS)
         w.writeheader()
         for r in rows:
             w.writerow({k: fmt(r[k]) for k in CSV_COLS})
-    lines = [f"# Pairwise Big Five manipulation check",
+    rule = (f"pass = hit_rate >= {GATE_HIT_RATE} and Clopper-Pearson 95% ci_lo > {GATE_CI_LO}" if probe == "target"
+            else f"opposite pole asked; hit = judge picked the trait chat; pass = hit_rate <= {1 - GATE_HIT_RATE} "
+                 f"and ci_hi < {1 - GATE_CI_LO}")
+    lines = [f"# Pairwise Big Five manipulation check ({probe} probe)",
              "",
-             f"pass = hit_rate >= {GATE_HIT_RATE} and Clopper-Pearson 95% ci_lo > {GATE_CI_LO}",
+             rule,
              "",
              "| " + " | ".join(CSV_COLS) + " |",
              "|" + "|".join("---" for _ in CSV_COLS) + "|"]
     lines += ["| " + " | ".join(fmt(r[k]) for k in CSV_COLS) + " |" for r in rows]
-    with open(os.path.join(run_dir, "pairwise_gate.md"), "w") as f:
+    with open(os.path.join(run_dir, f"pairwise_gate{sfx}.md"), "w") as f:
         f.write("\n".join(lines) + "\n")
 
 
@@ -246,6 +262,8 @@ def main(argv=None):
                         help="Spend cap for this invocation's judge calls; no new pair starts once reached")
     parser.add_argument("--force", action="store_true", help="Rejudge pairs that already have persona_pairwise.json")
     parser.add_argument("--dry_run", action="store_true", help="Count pairs, make no calls")
+    parser.add_argument("--probe", choices=list(SUFFIX), default="target",
+                        help="target: ask about the arm's pole (the gate); opposite: ask about the opposite pole")
     args = parser.parse_args(argv)
 
     manifest = pev.read_json(os.path.join(args.run_dir, "manifest.json"))
@@ -254,7 +272,7 @@ def main(argv=None):
     pairs = find_pairs(args.run_dir, pu.load_bigfive())
     with_partner = [p for p in pairs if p[3] is not None]
     n_no_partner = len(pairs) - len(with_partner)
-    n_cached = 0 if args.force else sum(os.path.exists(os.path.join(p[0], "persona_pairwise.json"))
+    n_cached = 0 if args.force else sum(os.path.exists(os.path.join(p[0], f"persona_pairwise{SUFFIX[args.probe]}.json"))
                                         for p in with_partner)
     print(f"{len(pairs)} trait case dirs: {len(with_partner)} pairs ({n_cached} cached, "
           f"{len(with_partner) - n_cached} to judge), {n_no_partner} without a reference partner")
@@ -284,9 +302,9 @@ def main(argv=None):
             n_done += status == "done"
             if rec is not None:
                 recs[futures[fut][0]] = rec
-    rows = summarize(pairs, recs)
-    write_summary(args.run_dir, rows)
-    print(f"pairwise_gate.csv: {len(rows)} rows, {n_done} judged, {n_err} errors")
+    rows = summarize(pairs, recs, args.probe)
+    write_summary(args.run_dir, rows, args.probe)
+    print(f"pairwise_gate{SUFFIX[args.probe]}.csv: {len(rows)} rows, {n_done} judged, {n_err} errors")
     if n_budget:
         print(f"{n_budget} pairs not judged: budget reached")
     print(ctx["spend"].summary())
