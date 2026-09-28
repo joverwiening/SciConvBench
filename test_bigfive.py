@@ -71,8 +71,14 @@ class TestBigFiveUser(unittest.TestCase):
         self.assertEqual(sp, "\n\n".join([sh["identity"], p["sheet"], sh["situation"], p["appraisal"],
                                           sh["notes_intro"], "<notes>\nCOMPLETE spec: value 42.\n</notes>",
                                           sh["request_intro"], f"<your_request>\n{SENTINEL}\n</your_request>",
-                                          sh["rules"]]))
+                                          sh["rules"]] + ([sh["examples_intro"]] if p.get("examples") else [])))
+        ex = []
+        for e in p.get("examples") or []:
+            ex += [{"role": "user", "content": "Message from the assistant:\n" + e["q"]},
+                   {"role": "assistant", "content": e["a"]}]
+        n = len(ex)
         for msgs, s in svc.calls:
+            self.assertEqual(msgs[:n], ex)
             # the incomplete request appears once, as the user's own message, never in the chat turns
             self.assertEqual(s.count(SENTINEL), 1)
             self.assertNotIn(SENTINEL, json.dumps(msgs))
@@ -81,9 +87,9 @@ class TestBigFiveUser(unittest.TestCase):
             for m in msgs[:-1]:
                 self.assertNotIn(p["reminder"], m["content"])
         last = svc.calls[2][0]
-        self.assertEqual(last[0]["content"], "Message from the assistant:\nQ1?")
-        self.assertEqual([last[1]["content"], last[3]["content"]], ["first", "second"])
-        self.assertEqual(last[4]["content"], "Message from the assistant:\nQ3?\n\n" + rem)
+        self.assertEqual(last[n]["content"], "Message from the assistant:\nQ1?")
+        self.assertEqual([last[n + 1]["content"], last[n + 3]["content"]], ["first", "second"])
+        self.assertEqual(last[n + 4]["content"], "Message from the assistant:\nQ3?\n\n" + rem)
         lines = jl(os.path.join(self.tmp, "case", "user_calls.jsonl"))
         self.assertEqual([l["turn"] for l in lines], [1, 2, 3])
         self.assertEqual(lines[0]["raw"], "<think>hmm</think>Sam Keller: first")
@@ -97,16 +103,37 @@ class TestBigFiveUser(unittest.TestCase):
             self.assertIn("A: first", f.read())
 
     def test_shared_sections_identical(self):
-        prompts = {}
+        prompts, first_msgs = {}, {}
+        intro = "\n\n" + BF["shared"]["examples_intro"]
         for arm in BF["personas"]:
             svc = FakeService(["ok"])
             make(arm, svc, os.path.join(self.tmp, arm)).answer_clarification_question("Q?")
-            prompts[arm] = svc.calls[0][1]
-        for arm, sp in prompts.items():
+            first_msgs[arm], prompts[arm] = svc.calls[0]
+
+        def core(arm):
+            sp = prompts[arm]
+            if BF["personas"][arm].get("examples"):
+                self.assertTrue(sp.endswith(intro), arm)
+                sp = sp[:-len(intro)]
+            return sp
+
+        base = core("bf_neutral").replace(BF["personas"]["bf_neutral"]["sheet"], "SHEET") \
+            .replace(BF["personas"]["bf_neutral"]["appraisal"], "APPRAISAL")
+        qs = None
+        for arm in prompts:
             p = BF["personas"][arm]
-            rest = sp.replace(p["sheet"], "SHEET").replace(p["appraisal"], "APPRAISAL")
-            self.assertEqual(rest, prompts["bf_neutral"].replace(BF["personas"]["bf_neutral"]["sheet"], "SHEET")
-                             .replace(BF["personas"]["bf_neutral"]["appraisal"], "APPRAISAL"))
+            rest = core(arm).replace(p["sheet"], "SHEET").replace(p["appraisal"], "APPRAISAL")
+            self.assertEqual(rest, base)
+            if p["kind"] == "ablation":
+                self.assertNotIn(BF["shared"]["examples_intro"], prompts[arm])
+                self.assertEqual(len(first_msgs[arm]), 1)
+            elif p["kind"] in ("trait", "neutral", "placebo"):
+                self.assertTrue(p.get("examples"), arm)
+                arm_qs = [e["q"] for e in p["examples"]]
+                if qs is None:
+                    qs = arm_qs
+                self.assertEqual(arm_qs, qs, arm)
+        self.assertIsNotNone(qs)
 
     def test_failure_reply(self):
         svc = FakeService([RuntimeError("down")])

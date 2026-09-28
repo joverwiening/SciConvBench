@@ -136,7 +136,7 @@ class TestExamples(unittest.TestCase):
                               log_file=os.path.join(self.tmp, name, "conversation_log.txt"))
 
     def test_examples_in_messages_only(self):
-        base = tb.BF["personas"]["bf_neutral"]
+        base = tb.BF["personas"]["bf_neutral_noex"]
         p = dict(base, examples=[{"q": "EXQ1?", "a": "EXA1"}, {"q": "EXQ2?", "a": "EXA2"}])
         svc = tb.FakeService(["first", "second"])
         u = self.user(svc, p, "ex")
