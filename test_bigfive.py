@@ -367,8 +367,10 @@ class TestAnalysisBigFive(unittest.TestCase):
         self.assertEqual((res["family"], res["reference"]), ("bigfive", "bf_neutral"))
         self.assertEqual(res["placebo_arms"], ["bf_neutral_b"])
         self.assertEqual(res["trait_arms"], ["bf_high_N", "bf_low_A", "bf_low_C"])
+        family = sorted(pid for pid, p in pu.load_bigfive()["personas"].items() if p["kind"] == "trait")
+        run = ["bf_high_N", "bf_low_A", "bf_low_C"]
         self.assertEqual((res["holm_family"], res["holm_m"], res["holm_missing"]),
-                         (["bf_high_N", "bf_low_A", "bf_low_C"], 3, []))
+                         (family, 3, [a for a in family if a not in run]))
         prim = {r["arm"]: r for r in res["paired"] if r["metric"] == pan.PRIMARY}
         self.assertEqual(sorted(prim), res["trait_arms"])
         self.assertAlmostEqual(prim["bf_low_A"]["effect"], -0.3)
