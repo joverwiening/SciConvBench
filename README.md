@@ -160,3 +160,25 @@ This script directly parses the raw per-case JSON outputs and builds the datafra
 ```bash
 python make_paper_artifacts.py --root .
 ```
+## Persona-trait study
+`PERSONA_STUDY.md` describes a study of how traits of the simulated scientist change what the agent recovers. It adds no new dependencies and leaves the upstream entry points unchanged (`test_runner.py` and the judges behave as before).
+
+```bash
+# 1. fact cards (one per missing entity / planted inconsistency), then re-check them offline
+python persona_fact_cards.py --domain pde --mode disambiguation --model or_gemini_2_5_pro
+python persona_fact_cards.py --domain pde --mode disambiguation --model or_gemini_2_5_pro --verify_only
+
+# 2. dialogues: arms x reps x cases, resumable
+python persona_runner.py --domain pde --mode disambiguation --cases case_011,case_014 \
+    --arms paper,neutral,terse,verbose,lay_vocabulary,jargon,uncertain,reluctant,volunteering,skeptical,oracle,mute \
+    --agent_model or_gpt_5_2 --user_model or_sonnet_4_6 --reps 3 --workers 8 --out persona_runs/pde_disamb
+
+# 3. native judges + per-item attribution + trait check -> results.jsonl
+python persona_eval.py --run_dir persona_runs/pde_disamb --judge_model or_gemini_2_5_pro --aux_model or_gemini_2_5_pro --workers 8
+
+# 4. paired effects vs neutral with case-bootstrap CIs
+python persona_analysis.py --results persona_runs/pde_disamb/results.jsonl --out persona_runs/pde_disamb/analysis
+
+# offline test with fake models (no API calls)
+python test_persona_harness.py
+```
