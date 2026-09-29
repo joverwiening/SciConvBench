@@ -161,23 +161,30 @@ This script directly parses the raw per-case JSON outputs and builds the datafra
 python make_paper_artifacts.py --root .
 ```
 ## Persona-trait study
-`PERSONA_STUDY.md` describes a study of how traits of the simulated scientist change what the agent recovers. It adds no new dependencies and leaves the upstream entry points unchanged (`test_runner.py` and the judges behave as before).
+`PERSONA_STUDY.md` describes a study of how personality traits of the simulated scientist change what the agent recovers; `PERSONA_PREREG.md` holds the analysis rules of its full1 run (62 foam cases × 35 arms). The harness adds no new dependencies and leaves the upstream entry points unchanged (`test_runner.py` and the judges behave as before); the report scripts in `persona/analysis/full1/` also need scipy and scikit-learn. Models come from AWS Bedrock: credentials in the environment, `AWS_DEFAULT_REGION=us-west-2`, and `SCICONV_PROFILE=bedrock_glm5` for the upstream judges.
 
 ```bash
-# 1. fact cards (one per missing entity / planted inconsistency), then re-check them offline
-python persona_fact_cards.py --domain pde --mode disambiguation --model or_gemini_2_5_pro
-python persona_fact_cards.py --domain pde --mode disambiguation --model or_gemini_2_5_pro --verify_only
+# 1. fact cards (one per missing entity), then re-check them offline
+python persona_fact_cards.py --domain foam --mode disambiguation --model bedrock_glm5 --budget_usd 1
+python persona_fact_cards.py --domain foam --mode disambiguation --model bedrock_glm5 --budget_usd 0 --verify_only
 
-# 2. dialogues: arms x reps x cases, resumable
-python persona_runner.py --domain pde --mode disambiguation --cases case_011,case_014 \
-    --arms paper,neutral,terse,verbose,lay_vocabulary,jargon,uncertain,reluctant,volunteering,skeptical,oracle,mute \
-    --agent_model or_gpt_5_2 --user_model or_sonnet_4_6 --reps 3 --workers 8 --out persona_runs/pde_disamb
+# 2. dialogues: arms x reps x cases, resumable (the full1 arms)
+ARMS=$(ls persona/bigfive/personas | sed 's/\.json$//' | grep -v -e '_noex$' -e '^bf_low_N' | paste -sd,),mute,oracle
+python persona_runner.py --domain foam --mode disambiguation --cases @persona/analysis/full1/cases.txt --arms "$ARMS" \
+    --agent_model bedrock_glm5 --user_model bedrock_glm5 --reps 1 --workers 48 --budget_usd 45 --out persona_runs/full1
 
-# 3. native judges + per-item attribution + trait check -> results.jsonl
-python persona_eval.py --run_dir persona_runs/pde_disamb --judge_model or_gemini_2_5_pro --aux_model or_gemini_2_5_pro --workers 8
+# 3. native judges + per-fact attribution -> results.jsonl
+python persona_eval.py --run_dir persona_runs/full1 --judge_model bedrock_glm5 --aux_model bedrock_glm5 \
+    --trait_check none --workers 48 --budget_usd 45
 
-# 4. paired effects vs neutral with case-bootstrap CIs
-python persona_analysis.py --results persona_runs/pde_disamb/results.jsonl --out persona_runs/pde_disamb/analysis
+# 4. visibility check: trait chat vs neutral chat, then the opposite pole on the same pairs
+python persona_pairwise.py --run_dir persona_runs/full1 --judge_model bedrock_glm5 --workers 24 --budget_usd 3
+python persona_pairwise.py --run_dir persona_runs/full1 --judge_model bedrock_glm5 --workers 24 --budget_usd 3 --probe opposite
+
+# 5. pre-registered analysis, then the report scripts
+python persona_analysis.py --family bigfive --run_dir persona_runs/full1 --results persona_runs/full1/results.jsonl \
+    --out persona_runs/full1/analysis
+bash persona/analysis/full1/run_all.sh persona_runs/full1 persona_runs/full1/analysis persona_runs/full1/analysis/deep
 
 # offline test with fake models (no API calls)
 python test_persona_harness.py

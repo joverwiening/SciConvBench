@@ -1,79 +1,65 @@
 # Persona trait study on SciConvBench — harness design
 
-Question: which traits of the simulated scientist (the user who holds the complete spec) change how
-well a fixed agent recovers the missing / contradictory information. One trait per arm, every arm on
-the same cases, so effects are compared within case.
+Question: which personality traits of the simulated scientist (the user who holds the complete spec) change how
+much of the missing information a fixed agent recovers. One trait per arm, every arm on the same cases, so effects
+are compared within case.
 
-Primary mode: disambiguation (570 cases, 2119 missing entities). Inconsistency is supported by the
-same code path.
-
-Preregistration (outcomes, sample, analysis plan, amendments): PERSONA_PREREG.md.
+The design below is the one used in the full1 run (62 foam disambiguation cases × 35 arms, 2026-09-28). Its
+analysis rules, fixed before the run, are in `PERSONA_PREREG.md`; the scripts behind the report are in
+`persona/analysis/full1/`. The code also still contains the arms of an earlier design (style and policy traits such
+as `terse`, `reluctant`; `persona/personas/`), which that run did not use.
 
 ## Arms
 
-| arm | user | purpose |
+| arm | scientist | purpose |
 |---|---|---|
-| `paper` | upstream `LLMUserInterface`, prompt byte-identical to upstream | replication of the paper's setup |
-| `neutral` | paper prompt + neutral persona block | control for every trait arm |
-| `neutral_b`, `neutral_c` | paper prompt + precedence + a reworded neutral text (in place of the neutral text) | placebo: null distribution for rewording effects |
-| `<trait>` | paper prompt + neutral block + one trait paragraph | the manipulation |
-| `oracle` | deterministic: every reply = all fact-card texts | ceiling: all information delivered |
-| `mute` | deterministic: every reply = "Make a reasonable assumption based on best practices." (the paper user's own fallback line) | floor: no information delivered |
+| `bf_<high/low>_<A/C/E/N/O>`, `_w2`, `_w3` | one Big Five pole, the other four average; 3 independent wordings | the manipulation |
+| `bf_neutral`, `bf_neutral_b` … `_f` | average on all five traits; 6 wordings of the same content | control; the spread over wordings measures rewording noise |
+| `oracle` | scripted: every reply = all fact-card texts | ceiling: all information delivered |
+| `mute` | scripted: every reply = "Make a reasonable assumption based on best practices." (the paper user's own fallback line) | floor: no information delivered |
 
-Trait effect = trait − neutral, paired by case. Reported raw and as a fraction of the case's
-oracle − mute gap. Cases where oracle does not beat mute carry no information about the user and are
-reported separately (screen).
+A = agreeableness, C = conscientiousness, E = extraversion, N = neuroticism, O = openness. `bf_low_N` (calm) exists
+but was dropped from full1: it failed the visibility check in two pilots. The `_noex` files are an ablation without
+example exchanges, also not run.
 
-Traits (persona/personas/*.json, `kind` in {style, policy}):
-- style (should not change WHICH facts reach the agent when asked): terse, verbose, lay_vocabulary,
-  jargon, uncertain
-- policy (may change which facts reach the agent): reluctant, volunteering, skeptical
+Trait effect = mean over the pole's 3 wordings − mean over the 6 neutral wordings, paired by case; the standard
+error includes the between-wording variance (`persona_analysis.py --family bigfive`).
 
-The persona block states precedence (`persona_users.PRECEDENCE`): where it conflicts with the paper
-prompt's style lines ("Be concise", ...), the persona wins, with two limits: every value must come from
-the COMPLETE requirement, and the user does not give information that was not asked for unless the
-persona explicitly says to. So style personas cannot volunteer information; only a persona that says so
-explicitly (volunteering) may.
+## Simulated scientist (`persona_users.BigFiveUser`)
 
-## Big Five user (bf_* arms, 2026-09-27)
+System prompt, in order: shared identity, persona sheet, shared situation, persona appraisal (one sentence of
+feelings about the situation), shared notes intro, the COMPLETE requirement as the scientist's notes, the INCOMPLETE
+requirement as "the request you sent", shared rules, examples intro. Shared text is `persona/bigfive/shared.json`,
+byte-identical in every arm; persona text is `persona/bigfive/personas/*.json`.
+- Differences from the paper's user: the incomplete text is framed as the scientist's own message, and nothing states
+  outright that the agent lacks facts (the notes intro only calls the request a shorter version). No "be concise", "do not provide information not asked for" or "provide concrete values",
+  and no canned "Make a reasonable assumption" reply. Kept: never state a value that is not in the notes. Added:
+  never change a value in the notes, do not propose values of your own, plain chat text.
+- The request is shown because without it the disagreeable scientist accused the agent of ignoring facts that were
+  never in the request.
+- Persona text carries personality, facts about the person's life and feelings about them, never rules on sharing
+  or claims about what the person knows (lint in `test_bigfive.py`). Some texts describe how the person writes:
+  `bf_low_E` (reserved; sheet and reminder ask for clipped replies), `bf_low_C` (typos, half-finished sentences) and
+  the unused `bf_low_N` (easygoing tone, no apologies).
+- Each persona's 3 example exchanges (unrelated tasks) are sent as earlier chat turns; they never reach the
+  clarification log. History goes as real chat turns (agent = user role, scientist = assistant role). The persona's
+  one-line reminder plus a shared truth reminder is appended to the current message only.
+- If a reply claims an earlier disclosure and carries a number from the notes that has not been sent yet, it is
+  regenerated once with a note (`truth_retries` in the record, draft kept in `user_calls.jsonl`).
+- Every scientist call is logged raw to `user_calls.jsonl`; the system prompt to `user_system_prompt.txt`.
 
-Replaces the style/policy traits above for the next study: arms are Big Five personalities, and the paper user's
-own rules are removed because they fix how much the user shares whatever the persona says.
+Visibility check (`persona_pairwise.py`): a judge reads the trait chat and the `bf_neutral` chat of the same case
+(scientist lines only matter) and picks which scientist is more like the pole's description; `--probe opposite` asks
+for the opposite pole on the same pairs, so a judge that picks the more colourful chat fails. The single-chat trait
+check in `persona_eval.py` (`--trait_check bigfive`) exists but full1 ran with `--trait_check none`.
 
-| arm | persona |
-|---|---|
-| `bf_neutral` | all five domains average |
-| `bf_neutral_b` | reworded average (placebo) |
-| `bf_low_A` | very low agreeableness, other four average |
-| `bf_high_N` | very high neuroticism, other four average |
-| `bf_low_C` | very low conscientiousness, other four average |
+When the agent reaches the turn cap, `run_dialogue(final_fix=True)` gives it the scientist's last reply and asks for
+the final spec, with one retry if the output is shorter than 300 characters or ends in a question (`final_attempts`,
+`final_valid` in the record). The upstream default path is unchanged.
 
-Low extraversion is not an arm: in a pilot on Kemp's testbed (GLM-5, 16 scripted turns) it was never recognised,
-since a work Q&A gives it nothing to decline. Paper, oracle and mute arms stay as above.
-
-User prompt (`persona_users.BigFiveUser`), in order: shared identity, persona sheet, shared situation, persona
-appraisal (one sentence of feelings about the situation), shared notes intro, the COMPLETE requirement as the
-user's notes, the INCOMPLETE requirement as "the request you sent", shared rules. Shared text is
-`persona/bigfive/shared.json`, byte-identical in every bf arm; persona text is `persona/bigfive/personas/*.json`.
-- Differences from the paper user: the incomplete text is framed as the user's own message, as in a chat window,
-  and nothing says the agent lacks facts or asks the user to compare. No "be concise", "do not provide information
-  not asked for", "provide concrete values", and no canned "Make a reasonable assumption" reply. Kept: never state
-  a value that is not in the notes.
-- The request is shown because without it (stage-1 smoke, 2026-09-27, runs/smoke_bf) bf_low_A accused the agent of
-  ignoring facts that were never in the request.
-- Persona text carries personality, facts about the person's life, and feelings about them, never rules on
-  sharing or claims about what the person knows. Lint in `test_bigfive.py`.
-- History goes as real chat turns (agent = user role, persona = assistant role). A one-line reminder is appended to
-  the current message only. No example exchanges, no private thought (in the pilot above the thought step shortened
-  replies and did not help recognition).
-- Every user call is logged raw to `user_calls.jsonl`; the system prompt to `user_system_prompt.txt`.
-
-Manipulation check (`persona_eval.py --trait_check bigfive`): one blind multiple-choice call per dialogue over the
-10 Big Five poles plus "ordinary", construct names masked, option order shuffled per case.
-
-Models: GLM-5 on Bedrock (`bedrock_glm5`) for agent, user, judges and aux. No released paper runs use GLM-5, so the
-paper arm is a within-study baseline, not a replication. Runner, eval and card builder take `--budget_usd` and stop
-scheduling work once the priced spend reaches it.
+Models: GLM-5 on Bedrock (`bedrock_glm5`) for agent, scientist, judges and aux. No released paper runs use GLM-5.
+Runner, eval, pairwise judge and card builder take `--budget_usd` and stop scheduling work once the priced spend
+reaches it (calls in flight still finish, so each stage can overshoot slightly).
 
 ## Fact cards (persona/fact_cards/<domain>/<mode>_<domain>.cards.json)
 
@@ -85,8 +71,7 @@ One card per missing entity (disambiguation) or per planted inconsistency. Built
   the correct prompt it rests on when one exists (often the fix is a deletion, so none).
 - coverage: word-level diff (incomplete → complete). Inserted/replaced tokens of the complete text not
   covered by any span are recorded per case; high uncovered share → `needs_review`.
-Cards are used by the oracle arm and by the attribution judge. They are never shown to the LLM user,
-so the user protocol stays the paper's.
+Cards are used by the oracle arm and by the attribution judge. They are never shown to the simulated scientist.
 
 ## Measurement (all post hoc, blind to arm, identical across arms)
 
@@ -107,12 +92,12 @@ entities); per-item grounding replaces that and is reported next to it.
 
 Decomposition of a trait effect on recovery: Δ delivered rate vs Δ P(recovered | delivered).
 
-Trait manipulation check: one call per user answer, multi-label over ALL traits (judge not told the
+Trait check of the earlier design (`--trait_check per_turn`): one call per user answer, multi-label over ALL traits (judge not told the
 arm): present 0/1 + evidence quote. Report on-target rate, max off-target rate, neutral base rates,
 and on-target rate by turn index (fading).
 
-Judge validity: attribution and trait judges are validated against a hand-labelled sample stratified
-by arm (style can change how detectable a fact is).
+Judge validity tooling: `persona_validate.py` exports a blind hand-label sample stratified by arm (style can
+change how detectable a fact is) and scores the attribution and trait judges against it.
 
 ## Protocol invariants
 
@@ -132,10 +117,13 @@ by arm (style can change how detectable a fact is).
 - `persona_fact_cards.py` build + verify cards
 - `persona_users.py` persona rendering, `OracleUser`, `MuteUser`
 - `persona_runner.py` arms × reps × cases, parallel, resumable, per-role token/cost log
+- `persona_pairwise.py` visibility check: trait chat vs neutral chat on the same case, target and opposite probe
 - `persona_eval.py` native judges + attribution + trait check → per-case `persona_eval.json`, run-level `results.jsonl`
 - `persona_analysis.py` paired effects with case-bootstrap CIs, gap-normalised effects, decomposition, manipulation-check tables, case screen
 - `persona_validate.py` judge validity: blind hand-label export, card audit sheet, scorer
-- `test_persona_harness.py` offline end-to-end test with fake models (no API calls)
+- `persona/analysis/full1/` scripts behind the full1 report (reply content, first-answer pairs, decoding, figures); `run_all.sh`
+- `test_persona_harness.py` offline end-to-end test with fake models (no API calls); the other `test_*persona*`, `test_bigfive.py`,
+  `test_pairwise.py`, `test_pole_effects.py`, `test_harness_fixes.py` are offline too
 
 ## Implementation notes (where the code pins down or departs from the above)
 
