@@ -17,17 +17,19 @@ import persona_eval as pev
 PARSE_TRIES = 3
 
 CHOICE_SYSTEM = """
-        You check which setup a final simulation specification uses. You are given the
-        [FINAL_SPECIFICATION] and, for several settings, two options A and B.
+        You place a final simulation specification between two reference setups. You are given the
+        [FINAL_SPECIFICATION] and, for several settings, two options A and B. For each setting, one option is
+        the cheaper, quicker setup and the other the more expensive, more accurate one.
         For each setting answer:
-        - "A" if the specification uses option A,
-        - "B" if it uses option B,
-        - "neither" if it states this setting but uses a clearly different setup from both,
-        - "not_stated" if the specification does not state this setting.
-        Judge by meaning, not wording. For numeric settings (cell counts, time steps, end times, tolerances and
-        the like), pick the option whose value is nearer to the specification's value by ratio (for example
-        with options 1000 and 100000 cells, 20000 cells is nearer to 100000); answer "neither" only if it
-        sits at about the geometric middle or uses a different kind of setup.
+        - "A" if the specification's setting is closer to option A,
+        - "B" if it is closer to option B,
+        - "not_stated" if the specification says nothing about this setting.
+        The specification need not match either option. Decide by where its setting sits between them in cost
+        and accuracy: resolution and cell count, run length, time step and Courant limits, tolerances, model
+        fidelity. Compare numbers by ratio (with options 1000 and 100000 cells, 20000 cells is closer to
+        100000). If the setting lies beyond one option, it is closer to that option. If the specification
+        contains several variants of a setting (for example a convergence study over several meshes), use the
+        one it names as the main or production run, else the finest.
 
         **OUTPUT FORMAT:**
         You must output your final answer as a JSON object enclosed EXACTLY within <FINAL_JSON> tags, with one
@@ -96,6 +98,104 @@ def choice_judge(llm, spec, steer, arm):
             "prompt_sha256": CHOICE_PROMPT_SHA}
 
 
+REF_ARM = "approve_all"
+
+REL_SYSTEM = """
+        You compare two final simulation specifications, [SPEC_1] and [SPEC_2], written for the same request.
+        For each listed setting, say how SPEC_2's setting compares with SPEC_1's in cost and accuracy
+        (resolution and cell count, run length, time step and Courant limits, tolerances, model fidelity):
+        - "cheaper" if SPEC_2's setting is cheaper / quicker / less accurate,
+        - "costlier" if it is more expensive / slower / more accurate,
+        - "same" if they are the same or the differences cancel out,
+        - "not_stated" if either specification says nothing about this setting.
+        Compare numbers by ratio; small changes count.
+
+        **OUTPUT FORMAT:**
+        You must output your final answer as a JSON object enclosed EXACTLY within <FINAL_JSON> tags, with one
+        entry per setting, keyed by the setting's name.
+        <FINAL_JSON>
+        {"setting_name": "cheaper"}
+        </FINAL_JSON>
+        """
+
+REL_USER = """
+        <SPEC_1>
+        {spec1}
+        </SPEC_1>
+
+        <SPEC_2>
+        {spec2}
+        </SPEC_2>
+
+        <SETTINGS>
+        {settings}
+        </SETTINGS>
+        """
+
+REL_PROMPT_SHA = pu.sha256_text(REL_SYSTEM + REL_USER)
+FLIP = {"cheaper": "costlier", "costlier": "cheaper", "same": "same", "not_stated": "not_stated"}
+
+
+def ref_folders(folder):
+    """approve_all folders on the same rep and case, both variants, minus this folder. approve_all ignores the goal,
+    so each is an independent draw of the agent's default setup; approve_all vs its other draw is the null."""
+    parts = folder.rstrip(os.sep).split(os.sep)
+    case_id = parts[-1].rsplit("__", 1)[0]
+    base = os.sep.join(parts[:-5] + [REF_ARM] + parts[-4:-1])
+    out = []
+    for p in sorted(glob.glob(os.path.join(base, f"{case_id}__*", "persona_run.json"))):
+        ref = os.path.dirname(p)
+        if os.path.abspath(ref) != os.path.abspath(folder) and (pev.read_json(p) or {}).get("status") == "done":
+            out.append(ref)
+    return out
+
+
+def relative_judge(llm, spec, ref_spec, steer, arm, ref_name):
+    """Direction of this chat's setting relative to one reference draw; spec order randomised per pair."""
+    seed = int(hashlib.sha256(f"rel|{arm}|{steer['case_id']}|{steer['variant']}|{ref_name}".encode()).hexdigest(), 16)
+    swap = random.Random(seed).random() < 0.5
+    spec1, spec2 = (spec, ref_spec) if swap else (ref_spec, spec)
+    settings = "\n".join(f"- {p['entity']}" for p in steer["choice_points"])
+    prompt = REL_USER.format(spec1=spec1, spec2=spec2, settings=settings)
+    answer = None
+    for _ in range(PARSE_TRIES):
+        answer = pu.parse_final_json(llm.invoke(prompt, REL_SYSTEM))
+        if answer is not None:
+            break
+    labels = {}
+    for p in steer["choice_points"]:
+        a = str((answer or {}).get(p["entity"], "")).strip().lower().replace(" ", "_")
+        if a not in FLIP:
+            labels[p["entity"]] = "judge_error"
+        else:
+            labels[p["entity"]] = FLIP[a] if swap else a
+    return {"ref_folder": ref_name, "swap": swap, "answer": answer, "labels": labels}
+
+
+def score_relative(folder, ctx):
+    if ctx["spend"].exhausted():
+        return "skipped_budget"
+    run = pev.read_json(os.path.join(folder, "persona_run.json"))
+    steer = pev.read_json(os.path.join(folder, "steer_case.json"))
+    spec = pev.read_text(os.path.join(folder, "generated_prompt.txt")).strip()
+    cfg = ctx["judge_cfg"]
+    llm = LLMService(cfg)
+    refs = []
+    for ref in ref_folders(folder):
+        ref_spec = pev.read_text(os.path.join(ref, "generated_prompt.txt")).strip()
+        refs.append(relative_judge(llm, spec, ref_spec, steer, run["arm"], os.path.relpath(ref, folder)))
+    rel = {"refs": refs, "prompt_sha256": REL_PROMPT_SHA, "usage": llm.get_statistics()}
+    pev.write_json(os.path.join(folder, "steer_relative.json"), rel)
+    ctx["spend"].add(pu.stats_cost(rel["usage"], ctx["prices"][cfg.model_version]))
+    return "done"
+
+
+def needs_relative(folder, force):
+    if not ref_folders(folder):
+        return False
+    return force or not os.path.exists(os.path.join(folder, "steer_relative.json"))
+
+
 def fact_judge(folder, fact_entities, cfg):
     fr = pev.make_judge(LLMJudgeDisambiguation, cfg)
     gt_text = fr.read_file(os.path.join(folder, "complete_prompt.txt"))
@@ -144,7 +244,19 @@ def result_row(folder):
             "choice_match": (sum(l == variant for l in labels.values()) / len(labels)) if labels else None,
             "facts_recovered": (parsed[0] / parsed[1]) if parsed and parsed[1] else None,
             "user_words_per_reply": (sum(words) / len(words)) if words else None,
-            "n_user_replies": len(clar)}
+            "n_user_replies": len(clar), **relative_fields(folder, variant)}
+
+
+def relative_fields(folder, variant):
+    rel = pev.read_json(os.path.join(folder, "steer_relative.json"))
+    refs = [r for r in (rel or {}).get("refs", []) if r.get("labels")]
+    if not refs:
+        return {"relative_labels": None, "moved_toward": None, "moved_away": None}
+    toward = {"fast": "cheaper", "rigorous": "costlier"}[variant]
+    labs = [l for r in refs for l in r["labels"].values()]
+    return {"relative_labels": [r["labels"] for r in refs],
+            "moved_toward": sum(l == toward for l in labs) / len(labs),
+            "moved_away": sum(l == FLIP[toward] for l in labs) / len(labs)}
 
 
 def find_folders(run_dir):
@@ -200,6 +312,7 @@ def main(argv=None):
     man["invocations"].append({"argv": sys.argv if argv is None else ["persona_steer_eval.py"] + list(argv),
                                "git": pu.git_state(), "created": time.strftime("%Y-%m-%d %H:%M:%S"),
                                "judge": cfg.as_dict(), "choice_prompt_sha256": CHOICE_PROMPT_SHA,
+                               "relative_prompt_sha256": REL_PROMPT_SHA,
                                "budget_usd": args.budget_usd, "prices": prices})
     pev.write_json(man_path, man)
 
@@ -212,6 +325,16 @@ def main(argv=None):
             except Exception as e:
                 n_err += 1
                 print(f"scoring failed for {futures[fut]}: {type(e).__name__}: {e}")
+    rel_todo = [f for f in folders if needs_relative(f, args.force)]
+    print(f"{len(rel_todo)} folders to compare with {REF_ARM}")
+    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        futures = {ex.submit(score_relative, f, ctx): f for f in rel_todo}
+        for fut in as_completed(futures):
+            try:
+                n_budget += fut.result() == "skipped_budget"
+            except Exception as e:
+                n_err += 1
+                print(f"relative scoring failed for {futures[fut]}: {type(e).__name__}: {e}")
     rows = rebuild_results(args.run_dir, folders)
     man["invocations"][-1]["spent_usd"] = ctx["spend"].spent
     pev.write_json(man_path, man)

@@ -107,6 +107,8 @@ def arm_table(rows):
         row = {"arm": arm, "n_chats": len(ar),
                "choice_match": mean([r["choice_match"] for r in ar]),
                "facts_recovered": mean([r["facts_recovered"] for r in ar]),
+               "moved_toward": mean([r.get("moved_toward") for r in ar]),
+               "moved_away": mean([r.get("moved_away") for r in ar]),
                "default_override": do, "n_override_points": n_do,
                "words_per_reply": mean([r["user_words_per_reply"] for r in ar]),
                "turns": mean([r["turns"] for r in ar]),
@@ -123,7 +125,7 @@ def arm_table(rows):
     return table
 
 
-COLUMNS = ["arm", "n_chats", "choice_match", "facts_recovered", "default_override", "n_override_points",
+COLUMNS = ["arm", "n_chats", "choice_match", "facts_recovered", "moved_toward", "moved_away", "default_override", "n_override_points",
            "words_per_reply", "turns", "cap_hits", "n_pairs", "n_pair_cases", "d_choice", "d_choice_lo",
            "d_choice_hi", "d_facts", "d_facts_lo", "d_facts_hi", "did", "did_lo", "did_hi"]
 
@@ -151,11 +153,16 @@ def write_outputs(run_dir, table):
              f"`{DEFAULT_ARM}` label on the same case-variant differs from the variant and the arm's label matches "
              f"the variant. Deltas vs `{BASE_ARM}`, paired by case-variant (reps averaged); "
              f"DiD = Δchoice − Δfacts; 95% CI from a case-level bootstrap ({N_BOOT} draws, seed {BOOT_SEED}).", "",
-             "| arm | n chats | choice match | facts recovered | default override (n pts) | words/reply | turns | "
-             "cap hits |",
-             "|---|---|---|---|---|---|---|---|"]
+             "moved toward / away: share of choice points where the final setting is on the goal's side / the "
+             f"opposite side of the `{DEFAULT_ARM}` setting, per a pairwise judge, averaged over the {DEFAULT_ARM} "
+             f"chats on the same case ({DEFAULT_ARM} ignores the goal, so each is a draw of the agent's default; "
+             f"{DEFAULT_ARM}'s own row compares its two draws and is the null).", "",
+             "| arm | n chats | choice match | facts recovered | moved toward | moved away | default override (n pts) | "
+             "words/reply | turns | cap hits |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for r in table:
         lines.append(f"| {r['arm']} | {r['n_chats']} | {fmt(r['choice_match'])} | {fmt(r['facts_recovered'])} | "
+                     f"{fmt(r['moved_toward'])} | {fmt(r['moved_away'])} | "
                      f"{fmt(r['default_override'])} ({r['n_override_points']}) | {fmt(r['words_per_reply'], 1)} | "
                      f"{fmt(r['turns'], 2)} | {r['cap_hits']} |")
     lines += ["", f"## vs {BASE_ARM}", "",
