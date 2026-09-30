@@ -23,7 +23,9 @@ PRECEDENCE = ("The persona below describes how you talk and behave in this conve
               "every value you give must come from the COMPLETE requirement, and you do not give information "
               "that was not asked for unless the persona explicitly tells you to.")
 MUTE_REPLY = "Make a reasonable assumption based on best practices."
+APPROVE_REPLY = "That looks fine to me. Go ahead, and make reasonable assumptions for anything else."
 DETERMINISTIC_ARMS = ("oracle", "mute")
+STEER_DETERMINISTIC_ARMS = ("approve_all", "oracle_criteria")
 MODE_LABEL = {"disambiguation": "Disambiguation", "inconsistency": "Inconsistency"}
 ITEMS_KEY = {"disambiguation": "missing_entities", "inconsistency": "inconsistencies"}
 
@@ -164,6 +166,12 @@ class MuteUser(ScriptedUser):
 
 
 @dataclass
+class ApproveAllUser(ScriptedUser):
+    def reply(self, question: str) -> str:
+        return APPROVE_REPLY
+
+
+@dataclass
 class BusyUser(LLMUserInterface):
     """Defers questions 1, 3, 5, ... with a fixed reply and no LLM call; the rest go to the LLM."""
     defer_reply: str = ""
@@ -203,6 +211,7 @@ class BigFiveUser(LLMUserInterface):
     persona: dict = field(default_factory=dict)
     shared: dict = field(default_factory=dict)
     truth_retries: int = 0
+    goal: Optional[str] = None
 
     def __post_init__(self):
         super().__post_init__()
@@ -217,8 +226,12 @@ class BigFiveUser(LLMUserInterface):
         sh, p = self.shared, self.persona
         # the user sees its own opening request, as in a real chat window; without it the sim accuses the agent
         # of ignoring facts that were never sent (stage-1 smoke, bf_low_A)
+        goal = [] if self.goal is None else [
+            "What you need from this run, in your own words. Your notes do not fix these settings, you have no values "
+            "in mind for them, and you don't know which settings achieve it; judge the assistant's proposals by "
+            f"whether they fit this:\n<goal>\n{self.goal}\n</goal>"]
         return "\n\n".join([sh["identity"], p["sheet"], sh["situation"], p["appraisal"], sh["notes_intro"],
-                             f"<notes>\n{self.complete_requirement}\n</notes>", sh["request_intro"],
+                             f"<notes>\n{self.complete_requirement}\n</notes>"] + goal + [sh["request_intro"],
                              f"<your_request>\n{self.incomplete_requirement}\n</your_request>", sh["rules"]]
                             + ([sh["examples_intro"]] if p.get("examples") else []))
 
@@ -296,7 +309,8 @@ class BigFiveUser(LLMUserInterface):
 
 def make_user(arm: str, llm_service, incomplete_requirement: str, complete_requirement: str,
               log_file: str, cards: Optional[List[dict]] = None,
-              personas: Optional[Dict[str, dict]] = None, bigfive: Optional[dict] = None) -> LLMUserInterface:
+              personas: Optional[Dict[str, dict]] = None, bigfive: Optional[dict] = None,
+              goal: Optional[str] = None) -> LLMUserInterface:
     common = dict(incomplete_requirement=incomplete_requirement,
                   complete_requirement=complete_requirement, log_file=log_file)
     if arm == "oracle":
@@ -305,10 +319,12 @@ def make_user(arm: str, llm_service, incomplete_requirement: str, complete_requi
         return OracleUser(llm_service=None, cards=cards, **common)
     if arm == "mute":
         return MuteUser(llm_service=None, **common)
+    if arm in STEER_DETERMINISTIC_ARMS:
+        return ApproveAllUser(llm_service=None, **common)
     bigfive = bigfive or load_bigfive()
     if arm in bigfive["personas"]:
         return BigFiveUser(llm_service=llm_service, persona=bigfive["personas"][arm], shared=bigfive["shared"],
-                           **common)
+                           goal=goal, **common)
     personas = personas or load_personas()
     common.update(llm_service=llm_service, persona_text=persona_text_for_arm(arm, personas),
                   turn_note=turn_note_for_arm(arm, personas))

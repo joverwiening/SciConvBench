@@ -30,6 +30,17 @@ def case_dir(out, arm, rep, domain, agent_profile, mode, case_id):
                         f"{agent_profile}_{pu.MODE_LABEL[mode]}", case_id)
 
 
+def job_dir(args, agent_profile, job):
+    folder_id = job[2] if len(job) == 3 else f"{job[2]}__{job[3]}"
+    return case_dir(args.out, job[0], job[1], args.domain, agent_profile, args.mode, folder_id)
+
+
+def agent_prompt_mode(args):
+    if getattr(args, "steer_cards", None):
+        return "propose"
+    return "baseline" if args.baseline else None
+
+
 def user_prompt_template_sha() -> str:
     src = "".join(inspect.getsource(getattr(LLMUserInterface, name))
                   for name in ("get_full_context", "build_system_prompt", "answer_clarification_question"))
@@ -53,8 +64,7 @@ def persona_hashes(personas, bigfive):
 
 
 def build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, prices):
-    prompt_mode = "baseline" if args.baseline else None
-    agent_prompt = ConvAgent(agent_cfg, prompt_mode).system_prompt
+    agent_prompt = ConvAgent(agent_cfg, agent_prompt_mode(args)).system_prompt
     return {
         "git": pu.git_state(),
         "argv": sys.argv if args._argv is None else ["persona_runner.py"] + list(args._argv),
@@ -69,6 +79,7 @@ def build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, pri
             "personas": persona_hashes(personas, bigfive),
         },
         "cards": {f"{args.domain}/{args.mode}": cards_entry(cards_path)},
+        **({"steer_cards": cards_entry(args.steer_cards)} if getattr(args, "steer_cards", None) else {}),
         "prices": prices,
     }
 
@@ -106,11 +117,17 @@ def check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path, big
     old_cards, new_cards = old.get("cards", {}).get(key), new["cards"][key]
     if old_cards and new_cards and old_cards["sha256"] != new_cards["sha256"]:
         diffs.append(f"cards {key}")
+    old_steer, new_steer = old.get("steer_cards"), new.get("steer_cards")
+    if old_steer and new_steer and old_steer["sha256"] != new_steer["sha256"]:
+        diffs.append("steer_cards")
     if diffs and not args.force:
         sys.exit(f"{path} differs from this invocation in: {', '.join(diffs)}. Use a new --out or --force.")
     changed = False
     if new_cards and not old_cards:
         old.setdefault("cards", {})[key] = new_cards
+        changed = True
+    if new_steer and not old_steer:
+        old["steer_cards"] = new_steer
         changed = True
     if new_user and not old_user:
         old["roles"]["user"] = new_user
@@ -123,13 +140,22 @@ def check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path, big
 
 
 def run_job(job, ctx):
-    arm, rep, case_id = job
+    arm, rep, case_id = job[:3]
+    variant = job[3] if len(job) > 3 else None
     args = ctx["args"]
     case = ctx["cases"][case_id]
     keys = test_runner.TASK_CONFIG[args.mode]["keys"]
     incomplete_req = case.get(keys["input_prompt"], "")
     complete_req = case.get(keys["ground_truth"], "")
-    folder = case_dir(args.out, arm, rep, args.domain, ctx["agent_cfg"].profile, args.mode, case_id)
+    steer = ctx["steer"]["cases"][case_id] if variant is not None else None
+    user_complete_req, goal, first_input = complete_req, None, incomplete_req
+    if steer is not None:
+        goal = steer["goals"][variant]
+        if arm == "oracle_criteria":
+            first_input = incomplete_req + "\n\nWhat I need from this run: " + goal
+        elif arm not in pu.STEER_DETERMINISTIC_ARMS:
+            user_complete_req = steer["notes_without_choices"]
+    folder = job_dir(args, ctx["agent_cfg"].profile, job)
     os.makedirs(folder, exist_ok=True)
     run_path = os.path.join(folder, "persona_run.json")
     prev = None
@@ -143,6 +169,8 @@ def run_job(job, ctx):
         rec = {"arm": arm, "rep": rep, "case_id": case_id, "domain": args.domain, "mode": args.mode,
                "status": "skipped_budget", "attempts": prev_attempts, "error": None,
                "finished": time.strftime("%Y-%m-%d %H:%M:%S")}
+        if steer is not None:
+            rec["variant"] = variant
         if prev is None:
             with open(run_path, "w") as f:
                 json.dump(rec, f, indent=2)
@@ -155,15 +183,22 @@ def run_job(job, ctx):
         os.remove(result_file)
     with open(os.path.join(folder, "complete_prompt.txt"), "w") as f:
         f.write(complete_req)
+    if steer is not None:
+        with open(os.path.join(folder, "steer_case.json"), "w") as f:
+            json.dump({"case_id": case_id, "variant": variant, "goal": goal,
+                       "choice_points": [{"entity": c["entity"], "fast": c["fast"], "rigorous": c["rigorous"],
+                                          "target": c[variant]} for c in steer["choice_points"]],
+                       "fact_entities": steer["fact_entities"]}, f, indent=2)
 
     bf_persona = ctx["bigfive"]["personas"].get(arm)
-    if arm in pu.DETERMINISTIC_ARMS:
+    deterministic = arm in pu.DETERMINISTIC_ARMS or arm in pu.STEER_DETERMINISTIC_ARMS
+    if deterministic:
         persona_text = None
     elif bf_persona is not None:
         persona_text = pu.bigfive_persona_text(bf_persona)
     else:
         persona_text = pu.persona_text_for_arm(arm, ctx["personas"])
-    user_cfg = None if arm in pu.DETERMINISTIC_ARMS else ctx["user_cfg"]
+    user_cfg = None if deterministic else ctx["user_cfg"]
     trait = pu.bigfive_target(arm, ctx["bigfive"]) if bf_persona is not None else \
         (arm if arm in ctx["traits"] else None)
     record = {
@@ -179,16 +214,18 @@ def run_job(job, ctx):
         "started": time.strftime("%Y-%m-%d %H:%M:%S"), "finished": None,
         "usage": {"agent": None, "user": None},
     }
+    if steer is not None:
+        record["variant"] = variant
     agent, user_llm, user = None, None, None
     try:
-        agent = ConvAgent(ctx["agent_cfg"], "baseline" if args.baseline else None)
+        agent = ConvAgent(ctx["agent_cfg"], agent_prompt_mode(args))
         user_llm = LLMService(user_cfg) if user_cfg else None
         cards = None
         if ctx["cards"] is not None:
             cards = ctx["cards"]["cases"].get(case_id, {}).get("cards")
-        user = pu.make_user(arm, user_llm, incomplete_req, complete_req, log_file,
-                            cards=cards, personas=ctx["personas"], bigfive=ctx["bigfive"])
-        result = test_runner.run_dialogue(agent, user, incomplete_req, args.max_turns, final_fix=True)
+        user = pu.make_user(arm, user_llm, incomplete_req, user_complete_req, log_file,
+                            cards=cards, personas=ctx["personas"], bigfive=ctx["bigfive"], goal=goal)
+        result = test_runner.run_dialogue(agent, user, first_input, args.max_turns, final_fix=True)
         record.update(turns=result.turns, cap_hit=result.cap_hit,
                       completed_by_agent=result.completed_by_agent, error=result.error,
                       final_attempts=result.final_attempts, final_valid=result.final_valid)
@@ -246,17 +283,22 @@ def main(argv=None):
     parser.add_argument("--force", action="store_true", help="Continue despite a manifest mismatch")
     parser.add_argument("--budget_usd", type=float, required=True,
                         help="Spend cap for this invocation; no new job starts once it is reached")
+    parser.add_argument("--steer_cards", default=None,
+                        help="Steer-card file: propose-mode agent, goal-card users, one job per case x variant")
     args = parser.parse_args(argv)
     args._argv = argv
 
     personas = pu.load_personas()
     bigfive = pu.load_bigfive()
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
-    valid = pu.valid_arms(personas, bigfive)
+    if args.steer_cards:
+        valid = list(pu.STEER_DETERMINISTIC_ARMS) + [a for a in bigfive["personas"] if a.startswith("bf_")]
+    else:
+        valid = pu.valid_arms(personas, bigfive)
     bad = [a for a in arms if a not in valid]
     if bad:
         sys.exit(f"Unknown arms {bad}; valid: {valid}")
-    needs_user = any(a not in pu.DETERMINISTIC_ARMS for a in arms)
+    needs_user = any(a not in pu.DETERMINISTIC_ARMS and a not in pu.STEER_DETERMINISTIC_ARMS for a in arms)
     if needs_user and not args.user_model:
         sys.exit("--user_model is required for LLM-user arms")
 
@@ -265,6 +307,14 @@ def main(argv=None):
     missing = [c for c in case_ids if c not in cases]
     if missing:
         sys.exit(f"Unknown case ids for {args.domain}/{args.mode}: {missing}")
+    steer = None
+    if args.steer_cards:
+        with open(args.steer_cards) as f:
+            steer = json.load(f)
+        not_ok = [c for c in case_ids if (steer["cases"].get(c) or {}).get("status") != "ok"]
+        if not_ok:
+            print(f"Skipping cases without an ok steer card: {not_ok}")
+        case_ids = [c for c in case_ids if c not in not_ok]
 
     cards_path = args.cards or pu.default_cards_path(args.domain, args.mode)
     cards = load_cards(cards_path)
@@ -282,12 +332,15 @@ def main(argv=None):
     pu.require_prices(prices, models)
     check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path if cards else None, bigfive, prices)
 
-    jobs = [(arm, rep, cid) for arm in arms for rep in range(1, args.reps + 1) for cid in case_ids]
+    if steer is None:
+        jobs = [(arm, rep, cid) for arm in arms for rep in range(1, args.reps + 1) for cid in case_ids]
+    else:
+        jobs = [(arm, rep, cid, var) for arm in arms for rep in range(1, args.reps + 1) for cid in case_ids
+                for var in steer["cases"][cid]["goals"]]
     random.Random(JOB_SEED).shuffle(jobs)
     todo, skipped, capped = [], 0, []
     for job in jobs:
-        run_path = os.path.join(case_dir(args.out, job[0], job[1], args.domain, agent_cfg.profile,
-                                         args.mode, job[2]), "persona_run.json")
+        run_path = os.path.join(job_dir(args, agent_cfg.profile, job), "persona_run.json")
         if os.path.exists(run_path):
             with open(run_path) as f:
                 old = json.load(f)
@@ -301,7 +354,7 @@ def main(argv=None):
     print(f"{len(jobs)} jobs: {skipped} done, {len(capped)} capped, {len(todo)} to run")
 
     spend = pu.SpendTracker(args.budget_usd)
-    ctx = {"args": args, "cases": cases, "cards": cards, "personas": personas, "bigfive": bigfive,
+    ctx = {"args": args, "cases": cases, "cards": cards, "steer": steer, "personas": personas, "bigfive": bigfive,
            "traits": set(pu.trait_ids(personas)), "agent_cfg": agent_cfg, "user_cfg": user_cfg,
            "prices": prices, "spend": spend}
     n_done = n_err = n_budget = 0
