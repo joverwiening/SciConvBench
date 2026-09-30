@@ -128,7 +128,10 @@ def valid_arms(personas: Dict[str, dict], bigfive: Optional[dict] = None) -> Lis
     clash = sorted(set(old) & set(bf))
     if clash:
         raise ValueError(f"Big Five persona ids collide with existing arms: {clash}")
-    return old + bf
+    clash = sorted(set(old + bf) & set(RESTYLE_ARMS))
+    if clash:
+        raise ValueError(f"Restyle arm ids collide with existing arms: {clash}")
+    return old + bf + list(RESTYLE_ARMS)
 
 
 @dataclass
@@ -294,6 +297,136 @@ class BigFiveUser(LLMUserInterface):
             return USER_FAILURE_REPLY
 
 
+RESTYLE_ARMS = {"rs_para": "para", "rs_lowA": "lowA"}
+RESTYLE_BASE_ARM = "bf_neutral"
+RESTYLE_TURN_USER = """
+The scientist's original request to the assistant:
+<request>
+{request}
+</request>
+
+The conversation so far, as the assistant saw it. Q is the assistant's message, A is the scientist's reply as the assistant received it:
+<conversation>
+{conversation}
+</conversation>
+
+The assistant's new message:
+<question>
+{question}
+</question>
+
+The scientist's original reply to it, which you rewrite:
+<reply>
+{reply}
+</reply>
+
+Style:
+{style}
+
+{rules}
+
+Output only a JSON object {{"reply": "..."}}
+"""
+RESTYLE_RETRY = "\nYour previous rewrite had these problems. Fix them and follow every rule:\n"
+
+
+def restyle_persona_text(arm: str, bigfive: Optional[dict] = None) -> str:
+    base = (bigfive or load_bigfive())["personas"][RESTYLE_BASE_ARM]
+    return bigfive_persona_text(base) + "\n\n[restyle:" + RESTYLE_ARMS[arm] + "]"
+
+
+@dataclass
+class RestyledUser(LLMUserInterface):
+    """bf_neutral sim whose every reply is rewritten in a style (facts fixed) before the agent sees it. The inner
+    sim keeps its original replies as memory and logs them to conversation_log_original.txt; this object's
+    clarifications and log_file hold the restyled replies. A reply failing the checks twice is sent unrestyled."""
+    persona: dict = field(default_factory=dict)
+    shared: dict = field(default_factory=dict)
+    style: str = ""
+    style_text: str = ""
+
+    def __post_init__(self):
+        super().__post_init__()
+        folder = os.path.dirname(self.log_file)
+        original_log = os.path.join(folder, "conversation_log_original.txt")
+        self.restyle_file = os.path.join(folder, "restyle_log.jsonl")
+        # one user instance = one dialogue; a rerun must not append to a failed attempt's files
+        for path in (original_log, self.restyle_file):
+            open(path, "w").close()
+        self.inner = BigFiveUser(llm_service=self.llm_service, incomplete_requirement=self.incomplete_requirement,
+                                 complete_requirement=self.complete_requirement, log_file=original_log,
+                                 persona=self.persona, shared=self.shared)
+        self.fallbacks = 0
+
+    @property
+    def truth_retries(self) -> int:
+        return self.inner.truth_retries
+
+    def restyle_prompt(self, question: str, original: str) -> str:
+        import persona_tone_replay as ptr
+        conv = []
+        for i, c in enumerate(self.clarifications, 1):
+            conv += [f"[{i}] Q: {c['question']}", f"[{i}] A: {c['answer']}"]
+        return RESTYLE_TURN_USER.format(request=self.incomplete_requirement,
+                                        conversation="\n".join(conv) or "(none yet)", question=question,
+                                        reply=original, style=self.style_text, rules=ptr.REWRITE_RULES)
+
+    @staticmethod
+    def parse_reply(raw: Optional[str]) -> Optional[str]:
+        reply = (parse_final_json(raw or "") or {}).get("reply")
+        return reply if isinstance(reply, str) and reply.strip() else None
+
+    def answer_clarification_question(self, question: str) -> str:
+        import persona_tone_replay as ptr
+        n_before = len(self.inner.clarifications)
+        original = self.inner.answer_clarification_question(question)
+        self._log_qa(question, "Thinking...")
+        row = {"turn": len(self.clarifications) + 1, "question": question, "original": original}
+        if len(self.inner.clarifications) == n_before:
+            # inner LLM call failed: canned reply, no memory entry; same records as a plain BigFiveUser
+            with open(self.restyle_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(dict(row, restyled=None, attempts=0, fallback=False, inner_failed=True),
+                                   ensure_ascii=False) + "\n")
+            return original
+        svc = self.llm_service
+        keys = ("api_input_tokens", "api_output_tokens", "api_reasoning_chars")
+        before = [getattr(svc, k, 0) for k in keys]
+        prompt = self.restyle_prompt(question, original)
+        fails, new, check, attempts = [], None, {}, 0
+        for attempts in (1, 2):
+            p = prompt if attempts == 1 else prompt + RESTYLE_RETRY + "\n".join(f"- {x}" for x in fails) + "\n"
+            try:
+                new = self.parse_reply(svc.invoke(p, ptr.REWRITE_SYSTEM))
+                replies = None if new is None else [new]
+                check = ptr.check_replies(svc, [original], replies)[0]
+                fails = ptr.failures([check], replies)
+            except Exception as e:
+                new, check = None, {"code_ok": False, "missing": [], "added": [], "judge_same": False,
+                                    "judge_diff": f"error: {type(e).__name__}: {e}"}
+                fails = [f"Reply 1: {check['judge_diff']}"]
+            if not fails:
+                break
+        fallback = bool(fails)
+        self.fallbacks += fallback
+        answer = original if fallback else new
+        self.clarifications.append({
+            "question": question,
+            "answer": answer,
+            "timestamp": time.time(),
+            "deferred": False
+        })
+        self._update_last_log_entry(answer)
+        after = [getattr(svc, k, 0) for k in keys]
+        row.update(restyled=new, attempts=attempts, code_ok=check.get("code_ok"), missing=check.get("missing"),
+                   added=check.get("added"), judge_same=check.get("judge_same"),
+                   judge_diff=check.get("judge_diff"), fallback=fallback, inner_failed=False,
+                   usage={"input_tokens": after[0] - before[0], "output_tokens": after[1] - before[1]},
+                   reasoning_chars=after[2] - before[2])
+        with open(self.restyle_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return answer
+
+
 def make_user(arm: str, llm_service, incomplete_requirement: str, complete_requirement: str,
               log_file: str, cards: Optional[List[dict]] = None,
               personas: Optional[Dict[str, dict]] = None, bigfive: Optional[dict] = None) -> LLMUserInterface:
@@ -306,6 +439,12 @@ def make_user(arm: str, llm_service, incomplete_requirement: str, complete_requi
     if arm == "mute":
         return MuteUser(llm_service=None, **common)
     bigfive = bigfive or load_bigfive()
+    if arm in RESTYLE_ARMS:
+        import persona_tone_replay as ptr
+        style = RESTYLE_ARMS[arm]
+        return RestyledUser(llm_service=llm_service, persona=bigfive["personas"][RESTYLE_BASE_ARM],
+                            shared=bigfive["shared"], style=style, style_text=ptr.style_text(style, bigfive),
+                            **common)
     if arm in bigfive["personas"]:
         return BigFiveUser(llm_service=llm_service, persona=bigfive["personas"][arm], shared=bigfive["shared"],
                            **common)

@@ -13,6 +13,7 @@ from utils import LLMService
 from llm_user_interface import LLMUserInterface
 import test_runner
 import persona_users as pu
+import persona_tone_replay as ptr
 
 JOB_SEED = 0
 MAX_ATTEMPTS = 3  # PERSONA_PREREG.md, Sample: errored jobs are rerun up to twice
@@ -38,6 +39,15 @@ def user_prompt_template_sha() -> str:
     return pu.sha256_text(src)
 
 
+def restyle_sha(bigfive) -> str:
+    src = inspect.getsource(pu.RestyledUser) + pu.RESTYLE_TURN_USER + pu.RESTYLE_RETRY
+    src += "".join(inspect.getsource(f) for f in (ptr.fact_check, ptr.tech_tokens, ptr.check_replies,
+                                                  ptr.equiv_judge, ptr.failures))
+    src += ptr.REWRITE_SYSTEM + ptr.REWRITE_RULES + ptr.PARA_STYLE + ptr.EQUIV_SYSTEM + ptr.EQUIV_USER
+    src += ptr.lowa_style(bigfive)
+    return pu.sha256_text(src)
+
+
 def load_cards(path):
     if not path or not os.path.exists(path):
         return None
@@ -49,6 +59,7 @@ def persona_hashes(personas, bigfive):
     out = {pid: pu.sha256_file(p["path"]) for pid, p in personas.items()}
     out["bigfive/shared"] = pu.sha256_file(bigfive["shared_path"])
     out.update({pid: pu.sha256_file(p["path"]) for pid, p in bigfive["personas"].items()})
+    out.update({arm: pu.sha256_text(pu.restyle_persona_text(arm, bigfive)) for arm in pu.RESTYLE_ARMS})
     return out
 
 
@@ -67,6 +78,7 @@ def build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, pri
             "agent_system_prompt": pu.sha256_text(agent_prompt),
             "user_prompt_template": user_prompt_template_sha(),
             "personas": persona_hashes(personas, bigfive),
+            "restyle": restyle_sha(bigfive),
         },
         "cards": {f"{args.domain}/{args.mode}": cards_entry(cards_path)},
         "prices": prices,
@@ -100,7 +112,7 @@ def check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path, big
     for k in ("baseline", "max_turns", "final_fix"):
         if old.get(k) != new.get(k):
             diffs.append(k)
-    for k in ("agent_system_prompt", "user_prompt_template", "personas"):
+    for k in ("agent_system_prompt", "user_prompt_template", "personas", "restyle"):
         if old["sha256"].get(k) != new["sha256"].get(k):
             diffs.append(k)
     old_cards, new_cards = old.get("cards", {}).get(key), new["cards"][key]
@@ -159,6 +171,8 @@ def run_job(job, ctx):
     bf_persona = ctx["bigfive"]["personas"].get(arm)
     if arm in pu.DETERMINISTIC_ARMS:
         persona_text = None
+    elif arm in pu.RESTYLE_ARMS:
+        persona_text = pu.restyle_persona_text(arm, ctx["bigfive"])
     elif bf_persona is not None:
         persona_text = pu.bigfive_persona_text(bf_persona)
     else:
