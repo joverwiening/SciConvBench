@@ -17,6 +17,10 @@ from llm_user_interface import LLMUserInterface
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 PERSONA_DIR = os.path.join(REPO_DIR, "persona", "personas")
 BIGFIVE_DIR = os.path.join(REPO_DIR, "persona", "bigfive")
+MX_DIR = os.path.join(REPO_DIR, "persona", "matraix")
+MX_IDENTITY = ("You are the person described below. You sent an AI assistant a short request to set up a simulation "
+               "you need, and it is now messaging you while it prepares the setup.")
+MX_REMINDER = "(Stay in character as the person described in your instructions.)"
 
 PRECEDENCE = ("The persona below describes how you talk and behave in this conversation. "
               "Where it conflicts with the style instructions above, follow the persona, with two limits: "
@@ -112,6 +116,21 @@ def load_bigfive(bigfive_dir: str = BIGFIVE_DIR) -> dict:
             "personas": personas}
 
 
+def load_matraix(mx_dir: str = MX_DIR) -> dict:
+    personas_dir = os.path.join(mx_dir, "personas")
+    personas = {}
+    for name in sorted(os.listdir(personas_dir)):
+        if name.endswith(".txt"):
+            pid = "mx_" + name[:-len(".txt")]
+            with open(os.path.join(personas_dir, name), encoding="utf-8") as f:
+                block = f.read()
+            personas[pid] = {"id": pid, "kind": "trait", "block": block, "reminder": MX_REMINDER, "examples": [],
+                             "path": os.path.join(personas_dir, name)}
+    with open(os.path.join(mx_dir, "selection.json")) as f:
+        selected = ["mx_" + c for c in json.load(f)["selected"]]
+    return {"personas": personas, "selected": selected}
+
+
 def bigfive_persona_text(p: dict) -> str:
     return "\n\n".join([p["sheet"], p["appraisal"], p["reminder"]] + [e["a"] for e in p.get("examples") or []])
 
@@ -122,13 +141,18 @@ def bigfive_target(arm: str, bigfive: Optional[dict] = None) -> Optional[str]:
     return p["target"] if p and p["kind"] == "trait" else None
 
 
-def valid_arms(personas: Dict[str, dict], bigfive: Optional[dict] = None) -> List[str]:
+def valid_arms(personas: Dict[str, dict], bigfive: Optional[dict] = None,
+               matraix: Optional[dict] = None) -> List[str]:
     old = ["paper", "neutral"] + placebo_ids(personas) + trait_ids(personas) + list(DETERMINISTIC_ARMS)
     bf = list((bigfive or load_bigfive())["personas"])
     clash = sorted(set(old) & set(bf))
     if clash:
         raise ValueError(f"Big Five persona ids collide with existing arms: {clash}")
-    return old + bf
+    mx = list((matraix or load_matraix())["personas"])
+    clash = sorted(set(old + bf) & set(mx))
+    if clash:
+        raise ValueError(f"MatrAIx persona ids collide with existing arms: {clash}")
+    return old + bf + mx
 
 
 @dataclass
@@ -294,9 +318,21 @@ class BigFiveUser(LLMUserInterface):
             return USER_FAILURE_REPLY
 
 
+@dataclass
+class MatrAIxUser(BigFiveUser):
+    """BigFiveUser with a MatrAIx persona block in place of Sam Keller's identity, sheet and appraisal."""
+
+    def build_system_prompt(self) -> str:
+        sh = self.shared
+        return "\n\n".join([MX_IDENTITY, self.persona["block"], sh["situation"], sh["notes_intro"],
+                             f"<notes>\n{self.complete_requirement}\n</notes>", sh["request_intro"],
+                             f"<your_request>\n{self.incomplete_requirement}\n</your_request>", sh["rules"]])
+
+
 def make_user(arm: str, llm_service, incomplete_requirement: str, complete_requirement: str,
               log_file: str, cards: Optional[List[dict]] = None,
-              personas: Optional[Dict[str, dict]] = None, bigfive: Optional[dict] = None) -> LLMUserInterface:
+              personas: Optional[Dict[str, dict]] = None, bigfive: Optional[dict] = None,
+              matraix: Optional[dict] = None) -> LLMUserInterface:
     common = dict(incomplete_requirement=incomplete_requirement,
                   complete_requirement=complete_requirement, log_file=log_file)
     if arm == "oracle":
@@ -308,6 +344,10 @@ def make_user(arm: str, llm_service, incomplete_requirement: str, complete_requi
     bigfive = bigfive or load_bigfive()
     if arm in bigfive["personas"]:
         return BigFiveUser(llm_service=llm_service, persona=bigfive["personas"][arm], shared=bigfive["shared"],
+                           **common)
+    if arm.startswith("mx_"):
+        matraix = matraix or load_matraix()
+        return MatrAIxUser(llm_service=llm_service, persona=matraix["personas"][arm], shared=bigfive["shared"],
                            **common)
     personas = personas or load_personas()
     common.update(llm_service=llm_service, persona_text=persona_text_for_arm(arm, personas),

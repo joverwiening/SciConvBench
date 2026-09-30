@@ -333,7 +333,8 @@ class TestRunnerAndEval(unittest.TestCase):
         self.assertEqual(m["roles"]["user"]["model_version"], "anthropic/claude-sonnet-4.6")
         self.assertIn("agent_system_prompt", m["sha256"])
         self.assertEqual(set(m["sha256"]["personas"]),
-                         set(pu.load_personas()) | set(pu.load_bigfive()["personas"]) | {"bigfive/shared"})
+                         set(pu.load_personas()) | set(pu.load_bigfive()["personas"]) | {"bigfive/shared"}
+                         | set(pu.load_matraix()["personas"]))
         self.assertEqual(m["cards"][f"{DOMAIN}/{MODE}"]["sha256"], pu.sha256_file(self.cards))
 
     def test_b_resume_skips_done(self):

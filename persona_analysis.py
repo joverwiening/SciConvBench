@@ -31,7 +31,8 @@ PERSONAS = pu.load_personas()
 PLACEBO_ARMS = tuple(pu.placebo_ids(PERSONAS))
 HOLM_FAMILY = tuple(sorted(pid for pid, p in PERSONAS.items() if p["kind"] in ("style", "policy")))
 ENFORCED_ARMS = tuple(sorted(pid for pid, p in PERSONAS.items() if p.get("enforced") == "code"))
-FAMILIES = ("old", "bigfive")
+FAMILIES = ("old", "bigfive", "matraix")
+MX_NO_GATE = "No gate for MatrAIx personas: counts is decided on Holm alone."
 MAX_ATTEMPTS = 3
 EFFECT_COLS = ["arm", "metric", "n_cases", "effect", "ci_lo", "ci_hi", "p", "p_holm", "abs_lo", "beats_placebo"]
 # PERSONA_PREREG.md, Analysis 2-3: a trait counts only if Holm, placebo and manipulation check all pass
@@ -136,6 +137,11 @@ def family_arms(family):
         assert len(ref) == 1, f"Big Five family needs exactly one neutral persona, found {ref}"
         traits = tuple(sorted(pid for pid, p in bf.items() if p["kind"] == "trait"))
         return {"ref": ref[0], "placebos": tuple(sorted(pid for pid, p in bf.items() if p["kind"] == "placebo")),
+                "traits": traits, "holm": traits}
+    if family == "matraix":
+        bf = pu.load_bigfive()["personas"]
+        traits = tuple(sorted(pu.load_matraix()["selected"]))
+        return {"ref": "bf_neutral", "placebos": tuple(sorted(pid for pid, p in bf.items() if p["kind"] == "placebo")),
                 "traits": traits, "holm": traits}
     raise ValueError(f"unknown family {family!r}")
 
@@ -461,7 +467,7 @@ def read_gate(run_dir):
     return out
 
 
-def pole_effects(rows, neutral, targets, metrics, gate=None, b=None):
+def pole_effects(rows, neutral, targets, metrics, gate=None, b=None, holm_only=False):
     """Pole-level Δ (mean over the pole's wordings − mean over the neutral family) with wording as a random effect.
     neutral: reference + placebo arms; targets: trait arm -> pole. Returns (pole rows, wording rows, tau rows)."""
     poles = defaultdict(list)
@@ -529,7 +535,8 @@ def pole_effects(rows, neutral, targets, metrics, gate=None, b=None):
             for k in ("gate_target", "gate_opposite", "gate_all_wordings"):
                 r[k] = g.get(k)
             r["gate"] = g.get("gate")
-            r["counts"] = bool(ph is not None and ph < ALPHA and r["gate"] is True) if m == PRIMARY else None
+            r["counts"] = bool(ph is not None and ph < ALPHA and (holm_only or r["gate"] is True)) \
+                if m == PRIMARY else None
         out += recs
     return out, words, taus
 
@@ -769,6 +776,10 @@ def analyse(rows, runs=None, family="old", run_dir=None):
             base = (manip.get(ref) or {}).get(r["arm"])
             r["manip_pass"] = (on >= MANIP_MIN_ON_TARGET and on - base >= MANIP_MIN_ABOVE_NEUTRAL) \
                 if (on is not None and base is not None) else None
+        if family == "matraix":
+            r["manip_pass"] = None
+            r["counts"] = bool(r["p_holm"] is not None and r["p_holm"] < ALPHA)
+            continue
         r["counts"] = bool(r["p_holm"] is not None and r["p_holm"] < ALPHA and r["beats_placebo"]
                            and r["manip_pass"])
     passing = sorted((r for r in res["paired"] if r["metric"] == PRIMARY and r["counts"]),
@@ -780,6 +791,11 @@ def analyse(rows, runs=None, family="old", run_dir=None):
         res["pole_gate_found"] = gate is not None
         res["pole_effects"], res["pole_wordings"], res["tau"] = pole_effects(
             rows, [ref] + placebos, {a: bf[a]["target"] for a in trait_arms}, POLE_METRICS, gate) \
+            if not missing[ref] else ([], [], [])
+    if family == "matraix":
+        res["pole_gate_found"] = False
+        res["pole_effects"], res["pole_wordings"], res["tau"] = pole_effects(
+            rows, [ref] + placebos, {a: a for a in trait_arms}, POLE_METRICS, holm_only=True) \
             if not missing[ref] else ([], [], [])
     return res
 
@@ -800,7 +816,8 @@ def pole_section(res, no_neutral):
                 if pooled["tau_estimable"] else
                 "**τ not estimable (need ≥2 wordings in some family): SE below uses the case-bootstrap variance "
                 "only (tau_estimable = False).**")
-    gate_line = ("Gate = gate_target (pairwise_gate.csv, arm = ALL row passes) AND gate_opposite "
+    mx = res["family"] == "matraix"
+    gate_line = MX_NO_GATE if mx else ("Gate = gate_target (pairwise_gate.csv, arm = ALL row passes) AND gate_opposite "
                  "(pairwise_gate_opposite.csv, ALL row passes) AND gate_all_wordings (every per-wording row of both "
                  "files passes)." if res["pole_gate_found"] else
                  "No run_dir/pairwise_gate.csv and/or pairwise_gate_opposite.csv: gate = None, so no pole counts.")
@@ -811,8 +828,9 @@ def pole_section(res, no_neutral):
         head,
         f"A pole counts iff Holm p (over the {len(prim)} poles present) < {ALPHA} for Δ̂ = mean over the pole's "
         f"wordings − mean over the neutral family ({neutral}), where p = max(p_z, boot2_p), p_z the two-sided "
-        "normal p with SE = sqrt(V_case + τ̂²(1/k_wordings + 1/k_neutral)), AND its pairwise manipulation gate "
-        "passes; when poles have several wordings the per-arm tables below are descriptive.",
+        "normal p with SE = sqrt(V_case + τ̂²(1/k_wordings + 1/k_neutral))"
+        + ("" if mx else ", AND its pairwise manipulation gate passes")
+        + "; when poles have several wordings the per-arm tables below are descriptive.",
         f"Cases: those present in every wording of the pole and every neutral arm. V_case: variance of Δ* over "
         f"{B_PRIMARY} case resamples (primary; {B} otherwise), seed {SEED}, one resampled case index for all arms. "
         "boot2: two-stage bootstrap (cases, then wordings with replacement within the pole and within the neutral "
@@ -839,7 +857,8 @@ def render_markdown(res):
     n_pass = sum(s["passes"] for s in res["screen"])
     miss = res["missing"]
     ref = res["reference"]
-    holm_desc = "style/policy personas" if res["family"] == "old" else "Big Five trait personas"
+    holm_desc = {"old": "style/policy personas", "bigfive": "Big Five trait personas",
+                 "matraix": "MatrAIx personas"}[res["family"]]
     primary = [r for r in res["paired"] if r["metric"] == PRIMARY]
     secondary = [r for r in res["paired"] if r["metric"] != PRIMARY]
     no_neutral = f"No `{ref}` arm in the results: no paired comparison."
@@ -880,7 +899,9 @@ def render_markdown(res):
         md_table(res["arm_means"], per_arm_cols + [PRIMARY] + ITEM_METRICS + PROCESS_METRICS),
         *pole_section(res, no_neutral),
         f"## Primary: Paired effect vs {ref} on {PRIMARY} (per case mean over reps, trait − {ref})",
-        (f"Available cases per arm. counts = Holm p < {ALPHA} AND beats_placebo AND manip_pass (on-target ≥ "
+        (f"Available cases per arm. counts = Holm p < {ALPHA}; beats_placebo is descriptive.\n\n"
+         + md_table(primary, PRIMARY_COLS) if res["family"] == "matraix" else
+         f"Available cases per arm. counts = Holm p < {ALPHA} AND beats_placebo AND manip_pass (on-target ≥ "
          f"{MANIP_MIN_ON_TARGET:.0%} of the arm's {'dialogues (blind Big Five judge)' if res['family'] == 'bigfive' else 'answers'} and ≥ {MANIP_MIN_ABOVE_NEUTRAL:.0%} above the {ref} "
          "arm's rate for that trait; code-enforced personas: see the manipulation check). "
          "Only traits with counts = True are read as trait effects.\n\n" + md_table(primary, PRIMARY_COLS))
@@ -948,7 +969,8 @@ def main(argv=None):
     parser.add_argument("--out", required=True, help="Output directory for analysis.md and csv files")
     parser.add_argument("--run_dir", default=None, help="Runner output tree, for failure accounting")
     parser.add_argument("--family", choices=FAMILIES, default="old",
-                        help="old: neutral reference, style/policy traits; bigfive: bf_neutral reference, bf_* traits")
+                        help="old: neutral reference, style/policy traits; bigfive: bf_neutral reference, bf_* traits; "
+                             "matraix: bf_neutral reference, selected mx_* personas")
     args = parser.parse_args(argv)
     rows = load_rows(args.results)
     res = analyse(rows, load_runs(args.run_dir) if args.run_dir else None, family=args.family, run_dir=args.run_dir)

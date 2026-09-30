@@ -38,6 +38,10 @@ def user_prompt_template_sha() -> str:
     return pu.sha256_text(src)
 
 
+def matraix_user_sha() -> str:
+    return pu.sha256_text(inspect.getsource(pu.MatrAIxUser) + pu.MX_IDENTITY + pu.MX_REMINDER)
+
+
 def load_cards(path):
     if not path or not os.path.exists(path):
         return None
@@ -45,14 +49,15 @@ def load_cards(path):
         return json.load(f)
 
 
-def persona_hashes(personas, bigfive):
+def persona_hashes(personas, bigfive, matraix):
     out = {pid: pu.sha256_file(p["path"]) for pid, p in personas.items()}
     out["bigfive/shared"] = pu.sha256_file(bigfive["shared_path"])
     out.update({pid: pu.sha256_file(p["path"]) for pid, p in bigfive["personas"].items()})
+    out.update({pid: pu.sha256_file(p["path"]) for pid, p in matraix["personas"].items()})
     return out
 
 
-def build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, prices):
+def build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, prices, matraix):
     prompt_mode = "baseline" if args.baseline else None
     agent_prompt = ConvAgent(agent_cfg, prompt_mode).system_prompt
     return {
@@ -66,7 +71,8 @@ def build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, pri
         "sha256": {
             "agent_system_prompt": pu.sha256_text(agent_prompt),
             "user_prompt_template": user_prompt_template_sha(),
-            "personas": persona_hashes(personas, bigfive),
+            "personas": persona_hashes(personas, bigfive, matraix),
+            "matraix_user": matraix_user_sha(),
         },
         "cards": {f"{args.domain}/{args.mode}": cards_entry(cards_path)},
         "prices": prices,
@@ -79,10 +85,10 @@ def cards_entry(cards_path):
     return {"path": os.path.abspath(cards_path), "sha256": pu.sha256_file(cards_path)}
 
 
-def check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, prices):
+def check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, prices, matraix):
     path = os.path.join(args.out, "manifest.json")
     key = f"{args.domain}/{args.mode}"
-    new = build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, prices)
+    new = build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, prices, matraix)
     if not os.path.exists(path):
         os.makedirs(args.out, exist_ok=True)
         with open(path, "w") as f:
@@ -100,7 +106,7 @@ def check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path, big
     for k in ("baseline", "max_turns", "final_fix"):
         if old.get(k) != new.get(k):
             diffs.append(k)
-    for k in ("agent_system_prompt", "user_prompt_template", "personas"):
+    for k in ("agent_system_prompt", "user_prompt_template", "personas", "matraix_user"):
         if old["sha256"].get(k) != new["sha256"].get(k):
             diffs.append(k)
     old_cards, new_cards = old.get("cards", {}).get(key), new["cards"][key]
@@ -157,10 +163,13 @@ def run_job(job, ctx):
         f.write(complete_req)
 
     bf_persona = ctx["bigfive"]["personas"].get(arm)
+    mx_persona = ctx["matraix"]["personas"].get(arm)
     if arm in pu.DETERMINISTIC_ARMS:
         persona_text = None
     elif bf_persona is not None:
         persona_text = pu.bigfive_persona_text(bf_persona)
+    elif mx_persona is not None:
+        persona_text = mx_persona["block"]
     else:
         persona_text = pu.persona_text_for_arm(arm, ctx["personas"])
     user_cfg = None if arm in pu.DETERMINISTIC_ARMS else ctx["user_cfg"]
@@ -187,7 +196,8 @@ def run_job(job, ctx):
         if ctx["cards"] is not None:
             cards = ctx["cards"]["cases"].get(case_id, {}).get("cards")
         user = pu.make_user(arm, user_llm, incomplete_req, complete_req, log_file,
-                            cards=cards, personas=ctx["personas"], bigfive=ctx["bigfive"])
+                            cards=cards, personas=ctx["personas"], bigfive=ctx["bigfive"],
+                            matraix=ctx["matraix"])
         result = test_runner.run_dialogue(agent, user, incomplete_req, args.max_turns, final_fix=True)
         record.update(turns=result.turns, cap_hit=result.cap_hit,
                       completed_by_agent=result.completed_by_agent, error=result.error,
@@ -251,8 +261,9 @@ def main(argv=None):
 
     personas = pu.load_personas()
     bigfive = pu.load_bigfive()
+    matraix = pu.load_matraix()
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
-    valid = pu.valid_arms(personas, bigfive)
+    valid = pu.valid_arms(personas, bigfive, matraix)
     bad = [a for a in arms if a not in valid]
     if bad:
         sys.exit(f"Unknown arms {bad}; valid: {valid}")
@@ -280,7 +291,8 @@ def main(argv=None):
     models = sorted({c.model_version for c in (agent_cfg, user_cfg) if c is not None})
     prices = pu.fetch_prices(models)
     pu.require_prices(prices, models)
-    check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path if cards else None, bigfive, prices)
+    check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path if cards else None, bigfive, prices,
+                            matraix)
 
     jobs = [(arm, rep, cid) for arm in arms for rep in range(1, args.reps + 1) for cid in case_ids]
     random.Random(JOB_SEED).shuffle(jobs)
@@ -302,7 +314,7 @@ def main(argv=None):
 
     spend = pu.SpendTracker(args.budget_usd)
     ctx = {"args": args, "cases": cases, "cards": cards, "personas": personas, "bigfive": bigfive,
-           "traits": set(pu.trait_ids(personas)), "agent_cfg": agent_cfg, "user_cfg": user_cfg,
+           "matraix": matraix, "traits": set(pu.trait_ids(personas)), "agent_cfg": agent_cfg, "user_cfg": user_cfg,
            "prices": prices, "spend": spend}
     n_done = n_err = n_budget = 0
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
