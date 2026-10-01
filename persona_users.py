@@ -21,6 +21,8 @@ MX_DIR = os.path.join(REPO_DIR, "persona", "matraix")
 MX_IDENTITY = ("You are the person described below. You sent an AI assistant a short request to set up a simulation "
                "you need, and it is now messaging you while it prepares the setup.")
 MX_REMINDER = "(Stay in character as the person described in your instructions.)"
+BV_PATH = os.path.join(REPO_DIR, "persona", "behaviour", "cards.json")
+BV_BASE = "bf_neutral"
 
 PRECEDENCE = ("The persona below describes how you talk and behave in this conversation. "
               "Where it conflicts with the style instructions above, follow the persona, with two limits: "
@@ -131,6 +133,22 @@ def load_matraix(mx_dir: str = MX_DIR) -> dict:
     return {"personas": personas, "selected": selected}
 
 
+def load_behaviour(path: str = BV_PATH) -> dict:
+    with open(path) as f:
+        data = json.load(f)
+    return {"cards": data["cards"], "path": path}
+
+
+def behaviour_persona(arm: str, bigfive: Optional[dict] = None, behaviour: Optional[dict] = None) -> dict:
+    """bf_neutral with the card appended to its sheet and the card's reminder added to the per-turn reminder."""
+    base = (bigfive or load_bigfive())["personas"][BV_BASE]
+    card = (behaviour or load_behaviour())["cards"][arm]
+    p = dict(base)
+    p.update(id=arm, kind="behaviour", target=None, sheet=base["sheet"] + "\n\n" + card["card"],
+             reminder=base["reminder"].rstrip().rstrip(")") + " " + card["reminder"] + ")")
+    return p
+
+
 def bigfive_persona_text(p: dict) -> str:
     return "\n\n".join([p["sheet"], p["appraisal"], p["reminder"]] + [e["a"] for e in p.get("examples") or []])
 
@@ -142,7 +160,7 @@ def bigfive_target(arm: str, bigfive: Optional[dict] = None) -> Optional[str]:
 
 
 def valid_arms(personas: Dict[str, dict], bigfive: Optional[dict] = None,
-               matraix: Optional[dict] = None) -> List[str]:
+               matraix: Optional[dict] = None, behaviour: Optional[dict] = None) -> List[str]:
     old = ["paper", "neutral"] + placebo_ids(personas) + trait_ids(personas) + list(DETERMINISTIC_ARMS)
     bf = list((bigfive or load_bigfive())["personas"])
     clash = sorted(set(old) & set(bf))
@@ -152,7 +170,11 @@ def valid_arms(personas: Dict[str, dict], bigfive: Optional[dict] = None,
     clash = sorted(set(old + bf) & set(mx))
     if clash:
         raise ValueError(f"MatrAIx persona ids collide with existing arms: {clash}")
-    return old + bf + mx
+    bv = list((behaviour or load_behaviour())["cards"])
+    clash = sorted(set(old + bf + mx) & set(bv))
+    if clash:
+        raise ValueError(f"behaviour card ids collide with existing arms: {clash}")
+    return old + bf + mx + bv
 
 
 @dataclass
@@ -332,7 +354,7 @@ class MatrAIxUser(BigFiveUser):
 def make_user(arm: str, llm_service, incomplete_requirement: str, complete_requirement: str,
               log_file: str, cards: Optional[List[dict]] = None,
               personas: Optional[Dict[str, dict]] = None, bigfive: Optional[dict] = None,
-              matraix: Optional[dict] = None) -> LLMUserInterface:
+              matraix: Optional[dict] = None, behaviour: Optional[dict] = None) -> LLMUserInterface:
     common = dict(incomplete_requirement=incomplete_requirement,
                   complete_requirement=complete_requirement, log_file=log_file)
     if arm == "oracle":
@@ -345,6 +367,9 @@ def make_user(arm: str, llm_service, incomplete_requirement: str, complete_requi
     if arm in bigfive["personas"]:
         return BigFiveUser(llm_service=llm_service, persona=bigfive["personas"][arm], shared=bigfive["shared"],
                            **common)
+    if arm.startswith("bv_"):
+        return BigFiveUser(llm_service=llm_service, persona=behaviour_persona(arm, bigfive, behaviour),
+                           shared=bigfive["shared"], **common)
     if arm.startswith("mx_"):
         matraix = matraix or load_matraix()
         return MatrAIxUser(llm_service=llm_service, persona=matraix["personas"][arm], shared=bigfive["shared"],

@@ -42,6 +42,64 @@ def matraix_user_sha() -> str:
     return pu.sha256_text(inspect.getsource(pu.MatrAIxUser) + pu.MX_IDENTITY + pu.MX_REMINDER)
 
 
+def behaviour_user_sha() -> str:
+    return pu.sha256_text(inspect.getsource(pu.behaviour_persona) + inspect.getsource(PrimedAgent)
+                          + open(pu.BV_PATH).read())
+
+
+class PrimedAgent(ConvAgent):
+    """ConvAgent whose first reply is a saved one (shared by every arm of a case and rep), so arms only diverge
+    from the simulated user's first answer; later turns call the model as usual."""
+
+    def __init__(self, config, prompt_mode=None, first_response=None):
+        super().__init__(config, prompt_mode)
+        self._first = first_response
+
+    def chat(self, user_input: str) -> str:
+        if self._first is None:
+            return super().chat(user_input)
+        response, self._first = self._first, None
+        self.history.append(f"User: {user_input}")
+        self.history.append(f"Analyst: {response}")
+        return response
+
+
+def shared_first_path(root, case_id, rep):
+    return os.path.join(root, f"{case_id}_rep{rep}.json")
+
+
+def make_shared_first(case_id, rep, ctx):
+    """One real first agent reply for (case, rep), written once; its cost goes to this invocation's spend."""
+    args = ctx["args"]
+    path = shared_first_path(args.shared_first, case_id, rep)
+    if os.path.exists(path):
+        return "exists"
+    incomplete_req = ctx["cases"][case_id].get(test_runner.TASK_CONFIG[args.mode]["keys"]["input_prompt"], "")
+    response, stats = None, {}
+    for _ in range(2):
+        # chat() is the exact first call run_dialogue makes (history "User: <request>")
+        agent = ConvAgent(ctx["agent_cfg"], "baseline" if args.baseline else None)
+        try:
+            response = agent.chat(incomplete_req)
+        except Exception as e:
+            print(f"first reply {case_id} rep{rep}: {type(e).__name__}: {e}")
+            response = None
+        stats = agent.llm.get_statistics()
+        ctx["spend"].add(pu.stats_cost(stats, ctx["prices"].get(ctx["agent_cfg"].model_version)))
+        if response and response.strip() and not getattr(agent.llm, "failed_calls", 0):
+            break
+        response = None
+    if response is None:
+        return "failed"  # its jobs error on the missing file and are rerun next invocation
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"case_id": case_id, "rep": rep, "response": response, "usage": stats,
+                   "agent": ctx["agent_cfg"].as_dict(), "agent_system_prompt_sha256": pu.sha256_text(agent.system_prompt),
+                   "created": time.strftime("%Y-%m-%d %H:%M:%S")}, f, indent=2)
+    os.replace(tmp, path)
+    return "made"
+
+
 def load_cards(path):
     if not path or not os.path.exists(path):
         return None
@@ -73,7 +131,9 @@ def build_manifest(args, agent_cfg, user_cfg, personas, cards_path, bigfive, pri
             "user_prompt_template": user_prompt_template_sha(),
             "personas": persona_hashes(personas, bigfive, matraix),
             "matraix_user": matraix_user_sha(),
+            "behaviour_user": behaviour_user_sha(),
         },
+        "shared_first": os.path.abspath(args.shared_first) if args.shared_first else None,
         "cards": {f"{args.domain}/{args.mode}": cards_entry(cards_path)},
         "prices": prices,
     }
@@ -109,6 +169,11 @@ def check_or_write_manifest(args, agent_cfg, user_cfg, personas, cards_path, big
     for k in ("agent_system_prompt", "user_prompt_template", "personas", "matraix_user"):
         if old["sha256"].get(k) != new["sha256"].get(k):
             diffs.append(k)
+    # keys added after mx1: compared only when the existing manifest has them
+    if "behaviour_user" in old["sha256"] and old["sha256"]["behaviour_user"] != new["sha256"]["behaviour_user"]:
+        diffs.append("behaviour_user")
+    if "shared_first" in old and old["shared_first"] != new["shared_first"]:
+        diffs.append("shared_first")
     old_cards, new_cards = old.get("cards", {}).get(key), new["cards"][key]
     if old_cards and new_cards and old_cards["sha256"] != new_cards["sha256"]:
         diffs.append(f"cards {key}")
@@ -166,6 +231,8 @@ def run_job(job, ctx):
     mx_persona = ctx["matraix"]["personas"].get(arm)
     if arm in pu.DETERMINISTIC_ARMS:
         persona_text = None
+    elif arm in ctx["behaviour"]["cards"]:
+        persona_text = pu.bigfive_persona_text(pu.behaviour_persona(arm, ctx["bigfive"], ctx["behaviour"]))
     elif bf_persona is not None:
         persona_text = pu.bigfive_persona_text(bf_persona)
     elif mx_persona is not None:
@@ -190,14 +257,21 @@ def run_job(job, ctx):
     }
     agent, user_llm, user = None, None, None
     try:
-        agent = ConvAgent(ctx["agent_cfg"], "baseline" if args.baseline else None)
+        prompt_mode = "baseline" if args.baseline else None
+        if args.shared_first:
+            with open(shared_first_path(args.shared_first, case_id, rep)) as f:
+                first = json.load(f)["response"]
+            record["shared_first_sha256"] = pu.sha256_text(first)
+            agent = PrimedAgent(ctx["agent_cfg"], prompt_mode, first_response=first)
+        else:
+            agent = ConvAgent(ctx["agent_cfg"], prompt_mode)
         user_llm = LLMService(user_cfg) if user_cfg else None
         cards = None
         if ctx["cards"] is not None:
             cards = ctx["cards"]["cases"].get(case_id, {}).get("cards")
         user = pu.make_user(arm, user_llm, incomplete_req, complete_req, log_file,
                             cards=cards, personas=ctx["personas"], bigfive=ctx["bigfive"],
-                            matraix=ctx["matraix"])
+                            matraix=ctx["matraix"], behaviour=ctx["behaviour"])
         result = test_runner.run_dialogue(agent, user, incomplete_req, args.max_turns, final_fix=True)
         record.update(turns=result.turns, cap_hit=result.cap_hit,
                       completed_by_agent=result.completed_by_agent, error=result.error,
@@ -254,6 +328,8 @@ def main(argv=None):
     parser.add_argument("--user_temperature", type=float, default=None)
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--force", action="store_true", help="Continue despite a manifest mismatch")
+    parser.add_argument("--shared_first", default=None,
+                        help="Dir of saved first agent replies per case and rep (made if missing); every arm starts from it")
     parser.add_argument("--budget_usd", type=float, required=True,
                         help="Spend cap for this invocation; no new job starts once it is reached")
     args = parser.parse_args(argv)
@@ -262,8 +338,9 @@ def main(argv=None):
     personas = pu.load_personas()
     bigfive = pu.load_bigfive()
     matraix = pu.load_matraix()
+    behaviour = pu.load_behaviour()
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
-    valid = pu.valid_arms(personas, bigfive, matraix)
+    valid = pu.valid_arms(personas, bigfive, matraix, behaviour)
     bad = [a for a in arms if a not in valid]
     if bad:
         sys.exit(f"Unknown arms {bad}; valid: {valid}")
@@ -314,8 +391,14 @@ def main(argv=None):
 
     spend = pu.SpendTracker(args.budget_usd)
     ctx = {"args": args, "cases": cases, "cards": cards, "personas": personas, "bigfive": bigfive,
-           "matraix": matraix, "traits": set(pu.trait_ids(personas)), "agent_cfg": agent_cfg, "user_cfg": user_cfg,
-           "prices": prices, "spend": spend}
+           "matraix": matraix, "behaviour": behaviour, "traits": set(pu.trait_ids(personas)), "agent_cfg": agent_cfg,
+           "user_cfg": user_cfg, "prices": prices, "spend": spend}
+    if args.shared_first:
+        os.makedirs(args.shared_first, exist_ok=True)
+        firsts = sorted({(cid, rep) for _, rep, cid in todo})
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            made = list(ex.map(lambda cr: make_shared_first(cr[0], cr[1], ctx), firsts))
+        print(f"shared first replies: {made.count('made')} made, {made.count('exists')} reused, {made.count('failed')} failed")
     n_done = n_err = n_budget = 0
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futures = {ex.submit(run_job, job, ctx): job for job in todo}
