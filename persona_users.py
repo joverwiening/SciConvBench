@@ -297,7 +297,7 @@ class BigFiveUser(LLMUserInterface):
             return USER_FAILURE_REPLY
 
 
-RESTYLE_ARMS = {"rs_para": "para", "rs_lowA": "lowA"}
+RESTYLE_ARMS = {"rs_para": "para", "rs_lowA": "lowA", "rs_lowAc": "lowAc"}
 RESTYLE_BASE_ARM = "bf_neutral"
 RESTYLE_TURN_USER = """
 The scientist's original request to the assistant:

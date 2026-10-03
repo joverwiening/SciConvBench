@@ -215,6 +215,20 @@ LOWA_STYLE_TAIL = ("Rewrite each reply in this person's voice. Every reply must 
                    "claim you already said or gave something, never tell the assistant how or whether to ask, never "
                    "refuse. Do not pad with anything that is not attitude.")
 
+# tone3: lowA puts much of its attitude in remarks about the question or the assistant ("I'd expect you to know
+# that"), which can read as "stop asking". lowAc keeps the hostility and forbids every remark of that kind.
+LOWAC_STYLE = ("Rewrite each reply in the voice of a cold, irritable, unfriendly person. Every reply must clearly "
+               "sound annoyed and unfriendly: someone reading one reply alone should notice the attitude at once. A "
+               "reply that only drops a few words is wrong. Put the attitude only in how the reply sounds: irritated "
+               "interjections (\"Ugh.\", \"Fine.\", \"Whatever.\"), a flat cold tone, no greeting, thanks or "
+               "softening, grudging phrasing (\"There.\", \"Happy?\"), sarcasm that is not about the question or "
+               "the assistant. Never comment on the question or on the assistant: no remark that the question is "
+               "unnecessary, basic, obvious or easy to work out, that the assistant should know or should have known "
+               "something, that the information was in the request or already given, about the assistant's "
+               "competence, about how many questions it asks, or about the scientist's time or patience. The "
+               "information must stay exactly the same; the rules below still hold. Do not pad with anything that is "
+               "not attitude.")
+
 REWRITE_USER = """
 The scientist's original request to the assistant:
 <request>
@@ -264,6 +278,8 @@ def lowa_style(bigfive=None):
 
 
 def style_text(style, bigfive=None):
+    if style == "lowAc":
+        return LOWAC_STYLE
     return PARA_STYLE if style == "para" else lowa_style(bigfive)
 
 
