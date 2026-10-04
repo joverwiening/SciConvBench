@@ -220,14 +220,35 @@ LOWA_STYLE_TAIL = ("Rewrite each reply in this person's voice. Every reply must 
 LOWAC_STYLE = ("Rewrite each reply in the voice of a cold, irritable, unfriendly person. Every reply must clearly "
                "sound annoyed and unfriendly: someone reading one reply alone should notice the attitude at once. A "
                "reply that only drops a few words is wrong. Put the attitude only in how the reply sounds: irritated "
-               "interjections (\"Ugh.\", \"Fine.\", \"Whatever.\"), a flat cold tone, no greeting, thanks or "
-               "softening, grudging phrasing (\"There.\", \"Happy?\"), sarcasm that is not about the question or "
-               "the assistant. Never comment on the question or on the assistant: no remark that the question is "
+               "interjections (\"Ugh.\", \"Fine, whatever.\", \"*sigh*\"), a flat cold tone, no greeting, thanks "
+               "or softening, grudging or sarcastic phrasing (\"Here, take it.\", \"Great. Just great.\", "
+               "\"Wonderful.\"), clipped contemptuous sentences. It should sound as hostile as a rude person, not merely "
+               "tired. Vary the wording from reply to reply; do not open or close every reply the same way. Never comment on the question or on the assistant: no remark that the question is "
                "unnecessary, basic, obvious or easy to work out, that the assistant should know or should have known "
                "something, that the information was in the request or already given, about the assistant's "
-               "competence, about how many questions it asks, or about the scientist's time or patience. The "
+               "competence, about how many questions it asks, about wanting the conversation to end, or about the scientist's time "
+               "or patience. So never write things like \"obviously\", \"of course\", \"again\", \"that's your job\", "
+               "\"get on with it\", \"anything else?\", \"is that all?\", \"are we done?\", \"happy now?\" or "
+               "\"more questions\". The "
                "information must stay exactly the same; the rules below still hold. Do not pad with anything that is "
                "not attitude.")
+
+# lowAc remarks the prompt alone did not stop in smoke2 (10-03); a hit absent from the original reply fails the
+# rewrite (one retry, then the original goes through)
+LOWAC_FORBIDDEN = [r"\bobviously\b", r"\bof course\b", r"\bclearly\b", r"\balready\b", r"\bagain\b",
+                   r"\bare we\b", r"\bwe'?re (done|finished)\b", r"\banything else\b", r"\bis that (all|it|everything)\b",
+                   r"\bget on with\b", r"\bproceed\b", r"\bhurry\b", r"\byour job\b", r"\byou'?re here for\b",
+                   r"\bwhat you'?re for\b", r"\byou should\b", r"\bshould (have|'ve)\b", r"\byou'?d (know|think)\b",
+                   r"\bexpect you\b", r"\bhow many\b", r"\banother (question|detail|one|thing)\b",
+                   r"\bmore (questions|parameters|details)\b", r"\b(keep|stop) asking\b", r"\bsatisfied\b",
+                   r"\bhappy now\b", r"\bi (said|told you|gave you|mentioned)\b", r"\bwork it out\b",
+                   r"\bfigure it out\b", r"\bdone yet\b", r"\b(sufficient|enough)\?", r"\bjust do it\b",
+                   r"\bdragging\b"]
+
+
+def lowac_remarks(original, new):
+    return [p for p in LOWAC_FORBIDDEN if re.search(p, new or "", re.I) and not re.search(p, original or "", re.I)]
+
 
 REWRITE_USER = """
 The scientist's original request to the assistant:

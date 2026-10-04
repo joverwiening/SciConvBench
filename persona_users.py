@@ -392,7 +392,7 @@ class RestyledUser(LLMUserInterface):
         keys = ("api_input_tokens", "api_output_tokens", "api_reasoning_chars")
         before = [getattr(svc, k, 0) for k in keys]
         prompt = self.restyle_prompt(question, original)
-        fails, new, check, attempts = [], None, {}, 0
+        fails, new, check, attempts, remark_hits = [], None, {}, 0, []
         for attempts in (1, 2):
             p = prompt if attempts == 1 else prompt + RESTYLE_RETRY + "\n".join(f"- {x}" for x in fails) + "\n"
             try:
@@ -400,6 +400,12 @@ class RestyledUser(LLMUserInterface):
                 replies = None if new is None else [new]
                 check = ptr.check_replies(svc, [original], replies)[0]
                 fails = ptr.failures([check], replies)
+                if self.style == "lowAc" and new is not None:
+                    hits = ptr.lowac_remarks(original, new)
+                    remark_hits.append(hits)
+                    if hits:
+                        fails.append("Reply 1 comments on the question, the assistant or ending the conversation "
+                                     f"(matched {hits}); remove every such remark and keep the hostility in tone only")
             except Exception as e:
                 new, check = None, {"code_ok": False, "missing": [], "added": [], "judge_same": False,
                                     "judge_diff": f"error: {type(e).__name__}: {e}"}
@@ -419,7 +425,7 @@ class RestyledUser(LLMUserInterface):
         after = [getattr(svc, k, 0) for k in keys]
         row.update(restyled=new, attempts=attempts, code_ok=check.get("code_ok"), missing=check.get("missing"),
                    added=check.get("added"), judge_same=check.get("judge_same"),
-                   judge_diff=check.get("judge_diff"), fallback=fallback, inner_failed=False,
+                   judge_diff=check.get("judge_diff"), fallback=fallback, inner_failed=False, remark_hits=remark_hits,
                    usage={"input_tokens": after[0] - before[0], "output_tokens": after[1] - before[1]},
                    reasoning_chars=after[2] - before[2])
         with open(self.restyle_file, "a", encoding="utf-8") as f:
